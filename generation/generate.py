@@ -22,7 +22,7 @@ def llm_generate(prompt: str, model: str = "gemini-2.0-flash") -> str:
         # temperature=temperature,
         # max_tokens=max_tokens
     )
-    # response may have structure depending on SDK version
+    # response 
     return response.text
 
 

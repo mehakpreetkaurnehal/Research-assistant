@@ -4,9 +4,6 @@
     in out_folder. Filename uses paper id safely, prepares next step (chunking) by heavy text files.
 """
 
-
-# ingestion/prepare_raw_texts.py
-
 import os
 import pandas as pd
 

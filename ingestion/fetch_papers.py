@@ -7,7 +7,7 @@ import arxiv
 
 # Configuration
 OUTPUT_CSV        = "data/raw/arxiv_metadata.csv"
-MAX_RESULTS       = 100      # number of papers to fetch (adjust as needed)
+MAX_RESULTS       = 50      # number of papers to fetch (adjust as needed)
 QUERY             = "machine learning"  # change to your topic
 SLEEP_SECONDS     = 2.0      # delay between results to avoid API overload
 
