@@ -1,0 +1,7490 @@
+Proximal Approximate Inference in State-Space Models
+Hany Abdulsamad
+h.abdulsamad@uva.nl
+Amsterdam Machine Learning Lab
+University of Amsterdam, Netherlands
+Ángel F. García-Fernández
+angel.garcia.fernandez@upm.es
+IPTC, ETSI Telecomunicación
+Universidad Politécnica de Madrid, Spain
+Simo Särkkä
+simo.sarkka@aalto.fi
+Department of Electrical Engineering and Automation
+Aalto University, Finland
+Abstract
+We present a class of algorithms for state estimation in nonlinear, non-Gaussian state-space
+models. Our approach is based on a variational Lagrangian formulation that casts Bayesian
+inference as a sequence of entropic trust-region updates subject to dynamic constraints. This
+framework gives rise to a family of forward-backward algorithms, whose structure is deter-
+mined by the chosen factorization of the variational posterior. By focusing on Gauss–Markov
+approximations, we derive recursive schemes with favorable computational complexity. For
+general nonlinear, non-Gaussian models we close the recursions using generalized statistical
+linear regression and Fourier–Hermite moment matching.
+1
+Introduction
+Accurate state estimation in partially observable dynamical phenomena is a fundamental problem across sci-
+entific and engineering disciplines, including robotics (Barfoot, 2024), economics (Jacquier et al., 2002), and
+biology (Murray, 2002). Bayesian inference in state-space models (SSMs) provides a principled framework for
+this task, encompassing techniques such as Kalman filtering, sequential Monte Carlo, and message-passing
+algorithms. Additionally, an important link between inference and optimization has been established early in
+the field (Kálmán, 1960; Cox, 1964; Bell, 1994), giving rise to a suite of inference-as-optimization algorithms.
+Recently, this relationship has been further deepened by the advent of approximate methods, such as vari-
+ational inference (VI, Wainwright & Jordan, 2008) and expectation propagation (EP, Minka, 2001), which
+generalize the optimization perspective beyond point estimates to arbitrary full posterior approximations.
+For state-space models with conjugate prior-likelihood pairs,
+the corresponding Bayesian posterior
+distribution admit closed-form solutions by a variety of efficient recursive algorithms, such as the
+Rauch–Tung–Striebel (RTS) smoother for linear-Gaussian SSMs (Rauch et al., 1965). However, extensions
+to general nonlinear, non-Gaussian settings are not trivial. While sampling-based methods such as sequen-
+tial Monte Carlo (Chopin & Papaspiliopoulos, 2020) and Markov Chain Monte Carlo (Brooks et al., 2011)
+provide asymptotically exact solutions, they do so at a price of high computational complexity and limited
+scalability, particularly for sequences in high-dimensional spaces and long time horizons (Beskos et al., 2014).
+Approximate Bayesian techniques, though often suboptimal, can offer a trade-off that sacrifices exactness
+for a significant computational advantage. This aspect motivates our focus on this class of methods.
+Variational inference and expectation propagation methods have been adapted for Bayesian inference in
+state-space models (Deisenroth & Mohamed, 2012; Chang et al., 2020; Wilkinson et al., 2020). However,
+despite the strong connection of both frameworks to numerical optimization (Wilkinson et al., 2023), many
+existing approaches extend VI and EP to state-space representations in an ad-hoc manner. Such methods
+often integrate variational principles into the structure of a Rauch-Tung-Striebel smoother (Rauch et al.,
+1
+arXiv:2511.15409v1  [cs.LG]  19 Nov 2025
+
+1965) template rather than deriving algorithms from a foundational optimization-based perspective. As a
+result, they may not fully leverage the potential benefits of a systematic approach to state estimation in the
+most general settings.
+In this work, we cast approximate Bayesian inference in nonlinear, non-Gaussian state-space models as an
+iterative dynamic optimization problem over the space of candidate posteriors. Our key contributions are:
+• Dynamic optimization formulation: We introduce a principled variational framework for Bayesian
+inference that formulates inference as a sequence of entropic trust-region updates in probability-
+density space, using structured entropic proximal regularization.
+• Unified recursive algorithms: We derive a family of efficient forward–backward recursion schemes
+whose structure is determined entirely by the factorization of the variational posterior — forward-,
+reverse-, or hybrid-Markov factorizations.
+• Adaptive step size: We show that the step size between iterative updates corresponds to a Lagrangian
+multiplier whose optimal value is determined by a dual Rényi divergence objective.
+• Generalization of classical smoothers: Our method generalizes algorithms in the linear-Gaussian
+setting, thereby providing a bridge between classical and modern approximate inference techniques.
+• Flexible posterior approximations: We provide practical realizations using Gauss–Markov approxima-
+tions, instantiated via generalized statistical linear regression and Fourier–Hermite moment match-
+ing, allowing for efficient inference in nonlinear and non-Gaussian models.
+The paper is organized as follows. Section 2 introduces the approximate inference problem in state-space
+models. Section 3 provides a brief review of proximal variational optimization, which serves as the foundation
+for our method. In Section 4, we present our dynamic Lagrangian framework for approximate Bayesian infer-
+ence. Section 5 specializes this framework to the Gaussian setting and derives practical recursive algorithms.
+We then connect our approach to related work in Section 6.
+2
+Problem Statement
+We consider the problem of Bayesian state estimation in nonlinear, non-Gaussian state-space models. Let
+{xk ∈Rd}T
+k=0 be a latent discrete-time Markov process and {yk ∈Rm}T
+k=1 a corresponding sequence of noisy
+observations. The system is governed by the state-space dynamics:
+x0 ∼p0(·),
+xk+1 ∼fk(· | xk),
+yk+1 ∼hk+1(· | xk+1),
+(1)
+where p0(x0) is the initial prior probability density, fk(xk+1 | xk) is the Markovian prior probability of the
+latent stochastic dynamics, and hk(yk | xk) is the conditional probability density of the stochastic mea-
+surements. State estimation refers to the problems of online filtering and offline smoothing, which aim to
+reconstruct the posterior distributions pk(xk | y1:k) and pk(xk | y1:T), for all k > 0, respectively. For arbi-
+trary forms of the latent dynamics fk(xk+1 | xk) and the measurement model hk(yk | xk), these filtering and
+smoothing posterior densities are generally intractable.
+In this work, we focus on finding the best approximation of the smoothing posterior density within a certain
+variational family of joint distributions
+q(x0:T | y1:T) ≈p(x0:T | y1:T) ∝p0(x0)
+T −1
+Y
+k=0
+fk(xk+1 | xk) hk+1(yk+1 | xk+1).
+More specifically, to leverage the structure of state-space models, we focus on Gauss–Markov approximate
+posterior densities, leading to the following possibilities:
+Assumption 1 (Forward-Markov factorization) For state-space models of the form (1) the Bayesian
+posterior p(x0:T | y1:T ) can be approximated by a forward-Markov decomposition
+−⇀q (x0:T | y1:T) = −⇀q0(x0 | y1:T)
+T −1
+Y
+k=0
+−⇀qk(xk+1 | xk, yk+1:T).
+2
+
+Assumption 2 (Reverse-Markov factorization) For state-space models of the form (1), the Bayesian
+posterior p(x0:T | y1:T ) can be approximated by a reverse-Markov decomposition
+↼−q (x0:T | y1:T) = ↼−qT(xT | y1:T)
+T
+Y
+k=1
+↼−qk(xk−1 | xk, y1:k−1).
+We use −⇀q and ↼−q to distinguish forward- and reverse-Markov approximations, respectively. Moreover, while
+Assumption 1 and 2 explicitly state the dependency of the (conditional) posteriors on the measurements, we
+omit it in subsequent sections for a simpler notation.
+3
+Entropic Proximal Variational Optimization
+Before introducing our approach to variational smoothing in state-space models, we briefly review the prin-
+ciples of entropic proximal variational optimization in a simpler, static setting. Consider a hidden variable
+x ∈Rd, observed data y ∈Rm, a likelihood p(y | x), and a prior p(x). The goal is to approximate the
+posterior p(x | y) by a distribution q(x) that minimizes the Kullback–Leibler (KL) divergence:
+q∗(x) = arg min
+q(x)
+DKL
+
+q(x) || p(x | y)
+
+.
+Since the exact posterior p(x | y) is generally intractable, variational inference optimizes the evidence lower
+bound (ELBO) instead (Blei et al., 2017):
+q∗(x) = arg max
+q(x)
+L(q) = Eq
+h
+log p(x, y)
+i
+−Eq
+h
+log q(x)
+i
+≤log p(y),
+(2)
+where p(y) is the marginal likelihood or evidence. In conjugate models, the ELBO can be optimized ex-
+actly (Bishop, 2006), but for more general settings, approximate solutions are required. Black-box variational
+inference (Ranganath et al., 2014) provides a flexible framework for such cases. However, alternative meth-
+ods such as natural and Riemannian gradient approaches (Honkela et al., 2010) and proximal variational
+inference (Chrétien & Hero, 2002; Khan et al., 2015; Theis & Hoffman, 2015) explicitly account for the
+geometry of the variational family and often lead to more stable and efficient optimization (Amari, 1998).
+In this work, we focus on the entropic proximal variational optimization framework to derive recursive
+algorithms for structured approximate inference in nonlinear non-Gaussian state-space models. However,
+before directing our attention to the case of state-space models, we use the static case in (2) to illustrate the
+mechanics of entropic proximal variational optimization. We start by formulating the approximate inference
+problem within the iterative entropic proximal optimization framework proposed by Teboulle (1992); Iusem
+et al. (1994). Starting from the ELBO in (2), we introduce an entropic-proximal constraint on subsequent
+posterior iterate in the form of a Kullback–Leibler divergence, leading to the following nonlinear program:
+maximize
+q(x)
+Eq
+h
+log p(x, y)
+i
+−Eq
+h
+log q(x)
+i
+,
+subject to
+DKL
+h
+q(x) || q[i](x)
+i
+≤ε
+and
+Z
+q(x) dx = 1,
+(3)
+where q[i](x) is approximate posterior at iteration i and ε ≥0 is a hyperparameter that controls the infor-
+mation bottleneck between two iterations. Additionally, problem (3) includes a distributional normalization
+constraint for q(x), whereas the positivity of q(x) is implied by the logarithmic function embedded within
+the KL constraint, which enforces a trust region around the current iterate q[i](x). The following lemma
+derives the solution to (3), the variational distribution iterate q[i+1](x), by constructing the Lagrangian.
+Proposition 1 (Damped Gibbs posterior) The Bayesian posterior characterized by a likelihood p(y | x)
+and a prior p(x) and constrained to lie within a Kullback–Leibler ε-ball centered at q[i](x) is the maximizer
+of the constrained nonlinear program (3) and takes the form of the following Gibbs posterior
+q[i+1](x) =
+h
+Z[i+1](β)
+i−1 h
+p(y | x) p(x)
+i1−βh
+q[i](x)
+iβ
+,
+3
+
+with a damping parameter β ∈[0, 1) and a normalizing constant
+Z[i+1](β) =
+Z h
+p(y | x) p(x)
+i1−βh
+q[i](x)
+iβ
+dx.
+The damping β is a proxy of the Lagrangian multiplier α ≥0 associated with the Kullback–Leibler divergence
+constraint in (3), so that β = α/(1 + α). Furthermore, the optimal β is a minimizer of the dual problem
+minimize
+β
+G(β) =
+βε
+1 −β +
+1
+1 −β log Z[i+1](β),
+subject to 0 ≤β < 1.
+Proof. See Appendix A.
+Remark 1 The posterior iterate q[i+1](x) is as an interpolation in the space of densities between the true
+posterior p(x | y) ∝p(y | x) p(x) and the previous iterate q[i](x) in the space of probability densities.
+Remark 2 The dual objective over β in Proposition 1 can be interpreted as an optimization over a family
+of statistical divergences, as revealed by the variational Rényi bound (Li & Turner, 2016):
+1
+1 −β log Z[i+1](β) = log p(y) −Dβ
+h
+q[i](x) || p(x | y)
+i
+,
+where Dβ
+
+· || ·
+
+denotes the Rényi divergence with order β. As the damping parameter β varies, the corre-
+sponding Rényi divergence traces a continuum of α-divergence geometries, each emphasizing different regions
+of the posterior distribution. Thus, varying β smoothly alters the global geometric structure of the optimiza-
+tion problem but preserves the local notion of distance defined by the Fisher information metric induced by
+primal Kullback–Leibler divergence objective (Amari, 2016).
+Having reviewed the principles of entropic proximal optimization, we now turn to state-space models. In
+the next section, we extend this framework into the dynamic setting and derive recursive algorithms for
+approximate Bayesian inference that exploit the structure of the assumed posterior.
+4
+Entropic Proximal Bayesian Smoothing
+For a state-space model of the form (1), we can adapt the ELBO from (2) as follows
+L(q) = Eq
+h
+log p(x0:T, y1:T)
+i
+−Eq
+h
+log q(x0:T)
+i
+≤log p(y1:T),
+where p(x0:T, y1:T) is the joint state-measurement distribution given by
+p(x0:T, y1:T) = p0(x0)
+T −1
+Y
+k=0
+fk(xk+1 | xk) hk+1(yk+1 | xk+1).
+We now formulate the entropic proximal optimization problem over the joint posterior q(x0:T):
+maximize
+q(x0:T )
+Eq
+h
+log p(x0:T, y1:T)
+i
+−Eq
+h
+log q(x0:T)
+i
+,
+subject to
+DKL
+h
+q(x0:T) || q[i](x0:T)
+i
+≤ε
+and
+Z
+q(x0:T) dx0:T = 1.
+(4)
+This formulation does not yet impose any assumptions on the structure of the approximate posterior q(x0:T).
+While (4) can be solved in a manner similar to (3), such an approach can lead to significant computational
+complexity due to the high dimensionality of q(x0:T) as it extends over the state and time dimensions. To
+address this challenge, we introduce variations to (4) that take advantage of sparsity induced by the forward-
+and reverse Markov structure from Assumption 1 and Assumption 2, enabling recursive inference algorithms
+with linear time complexity in the horizon T.
+4
+
+4.1
+Damped Forward-Markov Posterior
+Here, we assume a forward-Markov decomposition of q(x0:T) as stated in Assumption 1. This decomposition
+of the posterior leads to a generic backward-forward recursive algorithm for computing the approximate
+Bayesian smoothing posterior.
+Proposition 2 (Optimal forward-Markov posterior) For state-space models of the form (1), and un-
+der Assumption 1, the approximate forward-Markov smoothing posterior that solves problem (4) is charac-
+terized by the following set of tilted (conditional) distributions:
+−⇀q [i+1]
+0
+(x0) =
+h−⇀
+Z [i+1]
+0
+i−1 h−⇀q [i]
+0 (x0)
+iβh
+exp
+n−⇀
+V [i+1]
+0
+(x0)
+o i1−β
+,
+(5)
+−⇀q [i+1]
+k
+(xk+1 | xk) =
+h−⇀
+ψ [i+1]
+k
+(xk)
+i−1h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+,
+(6)
+where β ∈[0, 1) is the damping associated with the Lagrangian multiplier α ≥0 so that β = α/(1 + α), while
+−⇀
+Z [i+1]
+0
+and −⇀
+ψ [i+1]
+k
+(xk) are the corresponding normalizing factors
+−⇀
+Z [i+1]
+0
+=
+Z h−⇀q [i]
+0 (x0)
+iβh
+exp
+n−⇀
+V [i+1]
+0
+(x0)
+o i1−β
+dx0,
+−⇀
+ψ [i+1]
+k
+(xk) =
+Z h−⇀q [i]
+k (xk+1 | xk)
+iβh
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+dxk+1.
+(7)
+The potential functions −⇀
+V [i+1]
+k
+(xk), for all 0 ≤k ≤T, are computed recursively backwards via
+−⇀
+V [i+1]
+k
+(xk) =
+
+
+
+
+
+
+
+
+
+
+
+log hT(yT | xT)
+if k = T,
+log hk(yk | xk) + 1/(1 −β) log−⇀
+ψ [i+1]
+k
+(xk)
+if 0 < k < T,
+log p0(x0) + 1/(1 −β) log−⇀
+ψ [i+1]
+0
+(x0)
+if k = 0,
+(8)
+bearing in mind that −⇀
+ψ [i+1]
+k
+(xk) are functions of −⇀
+V [i+1]
+k+1 (xk+1). Finally, the optimal damping β is the mini-
+mizer of the dual objective
+minimize
+β
+−⇀
+G(β) =
+βε
+1 −β +
+1
+1 −β log−⇀
+Z [i+1]
+0
+(β),
+subject to 0 ≤β < 1.
+(9)
+Proof. See Appendix B.
+Remark 3 The potential functions −⇀
+Vk(xk) can be interpreted as the log-space accumulation of the
+backward filter message log q(yk:T | xk), where the log-normalizers log−⇀
+ψk(xk) and log−⇀
+Z0 correspond to
+log q(yk+1:T | xk) and log q(y1:T), respectively.
+Remark 4 Under Assumption 1, the marginal smoothing distributions −⇀q [i+1]
+k+1 (xk+1), for all 0 < k ≤T, are
+computed via forward propagation starting from −⇀q [i+1]
+0
+(x0)
+−⇀q [i+1]
+k+1 (xk+1) =
+Z
+−⇀q [i+1]
+k
+(xk)−⇀q [i+1]
+k
+(xk+1 | xk) dxk,
+where −⇀q [i+1]
+k
+(xk+1 | xk) and −⇀q [i+1]
+0
+(x0) are given by Proposition 2.
+5
+
+4.2
+Damped Reverse-Markov Posterior
+Next, we assume a reverse-Markov decomposition of q(x0:T) as described in Assumption 2. This decompo-
+sition, in contrast to the forward-Markov assumption, leads to a forward-backward recursive algorithm.
+Proposition 3 (Optimal reverse-Markov posterior) For state-space models of the form (1), and under
+Assumption 2, the approximate reverse-Markov smoothing posterior that solves problem (4) is characterized
+by the following set of tilted (conditional) distributions:
+↼−q [i+1]
+k
+(xk−1 | xk) =
+h↼−
+ψ [i+1]
+k
+(xk)
+i−1h↼−q [i]
+k (xk−1 | xk)
+iβ
+×
+h
+fk−1(xk | xk−1) exp
+n↼−
+V [i+1]
+k−1 (xk−1)
+o i1−β
+,
+(10)
+↼−q [i+1]
+T
+(xT) =
+h↼−
+Z [i+1]
+T
+i−1h
+q[i]
+T (xT)
+iβh
+exp
+n↼−
+V [i+1]
+T
+(xT)
+o i1−β
+,
+(11)
+where β ∈[0, 1) is the damping associated with the Lagrangian multiplier α ≥0 so that β = α/(1 + α), while
+↼−
+ψ [i+1]
+k
+(xk) and ↼−
+Z [i+1]
+T
+are the corresponding normalizing factors
+↼−
+ψ [i+1]
+k
+(xk) =
+Z h↼−q [i]
+k (xk−1 | xk)
+iβh
+fk−1(xk | xk−1) exp
+n↼−
+V [i+1]
+k−1 (xk−1)
+o i1−β
+dxk−1,
+↼−
+Z [i+1]
+T
+=
+Z h↼−q [i]
+T (xT)
+iβh
+exp
+n↼−
+V [i+1]
+T
+(xT)
+o i1−β
+dxT.
+(12)
+The potential functions ↼−
+V [i+1]
+k
+(xk), for all 0 ≤k < T, are computed recursively forward via
+↼−
+V [i+1]
+k
+(xk) =
+
+
+
+log p0(x0)
+if k = 0,
+log hk(yk | xk) + 1/(1 −β) log↼−
+ψ [i+1]
+k
+(xk)
+if 0 < k ≤T,
+(13)
+bearing in mind that ↼−
+ψ [i+1]
+k
+(xk) are functions of ↼−
+V [i+1]
+k−1 (xk−1). Finally, the optimal damping β is the mini-
+mizer of the dual objective
+minimize
+β
+↼−
+G(β) =
+βε
+1 −β +
+1
+1 −β log↼−
+Z [i+1]
+T
+(β),
+subject to 0 ≤β < 1.
+(14)
+Proof. See Appendix C.
+Remark 5 The potential functions ↼−
+Vk(xk) can be interpreted as the log-space accumulation of the forward fil-
+ter message log q(xk | y1:k), where the log-normalizers log↼−
+ψk(xk) and log↼−
+ZT correspond to log q(xk | y1:k−1)
+and log q(y1:T), respectively.
+Remark 6 Under Assumption 2, the marginal smoothing distributions ↼−q [i+1]
+k
+(xk), for all 0 ≤k < T, are
+computed via backward propagation starting from ↼−q [i+1]
+T
+(xT)
+↼−q [i+1]
+k−1 (xk−1) =
+Z
+↼−q [i+1]
+k
+(xk)↼−q [i+1]
+k
+(xk−1 | xk) dxk,
+where ↼−q [i+1]
+k
+(xk−1 | xk) and ↼−q [i+1]
+T
+(xT) are given by Proposition 3.
+4.3
+Hybrid Posterior Factorization
+The recursions in Proposition 2 and Proposition 3 are a direct result of the forward- and reverse-Markov
+decompositions from Assumption 1 and Assumption 2. While these schemes lead to two distinct smoothing
+algorithms, it is possible to combine elements of both to construct a hybrid smoothing solution that leverages
+both decompositions in one algorithm.
+6
+
+Corollary 1 (Optimal hybrid marginals) For state-space models of the form 1, given the forward-
+Markov conditionals −⇀q [i]
+k (xk+1 | xk) and reverse-Markov conditionals ↼−q [i]
+k (xk−1 | xk) associated with the
+same joint smoothing distribution q[i](x0:T | y1:T), we compute the marginals q[i+1]
+k
+(xk) associated with prob-
+lem 4 by leveraging the interpretation from Remark 3 and Remark 5, we combine the recursions from Propo-
+sition 2 and Proposition 3
+q[i+1]
+k
+(xk) ∝
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+h
+q[i]
+0 (x0)
+iβh
+exp
+n−⇀
+V [i+1]
+0
+(x0)
+o i1−β
+if k = 0,
+h
+q[i]
+k (xk)
+iβh
+exp
+n↼−
+V [i+1]
+k
+(xk)
+o −⇀
+ψ [i+1]
+k
+(xk)
+i1−β
+if 0 < k < T,
+h
+q[i]
+T (xT)
+iβh
+exp
+n↼−
+V [i+1]
+T
+(xT)
+o i1−β
+if k = T.
+The forward–backward recursion schemes derived in Proposition 2, Proposition 3, and Corollary 1 share a
+general algorithmic structure that does not rely on specific assumptions about the dynamics fk(xk+1 | xk),
+the measurement model hk(yk | xk), or the forms of the approximate posteriors −⇀q (x0:T) and ↼−q (x0:T). In
+the sections that follow, we present concrete implementations of these schemes by adopting conditionally
+Gaussian approximations for the forward- and reverse-Markov posterior distributions.
+5
+Practical Recursive Inference Algorithms
+To transform the recursive schemes introduced in Section 4.1 and Section 4.2 into concrete and tractable
+algorithms, we impose additional structure on the forward and backward updates. This is accomplished
+by specializing the conditional posteriors defined in (6) and (10), along with the corresponding potential
+functions from (8) and (13). In particular, we focus on a class of approximate smoothing algorithms where
+the joint posterior is restricted to be Gaussian, and the Markov conditionals are constrained to the Gauss–
+Markov family. This restriction enables recursive formulations that admit closed-form updates.
+Assumption 3 (Forward Gauss–Markov approximation) Given
+a
+state-space
+model
+(1)
+and
+a
+forward-Markov factorization in Assumption 1, we restrict the approximate posterior −⇀q (x0:T | y1:T) to the
+family of forward Gauss–Markov densities, leading to the following parameterization
+−⇀q (x0:T | y1:T) = N(x0 | − ⇀
+m0,−⇀
+P0)
+T −1
+Y
+k=0
+N(xk+1 | −⇀
+Fk xk +−⇀dk,−⇀
+Σk).
+Assumption 4 (Reverse Gauss–Markov approximation) Given a state-space model (1) and a reverse-
+Markov decomposition in Assumption 2, we restrict the approximate posterior ↼−q (x0:T | y1:T) to the family
+of reverse Gauss–Markov densities, leading to the following parameterization
+↼−q (x0:T | y1:T) = N(xT | ↼ −
+mT,↼−
+PT)
+T
+Y
+k=1
+N(xk−1 | ↼−
+Fk xk +↼−dk,↼−
+Σk).
+In the following sections, we develop tractable recursive inference schemes by constructing local quadratic ap-
+proximations to the potential functions and deriving update rules that preserve the Gauss–Markov structure
+of the approximate posterior across iteration.
+5.1
+Statistical Function Approximations
+A key step in constructing efficient smoothing algorithms is to approximate the potential functions in (8)
+and (13) with tractable forms that preserve the recursive structure and admit closed-form updates. We
+achieve this by introducing second-order statistical expansions of the log-density functions associated with
+the latent dynamics log fk(xk+1 | xk) and the measurement model log hk(yk | xk).
+7
+
+Given the iterative nature of the proposed optimization procedure (4), it is natural to construct these
+expansions locally, around the current iterate q[i](x0:T). This ensures that the approximation is tailored to
+the current posterior belief and captures relevant structure in the vicinity of the current iterate. Crucially,
+the KL-based trust-region constraint used in the entropic proximal updates plays an important role in
+controlling the step size of each iteration. It ensures that the distribution q[i+1] does not deviate too far from
+q[i], thereby keeping the updates within the region where the local expansions remain valid. This interaction
+between local approximations and bounded updates stabilizes the optimization and maintains the fidelity of
+the recursive inference scheme (Teboulle, 1992; Iusem et al., 1994; Chrétien & Hero, 2002).
+Definition 1 (Statistical second-order expansion) Let z
+∼
+N(m, P) and let g(z) be a twice-
+differentiable scalar function. A second-order statistical expansion of g(z) with respect to the random variable
+z takes a quadratic form g(z) ≈−1
+2 z⊤U z + z⊤u + η.
+Definition 1 specifies the structure but not the computation of the expansion parameters. We return to this
+in later sections, where we describe two approximation strategies for computing (U, u, η).
+Assumption 5 (Quadratic expansion of log-densities) Let (xk+1, xk) ∼q[i]
+k (xk+1, xk), we assume the
+statistical expansion of ℓ[i]
+f (xk+1, xk) ≈log fk(xk+1 | xk), for all 0 ≤k < T, is parameterized by
+ℓ[i]
+f (xk+1, xk) = −1
+2
+h
+x⊤
+k+1
+x⊤
+k
+i
+
+C[i]
+¯x¯x,k
+−C[i]
+¯xx,k
+−C[i]
+x¯x,k
+C[i]
+xx,k
+
+
+
+xk+1
+xk
+
++
+h
+x⊤
+k+1
+x⊤
+k
+i
+
+c[i]
+¯x,k
+c[i]
+x,k
+
++ κ[i]
+k ,
+and the statistical expansion of ℓ[i]
+h (xk) ≈log hk(yk | xk), for all 0 < k ≤T, is given as
+ℓ[i]
+h (xk) = −1
+2x⊤
+k L[i]
+k xk + x⊤
+k l[i]
+k + ν[i]
+k .
+Finally, for x0 ∼q[i]
+0 (x0), we define the statistical expansion of ℓ[i]
+p (x0) ≈log p0(x0) as
+ℓ[i]
+p (x0) = −1
+2x⊤
+0 L[i]
+0 x0 + x⊤
+0 l[i]
+0 + ν[i]
+0 .
+5.2
+Recursive Quadratic Potentials
+In this section, we derive tractable schemes for computing the potential functions defined in (8) and (13),
+leveraging the statistical approximations introduced in Assumption 5. We show that these approximations
+lead to tractable recursions over quadratic forms of −⇀
+Vk(xk) and ↼−
+Vk(xk) from Proposition 2 and Proposition 3.
+The use of quadratic potentials is consistent with the interpretation in Remark 3 and Remark 5, where these
+functions are interpreted as log-space forward and backward filtering messages. Under the Gaussian approx-
+imation, such messages are naturally parameterized by quadratic functions, which justifies and supports the
+form adopted in our smoothing framework.
+Before introducing these recursive itself, let us first start by defining the following parametric forms for the
+potential functions and associated log-normalizing functions
+V [i+1]
+k
+(xk) = −1
+2x⊤
+k R[i+1]
+k
+xk + x⊤
+k r[i+1]
+k
++ ρ[i+1]
+k
+,
+(15)
+log ψ[i+1]
+k
+(xk) = −1
+2x⊤
+k S[i+1]
+k
+xk + x⊤
+k s[i+1]
+k
++ ξ[i+1]
+k
+.
+(16)
+These quadratic forms enable efficient message-passing updates while preserving the Gaussian structure of
+the approximate posterior.
+Proposition 4 (Recursive forward Gauss–Markov potentials) Let −⇀q [i]
+k (xk+1 | xk)
+be
+a
+forward
+Gauss–Markov conditional as defined in Assumption 3, and let ℓ[i]
+f (xk+1, xk), ℓ[i]
+h (xk), and ℓ[i]
+p (x0) be the
+8
+
+second-order approximations of the log-probabilities from Assumption 5, then the potentials −⇀
+V [i+1]
+k
+(xk) in (8)
+are quadratic functions of the form (15), computed recursively backwards starting from k = T as:
+−⇀
+R [i+1]
+T
+= L[i]
+T ,
+−⇀r [i+1]
+T
+= l[i]
+T .
+For 0 ≤k < T, the updates follow:
+−⇀
+R [i+1]
+k
+= L[i]
+k +
+1
+1 −β
+−⇀
+S [i+1]
+k
+,
+−⇀r [i+1]
+k
+= l[i]
+k +
+1
+1 −β
+−⇀s [i+1]
+k
+,
+where the log-normalizing function log−⇀
+ψ [i+1]
+k
+(xk) has quadratic form (16) with parameters:
+−⇀
+S [i+1]
+k
+= −⇀
+G [i+1]
+xx,k −
+h−⇀
+G [i+1]
+¯xx,k
+i⊤h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀
+G [i+1]
+¯xx,k ,
+−⇀s [i+1]
+k
+= −⇀g [i+1]
+x,k
++
+h−⇀
+G [i+1]
+¯xx,k
+i⊤h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀g [i+1]
+¯x,k
+,
+with intermediate quantities defined as:
+−⇀
+G [i+1]
+¯x¯x,k := (1 −β)
+h
+C[i]
+¯x¯x,k +−⇀
+R [i+1]
+k+1
+i
++ β
+h−⇀
+Σ [i]
+k
+i−1
+,
+−⇀
+G [i+1]
+xx,k := (1 −β) C[i]
+xx,k + β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k ,
+−⇀
+G [i+1]
+¯xx,k := (1 −β) C[i]
+¯xx,k + β
+h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k ,
+−⇀g [i+1]
+¯x,k
+:= (1 −β)
+h
+c[i]
+¯x,k +−⇀r [i+1]
+k
+i
++ β
+h−⇀
+Σ [i]
+k
+i−1−⇀d [i]
+k ,
+−⇀g [i+1]
+x,k
+:= (1 −β) c[i]
+x,k −β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀d [i]
+k .
+Finally, given a quadratic potential function −⇀
+V [i+1]
+0
+(x0) of the form (15) and Gaussian posterior density
+−⇀q [i]
+0 (x0) = N(− ⇀
+m [i]
+0 ,−⇀
+P [i]
+0 ), the log-normalizing constant log−⇀
+Z [i+1]
+0
+is computed according to (7)
+log−⇀
+Z [i+1]
+0
+= −1
+2
+h− ⇀
+m [i]
+0
+i⊤−⇀
+U [i+1]− ⇀
+m [i]
+0
++
+h− ⇀
+m [i]
+0
+i⊤−⇀u [i+1] +−⇀η [i+1],
+(17)
+where
+−⇀
+U [i+1] = −⇀
+J [i+1]
+mm
+−
+h−⇀
+J [i+1]
+xm
+i⊤h−⇀
+J [i+1]
+xx
+i−1−⇀
+J [i+1]
+xm
+,
+−⇀u [i+1] = −
+h−⇀
+J [i+1]
+xm
+i⊤h−⇀
+J [i+1]
+xx
+i−1−⇀j [i+1]
+x
+,
+and we have defined
+−⇀
+J [i+1]
+xx
+:= (1 −β)−⇀
+R [i+1]
+0
++ β
+h−⇀
+P [i]
+0
+i−1
+,
+−⇀
+J [i+1]
+xm
+:= β
+h−⇀
+P [i]
+0
+i−1
+,
+−⇀
+J [i+1]
+mm
+:= β
+h−⇀
+P [i]
+0
+i−1
+,
+−⇀j [i+1]
+x
+:= (1 −β)−⇀r [i+1]
+0
+.
+Proof. See Appendix D.
+Proposition 5 (Recursive reverse Gauss–Markov potentials) Let
+↼−q [i]
+k (xk−1 | xk)
+be
+a
+reverse
+Gauss–Markov conditional as defined in Assumption 4) and let ℓ[i]
+f (xk, xk−1), ℓ[i]
+h (xk), and ℓ[i]
+p (x0) be
+the second-order approximations of the log-probabilities in Assumption 5, then the potentials ↼−
+V [i+1]
+k
+(xk)
+from (13) are quadratic functions of the form (15), computed recursively forwards starting from k = 0 with
+↼−
+R [i+1]
+0
+= L[i]
+0 ,
+↼−r [i+1]
+0
+= l[i]
+0 ,
+9
+
+For 0 < k ≤T, the updates follow:
+↼−
+R [i+1]
+k
+= L[i]
+k +
+1
+1 −β
+↼−
+S [i+1]
+k
+,
+↼−r [i+1]
+k
+= l[i]
+k +
+1
+1 −β
+↼−s [i+1]
+k
+,
+where the log-normalizing function log↼−
+ψ [i+1]
+k
+(xk) has quadratic form (16) with parameters:
+↼−
+S [i+1]
+k
+= ↼−
+G [i+1]
+¯x¯x,k −
+h↼−
+G [i+1]
+x¯x,k
+i⊤h↼−
+G [i+1]
+xx,k
+i−1↼−
+G [i+1]
+x¯x,k ,
+↼−s [i+1]
+k
+= ↼−g [i+1]
+¯x,k
++
+h↼−
+G [i+1]
+x¯x,k
+i⊤h↼−
+G [i+1]
+xx,k
+i−1↼−g [i+1]
+x,k
+,
+with intermediate quantities defined as:
+↼−
+G [i+1]
+¯x¯x,k := (1 −β) C[i]
+¯x¯x,k−1 + β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1↼−
+F [i]
+k ,
+↼−
+G [i+1]
+xx,k := (1 −β)
+h
+C[i]
+xx,k−1 +↼−
+R [i+1]
+k−1
+i
++ β
+h↼−
+Σ [i]
+k
+i−1
+,
+↼−
+G [i+1]
+x¯x,k := (1 −β) C[i]
+x¯x,k−1 + β
+h↼−
+Σ [i]
+k
+i−1↼−
+F [i]
+k ,
+↼−g [i+1]
+¯x,k
+:= (1 −β) c[i]
+¯x,k−1 −β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1↼−d [i]
+k ,
+↼−g [i+1]
+x,k
+:= (1 −β)
+h
+c[i]
+x,k−1 +↼−r [i+1]
+k−1
+i
++ β
+h↼−
+Σ [i]
+k
+i−1↼−d [i]
+k .
+Finally, given a quadratic potential function ↼−
+V [i+1]
+T
+(xT) of the form (15)and Gaussian posterior density
+↼−q [i]
+T (xT) = N(↼ −
+m [i]
+T ,↼−
+P [i]
+T ), the log-normalizing constant log↼−
+Z [i+1]
+T
+is computed according to (12)
+log↼−
+Z [i+1]
+T
+= −1
+2
+h↼ −
+m [i]
+T
+i⊤↼−
+U [i+1]↼ −
+m [i]
+T
++
+h↼ −
+m [i]
+T
+i⊤↼−u [i+1] +↼−η [i+1],
+(18)
+where
+↼−
+U [i+1] = ↼−
+J [i+1]
+xx
+−
+h↼−
+J [i+1]
+mx
+i⊤h↼−
+J [i+1]
+mm
+i−1↼−
+J [i+1]
+mx
+,
+↼−u [i+1] = −
+h↼−
+J [i+1]
+mx
+i⊤h↼−
+J [i+1]
+mm
+i−1↼−j [i+1]
+m
+,
+and we have defined
+↼−
+J [i+1]
+xx
+:= β
+h↼−
+P [i]
+T
+i−1
+,
+↼−
+J [i+1]
+mx
+:= β
+h↼−
+P [i]
+T
+i−1
+,
+↼−
+J [i+1]
+mm
+:= (1 −β)↼−
+R [i+1]
+T
++ β
+h↼−
+P [i]
+T
+i−1
+,
+↼−j [i+1]
+m
+:= (1 −β)↼−r [i+1]
+T
+.
+Proof. See Appendix E.
+The results in Proposition 4 and Proposition 5 are derived using general second-order statistical expansions
+of the log-transition and log-likelihood functions. We now turn to the practical question of how to construct
+these approximations and present two distinct strategies for realizing them.
+5.2.1
+Generalized Statistical Linear Regression
+Our first approach to realizing the second-order statistical expansions is based on generalized statistical lin-
+ear regression (GSLR, García-Fernández et al., 2015; Tronarp et al., 2018). These enabling approximations
+(Särkkä & Svensson, 2023) produce affine-Gaussian surrogates of the dynamics fk(xk+1 | xk) and the mea-
+surement model hk(yk | xk), yielding functional forms that directly satisfy the required quadratic structure
+for potentials and log-normalizing functions from Assumption 5.
+10
+
+Definition 2 (Generalized statistical linear regression) Let x and y be two random variables and sup-
+posed that the first and second moments E [x], V [x], E [y], V [y], and C [y, x] are known. Then, statistical
+linear regression approximates p(y | x) by an affine-Gaussian model y ≈A x + b + ω, ω ∼N(0, Ω), with
+A = C [y, x] V [x]−1 ,
+b = E [y] −A E [x] ,
+Ω= V [y] −A V [x] A⊤,
+where the parameters {A, b} minimize the mean squared error objective MSE(A, b) = E
+
+(y −A x −b)⊤(y −
+A x −b)
+
+and the covariance matrix satisfies Ω= V [y −A x −b].
+When only the conditional moments
+E
+
+y | x
+
+and V
+
+y | x
+
+are available, generalized statistical linear regression estimates marginal moments via
+the law of total expectation, so that:
+E [y] = E
+h
+E
+
+y | x
+i
+,
+V [y] = E
+h
+V
+
+y | x
+i
++ V
+h
+E
+
+y | x
+i
+,
+C [y, x] = C
+h
+E
+
+y | x
+
+, x
+i
+,
+where the outer expectations are evaluated with respect to a Gaussian marginal distribution p(x) using nu-
+merical quadrature integration rules (Särkkä & Svensson, 2023).
+Based on the recipe from Definition 2, and given the conditional moments E
+
+xk+1 | xk
+
+, V
+
+xk+1 | xk
+
+,
+E
+
+yk | xk
+
+, and V
+
+yk | xk
+
+, we can replace the conditional densities fk(xk+1 | xk) and hk(yk | xk), at each
+iteration [i + 1], by their affine-Gaussian approximations
+xk+1 ≈A[i]
+k xk + b[i]
+k + ω[i]
+k ,
+ω[i]
+k ∼N(0, Ω[i]
+k ),
+0 ≤k < T,
+yk ≈H[i]
+k xk + e[i]
+k + δ[i]
+k ,
+δ[i]
+k ∼N(0, ∆[i]
+k ),
+0 < k ≤T,
+(19)
+which corresponds to generalized statistical linear regression with respect to the Gaussian marginal distri-
+butions q[i]
+k (xk) from iteration [i]
+A[i]
+k
+=
+C[i] [xk+1, xk] V[i] [xk]−1 ,
+b[i]
+k
+=
+E[i] [xk+1] −A[i]
+k E[i] [xk] ,
+Ω[i]
+k
+=
+V[i] [xk+1] −A[i]
+k V[i] [xk]
+h
+A[i]
+k
+i⊤
+,
+H[i]
+k
+=
+C[i] [yk, xk] V[i] [xk]−1 ,
+e[i]
+k
+=
+E[i] [yk] −H[i]
+k E[i] [xk] ,
+∆[i]
+k
+=
+V[i] [yk] −H[i]
+k V[i] [xk]
+h
+H[i]
+k
+i⊤
+.
+Finally, the prior density p0(x0) is likewise approximated by a Gaussian density by matching the first and
+second moments
+p0(x0) ≈N(µ0, Λ0),
+with
+µ0 = E [x0] ,
+Λ0 = V [x0] .
+(20)
+Given the GSLR approximations (19) and (20), we obtain the quadratic log-density expansions required
+by Assumption 5, enabling closed-form computation in Proposition 4 and Proposition 5. Specifically, the
+resulting coefficients for ℓ[i]
+f (xk+1, xk) are:
+C[i]
+¯x¯x,k =
+h
+Ω[i]
+k
+i−1
+,
+C[i]
+¯xx,k
+=
+h
+Ω[i]
+k
+i−1
+A[i]
+k ,
+c[i]
+¯x,k
+=
+h
+Ω[i]
+k
+i−1
+b[i]
+k ,
+C[i]
+xx,k =
+h
+A[i]
+k
+i⊤h
+Ω[i]
+k
+i−1
+A[i]
+k ,
+C[i]
+x¯x,k
+=
+h
+A[i]
+k
+i⊤h
+Ω[i]
+k
+i−1
+,
+c[i]
+x,k
+= −
+h
+A[i]
+k
+i⊤h
+Ω[i]
+k
+i−1
+bk.
+for all 0 ≤k < T, while the coefficients of ℓ[i]
+h (xk), for all 0 < k ≤T, are:
+L[i]
+k =
+h
+H[i]
+k
+i⊤h
+∆[i]
+k
+i−1
+H[i]
+k ,
+l[i]
+k =
+h
+H[i]
+k
+i⊤h
+∆[i]
+k
+i−1 h
+yk −e[i]
+k
+i
+,
+and, finally, the coefficients associated with ℓ[i]
+p (x0) are:
+L[i]
+0 = Λ−1
+0 ,
+l[i]
+0 = Λ−1
+0 µ0.
+11
+
+5.2.2
+Fourier–Hermite Series Expansion
+The statistical approximation provided by statistical linear regression comes with two main limitations:
+it imposes an explicit additive Gaussian noise model on the approximated dynamics and measurements,
+and it inherently neglects second-order information. Alternatively, we can retrieve second-order statistical
+approximations by using Fourier–Hermite series (Sarmavuori & Särkkä, 2011; Hassan & Särkkä, 2023), which
+leverage Hermite polynomial bases in a Hilbert space H (Malliavin, 2015) to capture higher-order effects.
+Definition 3 Let g ∈H be a scalar-valued function and let s ∼N(0, I) be a standard Gaussian random
+variable. A second-order Fourier–Hermite expansion of g(s) is given by
+g(s) ≈E
+
+g(s)
+
++ E
+
+g(s) H1(s)
+⊤H1(s) + 1
+2 tr
+n
+E
+
+g(s) H2(s)
+
+H2(s)
+o
+,
+where H1(s) and H2(s) are first- and second-order Hermite polynomials defined as
+H1(s) = s,
+H2(s) = ss⊤−I.
+This expansion generalizes to any Gaussian N(m, P) by letting z = Rs + m and P = RR⊤, so that:
+g(z) ≈E
+
+g(z)
+
++ E
+h
+g(z) H1(R−1(z −m))
+i⊤
+H1(R−1(z −m))
++ 1
+2 tr
+
+E
+h
+g(z) H2(R−1(z −m))
+i h
+R−1(z −m)(z −m)⊤R−⊤−I
+i
+= −1
+2z⊤Uz + z⊤u + η.
+The coefficients of this quadratic form are:
+U := −E
+
+Gzz(z)
+
+,
+u := E
+
+Gz(z)
+
+−E
+
+Gzz(z)
+
+m,
+η := E
+
+g(z)
+
+−E
+
+Gz(z)
+
+m + 1
+2m⊤E
+
+Gzz(z)
+
+m −1
+2 tr
+n
+R⊤E
+
+Gzz(z)
+
+R
+o
+.
+where Gz(z) and Gzz(z) are the Jacobian and Hessian of g(z), respectively, which, for z ∼N(m, P), satisfy
+the following identities via integration by parts (Hassan & Särkkä, 2023)
+E
+h
+g(z) H1(R−1(z −m))
+i
+= R⊤E
+
+Gz(z)
+
+,
+E
+h
+g(z) H2(R−1(z −m))
+i
+= R⊤E
+
+Gzz(z)
+
+R.
+The expectations involved in this approximation can be efficiently evaluated using numerical quadrature in-
+tegration rules (Särkkä & Svensson, 2023).
+Given a set of marginal distributions q[i]
+k (xk), we can apply the expansion in Definition 3 to the log-transition
+and log-measurement functions to obtain second-order approximations consistent with Assumption 5. This
+approach provides an alternative approximation to GLSR, which does not impose an explicit additive Gaus-
+sian noise assumption and inherently incorporates second-order information of the state-space model, offering
+potentially higher fidelity in the approximation.
+5.3
+Gauss–Markov Posterior Updates
+Having established the quadratic approximations that enable recursive computation of the potential func-
+tions, we now turn our attention to the computation of the tilted distributions introduced in Proposition 2
+and Proposition 3. As specified in Assumption 3 and Assumption 4, our goal is to maintain the Gauss–Markov
+structure of the forward and reverse variational posteriors throughout the iterative optimization process. To
+ensure that the updated variational distributions at iteration [i+1] remain within the Gauss–Markov family,
+we must project the corresponding tilted distributions onto a (conditional) Gaussian form.
+We begin by deriving a general moment-matching rule for tilted marginal distributions of the form in equa-
+tions (5) and (11). These results then directly yield closed-form updates for the parameters − ⇀
+m [i+1]
+0
+, −⇀
+P [i+1]
+0
+,
+↼ −
+m [i+1]
+T
+, and ↼−
+P [i+1]
+T
+, preserving the tractability and structure of the overall smoothing algorithm.
+12
+
+Lemma 1 (Tilted Gaussian moment matching) Let q[i+1](x) be a tilted distribution of the form
+q[i+1](x) =
+h
+Z[i+1]i−1 h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+,
+with q[i](x) = N(x | m[i], P [i]) and a normalizing constant
+Z[i+1] =
+Z h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+dx,
+then the first and second moments of q[i+1](x) are given by
+E[i+1] [x] = m[i] + 1
+β P [i] ∂log Z[i+1]
+∂m[i]
+,
+V[i+1] [x] = 1
+β P [i] + 1
+β2 P [i] ∂2 log Z[i+1]
+∂m[i] ∂
+
+m[i]⊤P [i].
+Proof. See Appendix F.
+Corollary 2 (Forward Gauss–Markov boundary) Let −⇀q [i]
+0 (x0)
+be
+a
+Gaussian
+marginal
+and
+let
+log−⇀
+Z [i+1]
+0
+be the log-normalizing constant of the tilted distribution in (17). Then, applying Lemma 1, the
+optimal Gaussian approximation to the updated tilted marginal −⇀q [i+1]
+0
+(x0) from (5) is given by:
+−⇀
+P [i+1]
+0
+=
+h−⇀
+J [i+1]
+xx
+i−1
+,
+− ⇀
+m [i+1]
+0
+=
+h−⇀
+J [i+1]
+xx
+i−1 h−⇀j [i+1]
+x
++−⇀
+J [i+1]
+xm
+− ⇀
+m [i]
+0
+i
+.
+By substituting in the explicit expressions, the update simplifies to:
+−⇀
+P [i+1]
+0
+=
+h
+(1 −β)−⇀
+R [i+1]
+0
++ β
+h−⇀
+P [i]
+0
+i−1 i−1
+,
+− ⇀
+m [i+1]
+0
+= −⇀
+P [i+1]
+0
+h
+(1 −β)−⇀r [i+1]
+0
++ β
+h−⇀
+P [i]
+0
+i−1− ⇀
+m [i]
+0
+i
+.
+Corollary 3 (Reverse Gauss–Markov boundary) Let ↼−q [i]
+T (xT)
+be
+a
+Gaussian
+marginal
+and
+let
+log↼−
+Z [i+1]
+T
+be the log-normalizing constant of the tilted distribution in (18). Then, applying Lemma 1, the
+optimal Gaussian approximation to the updated tilted marginal ↼−q [i+1]
+T
+(xT) from (11) is given by:
+↼−
+P [i+1]
+T
+=
+h↼−
+J [i+1]
+mm
+i−1
+,
+↼ −
+m [i+1]
+T
+=
+h↼−
+J [i+1]
+mm
+i−1 h↼−j [i+1]
+m
++↼−
+J [i+1]
+mx
+↼ −
+m [i]
+T
+i
+.
+By substituting in the explicit expressions, the update simplifies to:
+↼−
+P [i+1]
+T
+=
+h
+(1 −β)↼−
+R [i+1]
+T
++ β
+h↼−
+P [i]
+T
+i−1 i−1
+,
+↼ −
+m [i+1]
+T
+= ↼−
+P [i+1]
+T
+h
+(1 −β)↼−r [i+1]
+T
++ β
+h↼−
+P [i]
+T
+i−1↼ −
+m [i]
+T
+i
+.
+Projecting the tilted conditionals in (6) and (10) onto the affine-Gaussian parametric family defined in
+Assumption 3 and Assumption 4 is more involved, as it requires deriving the conditional moments of the
+forward and reverse distributions E
+
+xk+1 | xk
+
+, V
+
+xk+1 | xk
+
+, E
+
+xk−1 | xk
+
+, and V
+
+xk−1 | xk
+
+. In what
+follows, we derive closed-form expressions for these moments and use them to update the parameters of the
+forward and reverse Gauss–Markov posteriors.
+Lemma 2 (Forward Gauss–Markov conditionals) Let −⇀q [i]
+k (xk+1 | xk) be a forward Gauss–Markov
+conditional as defined in Assumption 3.
+Given a second-order expansion of ℓ[i]
+f (xk+1, xk) following As-
+sumption 5, then, the conditional mean and covariance of the updated tilted conditional −⇀q [i+1]
+k
+(xk+1 | xk)
+13
+
+are given by:
+E[i+1] 
+xk+1 | xk
+
+=
+h−⇀
+G [i+1]
+x¯x,k
+i−1 −⇀
+G [i+1]
+xx,k xk −−⇀g [i+1]
+x,k
++ ∂log−⇀
+ψ [i+1]
+k
+(xk)
+∂xk
+
+,
+V[i+1] 
+xk+1 | xk
+
+=
+h−⇀
+G [i+1]
+x¯x,k
+i−1 −⇀
+G [i+1]
+xx,k + ∂2 log−⇀
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+ h−⇀
+G [i+1]
+¯xx,k
+i−1
+.
+When log−⇀
+ψ [i+1]
+k
+(xk) is approximated quadratically as in Proposition 4, then parameters of the affine-
+Gaussian conditional −⇀q [i+1]
+k
+(xk+1 | xk) become:
+−⇀
+Σ [i+1]
+k
+=
+h−⇀
+G [i+1]
+¯x¯x,k
+i−1
+,
+−⇀
+F [i+1]
+k
+=
+h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀
+G [i+1]
+¯xx,k ,
+−⇀d [i+1]
+k
+=
+h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀g [i+1]
+¯x,k
+,
+and can be further simplified to:
+−⇀
+Σ [i+1]
+k
+=
+h
+(1 −β)
+h
+C[i]
+¯x¯x,k +−⇀
+R [i+1]
+k+1
+i
++ β
+h−⇀
+Σ [i]
+k
+i−1 i−1
+,
+−⇀
+F [i+1]
+k
+= −⇀
+Σ [i+1]
+k
+h
+(1 −β) C[i]
+¯xx,k + β
+h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k
+i
+,
+−⇀d [i+1]
+k
+= −⇀
+Σ [i+1]
+k
+h
+(1 −β)
+
+c[i]
+¯x,k +−⇀r [i+1]
+k
+
++ β
+h−⇀
+Σ [i]
+k
+i−1−⇀d [i]
+k
+i
+.
+Proof. See Appendix G.
+Lemma 3 (Reverse Gauss–Markov conditionals) Let↼−q [i]
+k (xk−1 | xk) be a forward Gauss–Markov con-
+ditional as defined in Assumption 4. Given a second-order expansion of ℓ[i]
+f (xk, xk−1) following Assumption 5,
+then, the conditional mean and covariance of the updated tilted conditional ↼−q [i]
+k (xk−1 | xk) are given by:
+E[i+1] 
+xk−1 | xk
+
+=
+h↼−
+G [i+1]
+¯xx,k
+i−1 ↼−
+G [i+1]
+¯x¯x,k xk −↼−g [i+1]
+¯x,k
++ ∂log↼−
+ψ [i+1]
+k
+(xk)
+∂xk
+
+,
+V[i+1] 
+xk−1 | xk
+
+=
+h↼−
+G [i+1]
+¯xx,k
+i−1 ↼−
+G [i+1]
+¯x¯x,k + ∂2 log↼−
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+ h↼−
+G [i+1]
+x¯x,k
+i−1
+.
+When log↼−
+ψ [i+1]
+k
+(xk) is approximated quadratically as in Proposition 5, then the parameters of the affine-
+Gaussian conditional ↼−q [i+1]
+k
+(xk−1 | xk) become:
+↼−
+Σ [i+1]
+k
+=
+h↼−
+G [i+1]
+xx,k
+i−1
+,
+↼−
+F [i+1]
+k
+=
+h↼−
+G [i+1]
+xx,k
+i−1↼−
+G [i+1]
+x¯x,k ,
+↼−d [i+1]
+k
+=
+h↼−
+G [i+1]
+xx,k
+i−1↼−g [i+1]
+x,k
+,
+and can be further simplified to:
+↼−
+Σ [i+1]
+k
+=
+h
+(1 −β)
+h
+C[i]
+xx,k−1 +↼−
+R [i+1]
+k−1
+i
++ β
+h↼−
+Σ [i]
+k
+i−1 i−1
+,
+↼−
+F [i+1]
+k
+= ↼−
+Σ [i+1]
+k
+h
+(1 −β) C[i]
+x¯x,k−1 + β
+h↼−
+Σ [i]
+k
+i−1↼−
+F [i]
+k
+i
+,
+↼−d [i+1]
+k
+= ↼−
+Σ [i+1]
+k
+h
+(1 −β)
+
+c[i]
+x,k−1 +↼−r [i+1]
+k−1
+
++ β
+h↼−
+Σ [i]
+k
+i−1↼−d [i]
+k
+i
+.
+Proof. See Appendix H.
+5.4
+Recursive Gaussian Marginals
+Given the Gauss–Markov parameterization of the posterior in Assumption 3 and Assumption 4 and the up-
+date rules introduced in Section 5.3, the smoothing posterior marginals at each iteration [i] can be computed
+14
+
+efficiently. Specifically, we use a forward recursion to evaluate the marginals of the forward Gauss–Markov
+posterior as described in Remark 4 and a backward recursion for the reverse Gauss–Markov posterior from
+Remark 6. These marginals play a central role in our proposed iterative smoothing framework, as they are
+used to perform second-order statistical expansions of the log-densities associated with the dynamics and
+measurement model, as discussed in Section 5.2.
+Corollary 4 (Forward Gauss–Markov marginals) Given the updated forward Gauss–Markov posterior
+from Corollary 2 and Lemma 2, the forward marginal smoothing distributions −⇀q [i+1]
+k
+(xk), for all 0 < k ≤T,
+are computed in closed form via the forward recursion:
+− ⇀
+m [i+1]
+k+1
+= −⇀
+F [i+1]
+k
+− ⇀
+m [i+1]
+k
++−⇀d [i+1]
+k
+,
+−⇀
+P [i+1]
+k+1
+= −⇀
+F [i+1]
+k
+−⇀
+P [i+1]
+k
+h−⇀
+F [i+1]
+k
+i⊤
++−⇀
+Σ [i+1]
+k
+,
+with the initial condition −⇀q [i+1]
+0
+= N(− ⇀
+m [i+1]
+0
+,−⇀
+P [i+1]
+0
+).
+Corollary 5 (Reverse Gauss–Markov marginals) Given the updated reverse Gauss–Markov posterior
+from Corollary 3 and Lemma 3, the reverse marginal smoothing distributions ↼−q [i+1]
+k
+(xk), for all 0 ≤k < T,
+are computed in closed form via the backward recursion:
+↼ −
+m [i+1]
+k−1
+= ↼−
+F [i+1]
+k
+↼ −
+m [i+1]
+k
++↼−d [i+1]
+k
+,
+↼−
+P [i+1]
+k−1
+= ↼−
+F [i+1]
+k
+↼−
+P [i+1]
+k
+h↼−
+F [i+1]
+k
+i⊤
++↼−
+Σ [i+1]
+k
+,
+with the terminal condition ↼−q [i+1]
+T
+= N(↼ −
+m [i+1]
+T
+,↼−
+P [i+1]
+T
+).
+Corollary 6 (Hybrid marginals) Given the recursion from Proposition 4 and Proposition 5, the marginal
+smoothing distributions q[i+1]
+k
+(xk), for all 0 < k < T, are computed according to Corollary 1 in closed form
+by completing the squares:
+P [i+1]
+k
+=
+h
+(1 −β)
+h↼−
+R [i+1]
+k
++−⇀
+S [i+1]
+k
+i
++ β
+h
+P [i]
+k
+i−1i−1
+,
+m[i+1]
+k
+= P [i+1]
+k
+h
+(1 −β)
+↼−r [i+1]
+k
++−⇀s [i+1]
+k
+
++ β
+h
+P [i]
+k
+i−1
+m[i]
+k
+i
+,
+where q[i+1]
+0
+(x0) = N(− ⇀
+m [i+1]
+0
+,−⇀
+P [i+1]
+0
+) and q[i+1]
+T
+(xT) = N(↼ −
+m [i+1]
+T
+,↼−
+P [i+1]
+T
+).
+5.5
+Optimal Damping Parameter
+We now address the selection of the damping parameter β, which plays a critical role in the entropic proximal
+update.
+As described in (4), β arises from the Kullback–Leibler constraint and varies across iterations.
+Propositions 2 and 3 show that the optimal value of β at each iteration is obtained by minimizing the
+corresponding dual objective associated with the forward or reverse factorization.
+The dual problems defined in (9) and (14) are nonlinear in β and can be approached using standard numerical
+optimization techniques (Nocedal & Wright, 2006). However, in practice, we found that off-the-shelf solvers
+may struggle with feasibility issues in highly nonlinear regimes. These difficulties typically stem from viola-
+tions of the convexity assumptions implicitly required for the quadratic potentials defined in Propositions 4
+and 5, and can lead to instability unless positive definiteness is carefully handled.
+To circumvent these challenges, we adopt a simple yet robust alternative. We apply a bisection method to the
+Lagrange multiplier α, which implicitly determines the damping parameter via the relation β = α/(1 + α).
+This approach searches for the root of the gradient of the Lagrangian R(α), ensuring that the KL constraint
+is satisfied at each iteration. The root-finding condition is given by:
+∂R(α∗)
+∂α∗
+= ε −DKL
+h
+q[i+1](x0:T; α∗) || q[i](x0:T)
+i
+= 0,
+(21)
+15
+
+where R(·) represents the Lagrangian associated with Problem (4)
+R(α) = Eq[i+1]
+α
+h
+log p(x0:T, y1:T) −log q[i+1](x0:T; α)
+i
++ α
+h
+ε −DKL
+h
+q[i+1](x0:T; α) || q[i](x0:T)
+i i
++ const.
+Here, q[i+1](x0:T; α) denotes the updated variational posterior that depends implicitly on β, and thus on α.
+Detailed derivations of the forward and reverse Lagrangian formulations are provided in Appendix B and
+Appendix C, respectively.
+An outline of the bisection procedure for determining the optimal damping parameter is presented in Algo-
+rithm 3 and Algorithm 6, corresponding to the forward and reverse Gauss–Markov smoothers. Importantly,
+the root condition (21) guarantees that the optimal solution q[i+1](x0:T) lies on the boundary of the KL-
+ball centered at q[i](x0:T) with radius ε. This induces an automatic damping adaptation mechanism that
+dynamically enforces the trust-region constraint across iterations.
+5.6
+Proximal Variational Bayesian Smoothing Algorithms
+The preceding sections provide all the necessary components to instantiate the general results of Proposi-
+tion 2, Proposition 3, and Corollary 1 for the case of Gaussian variational posterior approximations. In this
+section, we present an overview of the resulting three iterative Bayesian smoothing algorithms.
+The Forward Proximal Variational Smoother (FPVS), described in Algorithm 7, proceeds by iteratively
+refining the posterior estimate in key steps. First, a backward recursion is used to compute the potential
+functions and the forward conditional smoothing distributions, as detailed in Algorithm 1. This is followed
+by a forward recursion that infers the smoothed marginal distributions, as outlined in Algorithm 2. At each
+iteration, the damping parameter is updated via the procedure described in Algorithm 3, which ensures
+satisfaction of the proximal constraint imposed by the entropic regularization.
+The Reverse Proximal Variational Smoother (RPVS), presented in Algorithm 8, follows a similar structure
+but inverts the order of recursion. Specifically, a forward recursion computes the potential functions and the
+reverse conditional smoothing distributions, as given in Algorithm 4. This is followed by a backward recursion
+to compute the smoothed marginal distributions, according to Algorithm 5. As in the forward smoother,
+the damping parameter is adaptively chosen at each iteration using the method outlined in Algorithm 6.
+The Hybrid Proximal Variational Smoother (HPVS), shown in Algorithm 10, combines elements of both
+the forward and reverse approaches to jointly leverage their structural advantages.
+In this scheme, the
+potential functions and log-normalizing terms are computed using both the backward recursion from the
+forward smoother in Algorithm 1 and the forward recursion from the reverse smoother in Algorithm 4. The
+resulting forward and reverse representations are then fused to compute the smoothed marginal distributions
+in parallel, as described in Corollary 1. The damping parameter can be adapted following either the forward
+or reverse update strategy, depending on implementation preferences.
+All of the proposed methods share several favorable properties. First, the recursions are formulated in log-
+space, which improves numerical stability and mitigates issues related to underflow in long time horizons.
+Second, each recursion is inherently damped through a trust-region constraint, ensuring that updates remain
+well-behaved on the statistical manifold and avoiding erratic jumps in the posterior estimates. Finally, all
+algorithms exhibit linear time complexity with respect to the temporal dimension, making them scalable
+and practical for long sequences.
+6
+Connection to Existing Bayesian Inference Algorithms
+This section provides an overview of recent research that helps situate our contribution. We highlight related
+research in signal processing, Markovian Gaussian processes, and approximate Bayesian inference.
+6.1
+Forward-Backward Smoothing Algorithms
+For the forward Gauss–Markov decomposition introduced in Proposition 2 and Proposition 4, a direct concep-
+tual connection can be made to the classical smoother proposed by Cox (1964). In his work, Cox formulates
+16
+
+Bayesian smoothing in state-space models with additive Gaussian noise as a maximum a posteriori (MAP)
+optimization problem. Subject to certain non-singularity conditions, he derives a dynamic programming
+solution that propagates adjoint state functions backward in time, which aligns closely with the backward
+recursion over potential functions used in our framework. This method was later extended to nonlinear sys-
+tems via iterative linearization techniques (Mortensen, 1968). Our approach generalizes Cox’s formulation
+by moving beyond MAP estimation to target a full Gaussian approximation of the smoothing posterior. In
+doing so, we accommodate a broader class of nonlinear, non-Gaussian state-space models. Moreover, by in-
+corporating entropic regularization, our method introduces a principled mechanism for trust-region control,
+ensuring stable and well-posed updates over the space of variational densities.
+In contrast, the reverse Gauss–Markov decomposition described in Proposition 3 and Proposition 5 yields
+a recursion that closely parallels the structure of the Rauch–Tung–Striebel (RTS) smoother (Rauch et al.,
+1965). The RTS smoother operates by first performing a forward filtering pass to accumulate measurement
+information, followed by a backward recursion that propagates smoothed marginals through the implicit
+computation of reverse posterior conditionals. Our iterated reverse Gauss–Markov smoother generalizes this
+two-pass structure to a significantly broader class of models. It lifts the standard assumptions of linear
+dynamics and Gaussian noise, enabling application to nonlinear, non-Gaussian systems. Additionally, by
+operating directly in the log-domain of the filtered densities and incorporating entropic proximal regular-
+ization, our method enhances numerical stability and provides a principled means of controlling the update
+step size throughout the recursion.
+Finally, the hybrid posterior decomposition introduced in Corollary 1 and Corollary 6 bears a strong re-
+semblance to log-space two-filter smoothers (Mayne, 1966; Fraser & Potter, 1969). Originally developed for
+MAP-based smoothing in linear-Gaussian state-space models, these methods were later extended to nonlin-
+ear settings through Gaussian-sum filters (Kitagawa, 1987). The canonical structure involves independent
+forward and backward filtering recursions that are subsequently combined to form the smoothing solution.
+Our hybrid smoother adopts this two-filter architecture by jointly leveraging both the forward and reverse
+Gauss–Markov decompositions of the variational posterior. In doing so, it generalizes the classical two-filter
+approach to accommodate nonlinear and non-Gaussian models within a variational inference framework. To
+the best of our knowledge, this is the first attempt to formulate an iterated two-filter smoother that integrates
+proximal updates and operates in the log-domain of the densities, akin to the forward and reverse variants.
+A notable advantage of this hybrid scheme is the structural independence of the forward and backward
+recursions, which allows for parallel execution. Although this design increases the overall computational
+cost relative to the single-pass algorithms, it offers practical benefits in terms of speed and modularity when
+implemented on modern parallel hardware.
+6.2
+Posterior-Linearization Bayesian Smoothing
+Our work is primarily inspired by posterior-linearization algorithms (García-Fernández et al., 2016; Tronarp
+et al., 2018), which perform approximate Gaussian Bayesian smoothing in nonlinear state-space models by
+alternating between posterior linearization and a Rauch-Tung-Striebel smoothing pass. These algorithms can
+be viewed as generalizations of the maximum-a-posteriori iterated smoother proposed by Bell (1994). While
+these methods offer advantages over traditional extended and unscented smoothers (Särkkä & Svensson,
+2023), they have two significant limitations.
+First, they impose linearity and additive noise assumptions on the dynamics and measurement models,
+which can be problematic in state-space models with multiplicative noise, as highlighted by Corenflos &
+Abdulsamad (2023). Second, these algorithms, in their original form, fall within the class of undamped
+Gauss–Newton optimization methods, as they rely on linear approximations of the dynamics and measure-
+ment models. Gauss–Newton methods, however, require a full-rank Jacobian to ensure convergence (Nocedal
+& Wright, 2006), a condition that is not generally met in nonlinear settings.
+To address the latter issue, a partial remedy was proposed by Raitoharju et al. (2018), who introduced an
+ad-hoc damping mechanism for the mean updates in the iterated posterior-linearization filter, albeit at the
+cost of a computationally expensive nested optimization loop. In contrast, Lindqvist et al. (2021) proposed
+a posterior-linearization smoother that implements damping through Levenberg–Marquardt regularization
+17
+
+and line-search procedures with convergence guarantees. Both approaches of Raitoharju et al. (2018) and
+Lindqvist et al. (2021), however, fail to exploit the information-geometric structure of the statistical manifold
+on which the approximate smoothing distribution is assumed to reside.
+Our approach generalizes these algorithms and resolves both weaknesses in a theoretically grounded manner.
+By using Fourier–Hermite expansions, we overcome the limitations of linear-Gaussian approximations, while
+the introduction of entropic proximal constraints provides a principled way to damp optimization over the
+space of densities, leading to techniques akin to trust-region approaches (Nocedal & Wright, 2006; Teboulle,
+1992). This improvement, however, comes at the cost of increased algorithmic complexity.
+6.3
+Approximate Bayesian Inference in State-Space Models
+The field of approximate Bayesian inference has seen significant progress in adapting standard techniques
+to exploit the temporal structure of state-space models, resulting in specialized algorithms for Bayesian
+smoothing. One influential approach builds on expectation propagation (EP), introduced by Minka (2001).
+In particular, Deisenroth & Mohamed (2012) applied EP to nonlinear state-space models with additive
+Gaussian noise.
+Their method iteratively linearizes the dynamics and measurement models around the
+current posterior estimate, yielding tractable forward–backward message-passing recursions. However, the
+construction is largely heuristic and lacks a clearly defined global objective, which complicates convergence
+analysis, especially in nonlinear or non-Gaussian regimes. In contrast, our method is grounded in a well-posed
+variational optimization problem, enabling us to draw on a body of theoretical analysis from convex and
+information-theoretic optimization (Teboulle, 1992; Chrétien & Hero, 2002), and ensuring a more principled
+treatment of smoothing in complex models.
+A parallel line of work has explored variational inference (VI)(Wainwright & Jordan, 2008) as a foundation
+for approximate smoothing. For instance, Courts et al. (2021) proposed a variational Gaussian smoother
+that optimizes the evidence lower bound using off-the-shelf constrained nonlinear solvers. Their formulation
+relies on a particular parameterization of twin-marginal distributions, subject to feasibility constraints. A
+key limitation, however, is that the resulting inference procedure is non-recursive, and optimization is carried
+out directly in the parameter space of the posterior, rather than over the statistical manifold where natural
+gradient methods can be more efficient(Amari, 1998). In contrast, Barfoot et al. (2020), building on the work
+of Opper & Archambeau (2009), derived a natural gradient-based variational Gaussian smoother that, while
+also non-recursive, leverages structured parameterizations to exploit the sparsity of the state-space model,
+significantly improving computational efficiency. Recently, Tronarp (2025) introduced a recursive variational
+framework that derives forward-backward algorithms similar to ours, albeit without proximal regularization.
+Our framework is closely related to this line of work. Like the structured natural gradient approach of Barfoot
+et al. (2020), our method falls within the class of information-theoretic variational optimizers identified by
+Khan et al. (2015). However, it differs in two important respects. First, it is inherently recursive, producing
+a family of forward–backward smoothing algorithms that scale linearly in the time horizon. Second, it is
+agnostic to the parameterization of the variational posterior, allowing for flexible approximation families.
+By casting inference as a dynamic optimization problem constrained by KL-based trust regions, our method
+naturally exploits the temporal structure of state-space models and inherits convergence properties from
+proximal optimization theory.
+6.4
+Approximate Bayesian Inference in Temporal Gaussian Processes
+There is a well-established connection between temporal Gaussian processes (GP) and linear state-space
+models (O’Hagan, 1978).
+Hartikainen & Särkkä (2010) showed that temporal GP models with Matérn
+kernels can be reformulated exactly as linear-Gaussian SSMs.
+This enables using Kalman filtering and
+smoothing with linear time complexity to perform inference in temporal GPs, a significant improvement
+over the cubic complexity of standard GP inference.
+Building on this foundation, Chang et al. (2020) proposed a variational method that combines conjugate-
+computation variational inference (Khan & Lin, 2017) with Rauch–Tung–Striebel recursions, enabling princi-
+pled inference in models with linear dynamics and nonlinear measurement models. Wilkinson et al. (2020) ex-
+18
+
+tended this framework by unifying variational inference and expectation propagation within Kalman smooth-
+ing. Wilkinson et al. (2023) further generalized these approaches via the Bayes–Newton framework, which
+interprets VI, EP, and posterior linearization as optimization algorithms akin to Newton’s method. Despite
+these advances, a common critique of this class of algorithms is their ad-hoc treatment of the temporal dy-
+namics. While inference is formulated from an optimization perspective, the temporal structure is handled
+implicitly using linear RTS smoothing, rather than being explicitly integrated into the inference objective.
+In the continuous-time setting, several variational methods have been developed. Archambeau et al. (2007)
+proposed one of the earliest approaches for inference in partially-observed diffusion processes with linear
+dynamics by approximating the posterior with a linear stochastic differential equation. This approximation
+can be viewed as the continuous-time limit of a Gauss–Markov factorization. Ala-Luhtala et al. (2015) ex-
+tended this line of work to nonlinear dynamics through sigma-point approximations. More recently, Wildner
+& Koeppl (2021) and Verma et al. (2024) proposed natural-gradient-based generalizations of the method
+introduced by Archambeau et al. (2007). Wildner & Koeppl (2021) developed a moment-based recursive
+inference algorithm that reformulates the smoothing problem as an optimal control problem, thereby explic-
+itly incorporating the dynamic structure of the setting. In contrast, Verma et al. (2024) adopts a site-based
+approach inspired by Minka (2001), introducing a non-recursive algorithm that leverages iterative posterior
+linearization to handle nonlinear dynamics. Finally, Bartosh et al. (2025) recently proposed a continuous-
+time simulation-free approach based on modern flow and score matching techniques that scales to high
+dimensional problem.
+References
+Juha Ala-Luhtala, Simo Särkkä, and Robert Piché. Gaussian filtering and variational approximations for
+Bayesian smoothing in continuous-discrete stochastic dynamic systems. Signal Processing, 111:124–136,
+2015.
+Shun-Ichi Amari. Natural gradient works efficiently in learning. Neural Computation, 10(2):251–276, 1998.
+Shun-ichi Amari. Information Geometry and Its Applications, volume 194. Springer, 2016.
+Cédric Archambeau, Manfred Opper, Yuan Shen, Dan Cornford, and John Shawe-Taylor. Variational infer-
+ence for diffusion processes. Advances in Neural Information Processing Systems, 20, 2007.
+Timothy D Barfoot. State Estimation for Robotics. Cambridge University Press, 2024.
+Timothy D Barfoot, James R Forbes, and David J Yoon. Exactly sparse Gaussian variational inference
+with application to derivative-free batch nonlinear state estimation. The International Journal of Robotics
+Research, 39(13):1473–1502, 2020.
+Grigory Bartosh, Dmitry Vetrov, and Christian A Naesseth. SDE Matching: Scalable and simulation-free
+training of latent stochastic differential equations.
+In International Conference on Machine Learning.
+PMLR, 2025.
+Bradley M Bell. The iterated Kalman smoother as a Gauss–Newton method. SIAM Journal on Optimization,
+4(3):626–636, 1994.
+Alexandros Beskos, Dan Crisan, and Ajay Jasra. On the stability of sequential Monte Carlo methods in high
+dimensions. The Annals of Applied Probability, 24(4):1396 – 1445, 2014.
+Christopher M Bishop. Pattern Recognition and Machine Learning, volume 4. Springer, 2006.
+David M Blei, Alp Kucukelbir, and Jon D McAuliffe.
+Variational inference: A review for statisticians.
+Journal of the American Statistical Association, 112(518):859–877, 2017.
+Steve Brooks, Andrew Gelman, Galin Jones, and Xiao-Li Meng. Handbook of Markov Chain Monte Carlo.
+CRC press, 2011.
+19
+
+Paul E Chang, William J Wilkinson, Mohammad Emtiyaz Khan, and Arno Solin. Fast variational learning
+in state-space Gaussian process models. In IEEE International Workshop on Machine Learning for Signal
+Processing, pp. 1–6. IEEE, 2020.
+Nicolas Chopin and Omiros Papaspiliopoulos. An Introduction to Sequential Monte Carlo. Springer Cham,
+2020.
+Stéphane Chrétien and Alfred OIII Hero. Kullback proximal algorithms for maximum-likelihood estimation.
+IEEE Transactions on Information Theory, 46(5):1800–1810, 2002.
+Adrien Corenflos and Hany Abdulsamad. Variational Gaussian filtering via Wasserstein gradient flows. In
+European Signal Processing Conference, pp. 1838–1842. IEEE, 2023.
+Jarrad Courts, Adrian G Wills, and Thomas B Schön. Gaussian variational state estimation for nonlinear
+state-space models. IEEE Transactions on Signal Processing, 69:5979–5993, 2021.
+Henry Cox. On the estimation of state variables and parameters for noisy dynamic systems. IEEE Trans-
+actions on Automatic Control, 9(1):5–12, 1964.
+Marc Deisenroth and Shakir Mohamed. Expectation propagation in Gaussian process dynamical systems.
+Advances in Neural Information Processing Systems, 25, 2012.
+D Fraser and J Potter. The optimum linear smoother as a combination of two optimum linear filters. IEEE
+Transactions on Automatic Control, 14(4):387–390, 1969.
+Ángel F García-Fernández, Lennart Svensson, Mark R Morelande, and Simo Särkkä. Posterior linearization
+filter: Principles and implementation using sigma points. IEEE Transactions on Signal Processing, 63
+(20):5561–5573, 2015.
+Ángel F García-Fernández, Lennart Svensson, and Simo Särkkä. Iterated posterior linearization smoother.
+IEEE Transactions on Automatic Control, 62(4):2056–2063, 2016.
+Jouni Hartikainen and Simo Särkkä. Kalman filtering and smoothing solutions to temporal Gaussian process
+regression models. In IEEE International Workshop on Machine Learning for Signal Processing, pp. 379–
+384. IEEE, 2010.
+Syeda Sakira Hassan and Simo Särkkä. Fourier–Hermite dynamic programming for optimal control. IEEE
+Transactions on Automatic Control, 68(10):6377–6384, 2023.
+Antti Honkela, Tapani Raiko, Mikael Kuusela, Matti Tornio, and Juha Karhunen. Approximate Riemannian
+conjugate gradient learning for fixed-form variational Bayes. The Journal of Machine Learning Research,
+11:3235–3268, 2010.
+Alfredo N Iusem, Benar Fux Svaiter, and Marc Teboulle. Entropy-like proximal methods in convex program-
+ming. Mathematics of Operations Research, 19(4):790–814, 1994.
+Eric Jacquier, Nicholas G Polson, and Peter E Rossi.
+Bayesian analysis of stochastic volatility models.
+Journal of Business & Economic Statistics, 20(1):69–87, 2002.
+Mohammad Khan and Wu Lin. Conjugate-computation variational inference: Converting variational infer-
+ence in non-conjugate models to inferences in conjugate models. In Artificial Intelligence and Statistics,
+pp. 878–887. PMLR, 2017.
+Mohammad Emtiyaz E Khan, Pierre Baque, François Fleuret, and Pascal Fua. Kullback-Leibler proximal
+variational inference. In C. Cortes, N. Lawrence, D. Lee, M. Sugiyama, and R. Garnett (eds.), Advances
+in Neural Information Processing Systems, volume 28, 2015.
+Genshiro Kitagawa. Non-Gaussian state-space modeling of nonstationary time series. Journal of the Amer-
+ican Statistical Association, 82(400):1032–1041, 1987.
+20
+
+Rudolf E. Kálmán. A new approach to linear filtering and prediction problems. Transactions of the ASME
+Journal of Basic Engineering, 82:35–45, 1960.
+Yingzhen Li and Richard E Turner. Rényi divergence variational inference. Advances in Neural Information
+Processing Systems, 29, 2016.
+Jakob Lindqvist, Simo Särkkä, Angel F. García-Fernández, Matti Raitoharju, and Lennart Svensson. Pos-
+terior linearisation smoothing with robust iterations. 2021.
+Paul Malliavin. Stochastic Analysis, volume 313. Springer, 2015.
+David Q Mayne. A solution of the smoothing problem for linear dynamic systems. Automatica, 4(2):73–92,
+1966.
+Thomas P. Minka. Expectation propagation for approximate Bayesian inference. In Conference on Uncer-
+tainty in Artificial Intelligence, pp. 362–369. Morgan Kaufmann Publishers Inc., 2001.
+Richard E Mortensen. Maximum-likelihood recursive nonlinear filtering. Journal of Optimization Theory
+and Applications, 2(6):386–394, 1968.
+James D. Murray. Mathematical Biology: An Introduction. Interdisciplinary Applied Mathematics. Springer,
+2002.
+Jorge Nocedal and Stephen J Wright. Numerical Optimization. Springer, 2006.
+Anthony O’Hagan. Curve fitting and optimal design for prediction. Journal of the Royal Statistical Society:
+Series B (Methodological), 40(1):1–24, 1978.
+Manfred Opper and Cédric Archambeau. The variational Gaussian approximation revisited. Neural Com-
+putation, 21(3):786–792, 2009.
+Matti Raitoharju, Lennart Svensson, Angel Froilan García-Fernández, and Robert Piché. Damped posterior
+linearization filter. IEEE Signal Processing Letters, 25(4):536–540, 2018.
+Rajesh Ranganath, Sean Gerrish, and David Blei. Black-box variational inference. In Artificial Intelligence
+and Statistics, pp. 814–822. PMLR, 2014.
+Herbert E Rauch, F Tung, and Charlotte T Striebel.
+Maximum likelihood estimates of linear dynamic
+systems. AIAA Journal, 3(8):1445–1450, 1965.
+Simo Särkkä and Lennart Svensson. Bayesian Filtering and Smoothing. Cambridge University Press, 2nd
+edition, 2023.
+Juha Sarmavuori and Simo Särkkä.
+Fourier–Hermite Kalman filter.
+IEEE Transactions on Automatic
+Control, 57(6):1511–1515, 2011.
+Marc Teboulle. Entropic proximal mappings with applications to nonlinear programming. Mathematics of
+Operations Research, 17(3):670–690, 1992.
+Lucas Theis and Matt Hoffman. A trust-region method for stochastic variational inference with applications
+to streaming data. In International Conference on Machine Learning, pp. 2503–2511. PMLR, 2015.
+Filip Tronarp. A recursive theory of variational state estimation: The dynamic programming approach,
+2025. URL https://arxiv.org/abs/2511.11497.
+Filip Tronarp, Angel F Garcia-Fernandez, and Simo Särkkä. Iterative filtering and smoothing in nonlinear
+and non-Gaussian systems using conditional moments. IEEE Signal Processing Letters, 25(3):408–412,
+2018.
+Prakhar Verma, Vincent Adam, and Arno Solin.
+Variational Gaussian process diffusion processes.
+In
+International Conference on Artificial Intelligence and Statistics, pp. 1909–1917. PMLR, 2024.
+21
+
+Martin J Wainwright and Michael I Jordan. Graphical models, exponential families, and variational inference.
+Foundations and Trends® in Machine Learning, 1(1–2):1–305, 2008.
+Christian Wildner and Heinz Koeppl. Moment-based variational inference for stochastic differential equa-
+tions. In International Conference on Artificial Intelligence and Statistics, pp. 1918–1926. PMLR, 2021.
+William Wilkinson, Paul Chang, Michael Andersen, and Arno Solin. State space expectation propagation:
+Efficient inference schemes for temporal Gaussian processes.
+In International Conference on Machine
+Learning, pp. 10270–10281. PMLR, 2020.
+William Wilkinson, Simo Särkkä, and Arno Solin. Bayes-Newton methods for approximate Bayesian inference
+with PSD guarantees. Journal of Machine Learning Research, 24(83):1–50, 2023.
+22
+
+A
+Proof of Proposition 1
+To find the critical point of (3) with respect to distribution q(x) given the constraints, we first construct the
+corresponding Lagrangian functional
+R(q, λ, α) = Eq
+h
+log p(y, x)
+i
+−Eq
+h
+log q(x)
+i
++ λ
+
+1 −
+Z
+q(x) dx
+
++ α
+
+ε −DKL
+h
+q(x) || q[i](x)
+i
+,
+(22)
+where λ and α ≥0 are the Lagrangian multipliers associated with the constraints. Next, we set the functional
+derivative of R(·) with respect to q(x) to zero
+∂R(q, λ, α)
+∂q(x)
+= log p(y, x) −log q(x) −1 −λ −α log q(x) + α log q[i](x) −α := 0,
+which in turn leads to the optimal iterate q[i+1](x)
+q[i+1](x) =
+h
+exp
+
+λ + (1 + α)
+	 i−1/(1+α)h
+p(y | x) p(x)
+i1/(1+α)h
+q[i](x)
+iα/(1+α)
+∝
+h
+p(y | x) p(x)
+i1/(1+α)h
+q[i](x)
+iα/(1+α)
+.
+(23)
+Plugging the result from (23) back into the Lagrangian (22), we get the dual problem
+minimize
+λ,α
+G(λ, α) = α ε + λ + (1 + α)
+Z
+q[i+1](x) dx,
+subject to α ≥0.
+(24)
+If we compute and set the gradient of G(·) with respect to λ to zero, we get
+λ[i+1] = (1 + α)
+
+−1 + log
+Z h
+p(y | x) p(x)
+i1/(1+α)h
+q[i](x)
+iα/(1+α)
+dx
+
+(25)
+= (1 + α)
+h
+−1 + log Z[i+1](α)
+i
+which when plugged back into (23) leads to the normalized approximate Gibbs posterior
+q[i+1](x) =
+h
+Z[i+1](β)
+i−1 h
+p(y | x) p(x)
+i1−βh
+q[i](x)
+iβ
+.
+(26)
+where have defined β := α/(1 + α), so that β = 0 when α = 0 and β →1 as α →∞. By using the results
+from (25) and (26), we can rewrite the dual problem (24) as follows
+minimize
+β
+G(β) =
+βε
+1 −β +
+1
+1 −β log Z[i+1](β),
+subject to 0 ≤β < 1.
+B
+Proof of Proposition 2
+Given the forward-Markov decomposition from Assumption 1, we can factorize problem (4) over time. Start-
+ing with the ELBO objective, we can write
+L(−⇀q ) = E−
+⇀
+q
+h
+log p(x0:T, y1:T)
+i
+−E−
+⇀
+q
+h
+log−⇀q (x0:T)
+i
+=
+Z
+−⇀q0(x0)
+h
+log p(x0) −log−⇀q0(x0)
+i
+dx0 +
+T
+X
+k=1
+Z
+−⇀qk(xk) log hk(yk | xk) dxk
++
+T −1
+X
+k=0
+Z
+−⇀qk(xk)−⇀qk(xk+1 | xk)
+h
+log fk(xk+1 | xk) −log−⇀qk(xk+1 | xk)
+i
+dxk dxk+1.
+23
+
+Additionally, the Kullback–Leibler divergences factorizes forward as follows
+ε ≥DKL
+h−⇀q (x0:T) || −⇀q [i](x0:T)
+i
+ε ≥
+Z
+−⇀q0(x0)
+T −1
+Y
+k=0
+−⇀qk(xk+1 | xk) log
+−⇀q0(x0) QT −1
+k=0 −⇀qk(xk+1 | xk)
+−⇀q [i]
+0 (x0) QT −1
+k=0 −⇀q [i]
+k (xk+1 | xk)
+dx0:T
+ε ≥
+Z
+−⇀q0(x0) log
+−⇀q0(x0)
+−⇀q [i]
+0 (x0)
+dx0
++
+T −1
+X
+k=0
+Z
+−⇀qk(xk)
+Z
+−⇀qk(xk+1 | xk) log
+−⇀qk(xk+1 | xk)
+−⇀q [i]
+k (xk+1 | xk)
+dxk+1 dxk.
+Finally, the normalization constraint also factorizes to
+1 =
+Z
+−⇀q0(x0) dx0,
+1 =
+Z
+−⇀qk(xk+1 | xk) dxk+1,
+∀xk, 0 ≤k < T.
+The information-theoretic proximal optimization problem (4) now has the form
+maximize
+−
+⇀
+qk(xk+1 | xk),
+−
+⇀
+q0(x0)
+Z
+−⇀q0(x0)
+h
+log p(x0) −log−⇀q0(x0)
+i
+dx0 +
+T
+X
+k=1
+Z
+−⇀qk(xk) log hk(yk | xk) dxk
++
+T −1
+X
+k=0
+Z
+−⇀qk(xk)−⇀qk(xk+1 | xk)
+h
+log fk(xk+1 | xk) −log−⇀qk(xk+1 | xk)
+i
+dxk dxk+1,
+subject to
+−⇀qk+1(xk+1) =
+Z
+−⇀qk(xk)−⇀qk(xk+1 | xk) dxk,
+∀xk+1, 0 ≤k < T,
+1 =
+Z
+−⇀q0(x0) dx0,
+1 =
+Z
+−⇀qk(xk+1 | xk) dxk+1,
+∀xk, 0 ≤k < T,
+ε ≥
+Z
+−⇀q0(x0) log
+−⇀q0(x0)
+−⇀q [i]
+0 (x0)
+dx0
++
+T −1
+X
+k=0
+Z
+−⇀qk(xk)
+Z
+−⇀qk(xk+1 | xk) log
+−⇀qk(xk+1 | xk)
+−⇀q [i]
+k (xk+1 | xk)
+dxk+1 dxk.
+Next, we construct the Lagrangian functional − ⇀
+R(−⇀q0,−⇀qk,−⇀γ0,−⇀λk,−⇀
+Vk, α)
+− ⇀
+R(·) =
+Z
+−⇀q0(x0)
+h
+log p(x0) −log−⇀q0(x0)
+i
+dx0 +
+T
+X
+k=1
+Z
+−⇀qk(xk) log hk(yk | xk) dxk
++
+T −1
+X
+k=0
+Z
+−⇀qk(xk)−⇀qk(xk+1 | xk)
+h
+log fk(xk+1 | xk) −log−⇀qk(xk+1 | xk)
+i
+dxk dxk+1
++
+T −1
+X
+k=0
+Z −⇀
+Vk+1(xk+1)
+Z
+−⇀qk(xk)−⇀qk(xk+1 | xk) dxk −−⇀qk+1(xk+1)
+
+dxk+1
++
+T −1
+X
+k=0
+Z −⇀λk(xk)
+
+1 −
+Z
+−⇀qk(xk+1 | xk) dxk+1
+
+dxk +−⇀γ0
+
+1 −
+Z
+−⇀q0(x0) dx0
+
++ α
+"
+ε −
+Z
+−⇀q0(x0) log
+−⇀q0(x0)
+−⇀q [i]
+0 (x0)
+dx0
+−
+T −1
+X
+k=0
+Z
+−⇀qk(xk)
+Z
+−⇀qk(xk+1 | xk) log
+−⇀qk(xk+1 | xk)
+−⇀q [i]
+k (xk+1 | xk)
+dxk+1 dxk
+#
+,
+(27)
+24
+
+where −⇀
+V k(xk), −⇀λk(xk), −⇀γ0, and α ≥0 are Lagrangian multipliers. To find the critical point, we set the
+functional derivative with respect to −⇀qk(xk+1 | xk) to zero
+−⇀q [i+1]
+k
+(xk+1 | xk) =
+h
+exp
+n−⇀λk(xk)/−⇀qk(xk) + (1 + α)
+o i−1/(1+α)
+×
+h−⇀q [i]
+k (xk+1 | xk)
+iα/(1+α)h
+fk(xk+1 | xk) exp
+n−⇀
+Vk+1(xk+1)
+o i1/(1+α)
+.
+(28)
+Additionally, we set the functional derivative with respect to −⇀q0(x0) to zero and get
+−⇀q [i+1]
+0
+(x0) =
+h
+exp
+n−⇀γ0 + (1 + α)
+oi−1/(1+α)h−⇀q [i]
+0 (x0)
+iα/(1+α)h
+exp
+n−⇀
+V0(x0)
+o i1/(1+α)
+,
+(29)
+where, for convenience of notation, we define
+−⇀
+V0(x0) = log p0(x0) + (1 + α) log
+Z h−⇀q [i]
+0 (x1 | x0)
+iα/(1+α) h
+f0(x1 | x0) exp
+n−⇀
+V1(x1)
+o i1/(1+α)
+dx1.
+(30)
+Notice that, it is not clear at this point that the solutions (28) and (29) are normalized densities. Estab-
+lishing that requires solving for the (functional) multipliers −⇀λk(xk) and −⇀γ0, which are associated with the
+normalization constraints. Plugging the solution (28) into the Lagrangian (27) results in the dual functional
+−⇀
+G(·) = α ε +
+Z
+−⇀q0(x0)
+h
+log p(x0) −log−⇀q0(x0)
+i
+dx0 +
+T
+X
+k=1
+Z
+−⇀qk(xk) log hk(yk | xk) dxk
++ α
+Z
+−⇀q0(x0)
+h
+log−⇀q [i]
+0 (x0) −log−⇀q0(x0)
+i
+dx0 +−⇀γ0
+
+1 −
+Z
+−⇀q0(x0) dx0
+
++
+T −1
+X
+k=0
+Z −⇀λk(xk) dxk −
+T −1
+X
+k=0
+Z −⇀
+Vk+1(xk+1)−⇀qk+1(xk+1) dxk+1
++ (1 + α)
+T −1
+X
+k=0
+Z
+−⇀qk(xk)
+Z
+−⇀q [i+1]
+k
+(xk+1 | xk) dxk+1 dxk.
+Now, we can solve for the multipliers −⇀λk(xk) by setting the associated derivatives to zero
+−⇀λ [i+1]
+k
+(xk) = (1 + α)−⇀qk(xk)
+h
+−1 + log
+Z h−⇀q [i]
+k (xk+1 | xk)
+iα/(1+α)
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+Vk+1(xk+1)
+o i1/(1+α)
+dxk+1
+i
+(31)
+= (1 + α)−⇀qk(xk)
+h
+−1 + log−⇀
+ψ [i+1]
+k
+(xk)
+i
+.
+Plugging (31) into (28) returns the normalized tilted conditional
+−⇀q [i+1]
+k
+(xk+1 | xk) =
+h−⇀
+ψ [i+1]
+k
+(xk)
+i−1h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+Vk+1(xk+1)
+o i1−β
+,
+(32)
+where have defined β := α/(1 + α), so that β = 0 when α = 0, and β →1 as α →∞. Next, we use the
+results from (29), (31), and (32) to simplify the functional −⇀
+G(·) further
+−⇀
+G(·) = α ε +
+T
+X
+k=1
+Z
+−⇀qk(xk) log hk(yk | xk) dxk −
+T
+X
+k=1
+Z −⇀
+Vk(xk)−⇀qk(xk) dxk
++ (1 + α)
+T −1
+X
+k=1
+Z
+−⇀qk(xk) log−⇀
+ψ [i+1]
+k
+(xk) dxk +−⇀γ0 + (1 + α)
+Z
+−⇀q [i+1]
+0
+(x0) dx0,
+25
+
+and solve for the optimal multiplier −⇀γ0 by zeroing the associated derivative, leading to
+−⇀γ [i+1]
+0
+= (1 + α)
+
+−1 + log
+Z h−⇀q [i]
+0 (x0)
+iα/(1+α)h
+exp
+n−⇀
+V0(x0)
+o i1/(1+α)
+dx0
+
+(33)
+= (1 + α)
+h
+−1 + log−⇀
+Z [i+1]
+0
+i
+,
+which after plugging into (29) delivers
+−⇀q [i+1]
+0
+(x0) =
+h−⇀
+Z [i+1]
+0
+i−1h−⇀q [i]
+0 (x0)
+iβh
+exp
+n−⇀
+V0(x0)
+o i1−β
+.
+(34)
+Plugging (34) and (33) back into −⇀
+G(·) leads to further simplification of the dual
+−⇀
+G(·) = α ε +
+T
+X
+k=1
+Z
+−⇀qk(xk) log hk(yk | xk) dxk −
+T
+X
+k=1
+Z −⇀
+Vk(xk)−⇀qk(xk) dxk
++ (1 + α)
+T −1
+X
+k=1
+Z
+−⇀qk(xk) log−⇀
+ψ [i+1]
+k
+(xk) dxk + (1 + α) log−⇀
+Z [i+1]
+0
+.
+Finally, to find the optimal potentials, we zero the derivative of −⇀
+G(·) with respect to −⇀qk(xk), ∀0 < k ≤T.
+Combined with the results from (30) and (31), we can write
+−⇀
+V [i+1]
+k
+(xk) =
+
+
+
+
+
+
+
+
+
+
+
+log hT(yT | xT)
+if k = T,
+log hk(yk | xk) + 1/(1 −β) log−⇀
+ψ [i+1]
+k
+(xk)
+if 0 < k < T,
+log p0(x0) + 1/(1 −β) log−⇀
+ψ [i+1]
+0
+(x0)
+if k = 0,
+which, when plugged back into the dual −⇀
+G(·), leads to the final simplification
+−⇀
+G(β) =
+βε
+1 −β +
+1
+1 −β log−⇀
+Z [i+1]
+0
+(β).
+C
+Proof of Proposition 3
+This proof follows a similar scheme to that in Section B. However, the reverse-Markov decomposition results in
+novel recursions. Starting from the reverse-Markov decomposition in Assumption 2, we factorize problem (4)
+over time. Thus, we can write the ELBO as
+L(↼−q ) = E↼
+−
+q
+h
+log p(x0:T, y1:T)
+i
+−E↼
+−
+q
+h
+log↼−q (x0:T)
+i
+=
+Z
+↼−q0(x0) log p(x0) dx0 −
+Z
+↼−qT(xT) log↼−qT(xT) dxT +
+T
+X
+k=1
+Z
+↼−qk(xk) log hk(yk | xk) dxk
++
+T
+X
+k=1
+Z
+↼−qk(xk)↼−qk(xk−1 | xk)
+h
+log fk−1(xk | xk−1) −log↼−qk(xk−1 | xk)
+i
+dxk−1 dxk.
+Furthermore, the Kullback–Leibler divergence factorizes reversely to
+ε ≥DKL
+h↼−q (x0:T) || ↼−q [i](x0:T)
+i
+ε ≥
+Z
+↼−qT(xT)
+T
+Y
+k=1
+↼−qk(xk−1 | xk) log
+↼−qT(xT) QT
+k=1↼−qk(xk−1 | xk)
+↼−q [i]
+T (xT) QT
+k=1↼−q [i]
+k (xk−1 | xk)
+dx0:T
+26
+
+ε ≥
+Z
+↼−qT(xT) log
+↼−qT(xT)
+↼−q [i]
+T (xT)
+dxT
++
+T
+X
+k=1
+Z
+↼−qk(xk)
+Z
+↼−qk(xk−1 | xk) log
+↼−qk(xk−1 | xk)
+↼−q [i]
+k (xk−1 | xk)
+dxk dxk−1
+Finally, the normalization constraint also factorizes to
+1 =
+Z
+↼−qT(xT) dxT,
+1 =
+Z
+↼−qk(xk−1 | xk) dxk−1,
+∀xk, 0 < k ≤T.
+Now we can rewrite the optimization problem (4) as follows
+maximize
+↼
+−
+qk(xk−1 | xk),
+↼
+−
+qT (xT )
+Z
+↼−q0(x0) log p(x0) dx0 +
+T
+X
+k=1
+Z
+↼−qk(xk) log hk(yk | xk) dxk
++
+T
+X
+k=1
+Z
+↼−qk(xk)↼−qk(xk−1 | xk)
+h
+log fk−1(xk | xk−1) −log↼−qk(xk−1 | xk)
+i
+dxk−1 dxk
+−
+Z
+−⇀qT(xT) log↼−qT(xT) dxT
+subject to
+↼−qk−1(xk−1) =
+Z
+↼−qk(xk)↼−qk(xk−1 | xk) dxk,
+∀xk−1, 0 < k ≤T,
+1 =
+Z
+↼−qT(xT) dxT,
+1 =
+Z
+↼−qk(xk−1 | xk) dxk−1,
+∀xk, 0 < k ≤T,
+ε ≥
+Z
+↼−qT(xT) log
+↼−qT(xT)
+↼−q [i]
+T (xT)
+dxT
++
+T
+X
+k=1
+Z
+↼−qk(xk)
+Z
+↼−qk(xk−1 | xk) log
+↼−qk(xk−1 | xk)
+↼−q [i]
+k (xk−1 | xk)
+dxk dxk−1,
+and the corresponding Lagrangian functional ↼ −
+R(↼−qT,↼−qk,↼−γT,↼−λk,↼−
+Vk, α) is
+↼ −
+R(·) =
+Z
+↼−q0(x0) log p(x0) dx0 +
+T
+X
+k=1
+Z
+↼−qk(xk) log hk(yk | xk) dxk −
+Z
+−⇀qT(xT) log↼−qT(xT) dxT
++
+T
+X
+k=1
+Z
+↼−qk(xk)↼−qk(xk−1 | xk)
+h
+log fk−1(xk | xk−1) −log↼−qk(xk−1 | xk)
+i
+dxk−1 dxk
++
+T
+X
+k=1
+Z ↼−
+Vk−1(xk−1)
+Z
+↼−qk(xk)↼−qk(xk−1 | xk) dxk −↼−qk−1(xk−1)
+
+dxk−1
++
+T
+X
+k=1
+Z ↼−λk(xk)
+
+1 −
+Z
+↼−qk(xk−1 | xk) dxk−1
+
+dxk +↼−γT
+
+1 −
+Z
+↼−qT(xT) dxT
+
++ α
+"
+ε −
+Z
+↼−qT(xT) log
+↼−qT(xT)
+↼−q [i]
+T (xT)
+dxT
+−
+T
+X
+k=1
+Z
+↼−qk(xk)
+Z
+↼−qk(xk−1 | xk) log
+↼−qk(xk−1 | xk)
+↼−q [i]
+k (xk−1 | xk)
+dxk dxk−1
+#
+,
+(35)
+where ↼−
+V k(xk), ↼−λk(xk), ↼−γT, and α ≥0 are Lagrangian multipliers. To find the solution with respect to
+↼−qk(xk−1 | xk), we zero the associated derivatives of ↼ −
+R(·)
+↼−q [i+1]
+k
+(xk−1 | xk) =
+h
+exp
+n↼−λk(xk)/↼−qk(xk) + (1 + α)
+o i−1/(1+α)
+×
+h↼−q [i]
+k (xk−1 | xk)
+iα/(1+α)h
+fk−1(xk+1 | xk) exp
+n↼−
+Vk−1(xk−1)
+o i1/(1+α)
+(36)
+27
+
+Moreover, by setting the functional derivative with respect to ↼−qT(xT) to zero and get
+↼−q [i+1]
+T
+(xT) =
+h
+exp
+n↼−γT + (1 + α)
+oi−1/(1+α)h↼−q [i]
+T (xT)
+iα/(1+α)h
+exp
+n↼−
+VT(xT)
+o i1/(1+α)
+(37)
+where, for convenience of notation, we define
+↼−
+VT(xT) = log hT(yT | xT) + (1 + α) log
+Z h↼−q [i]
+T −1(xT −1 | xT)
+iα/(1+α)
+×
+h
+fT −1(xT | xT −1) exp
+n↼−
+VT −1(x1)
+o i1/(1+α)
+dxT −1.
+(38)
+Again, the solutions (36) and (37) are not yet normalized densities. We need to solve for the (functional)
+multipliers associated with the normalization constraints, ↼−λk(xk) and ↼−γT. Plugging the solution (36) into
+the Lagrangian (35) results in the dual functional
+↼−
+G(·) = α ε +
+Z
+↼−q0(x0) log p(x0) dx0 +
+T
+X
+k=1
+Z
+↼−qk(xk) log hk(yk | xk) dxk
++
+Z
+↼−qT(xT)
+h
+α log↼−q [i]
+T (xT) −(1 + α) log↼−qT(xT)
+i
+dxT +↼−γT
+
+1 −
+Z
+↼−qT(xT) dxT
+
++
+T
+X
+k=1
+Z ↼−λk(xk) dxk −
+T
+X
+k=1
+Z ↼−
+Vk−1(xk−1)↼−qk−1(xk−1) dxk−1
++ (1 + α)
+T
+X
+k=1
+Z
+↼−qk(xk)
+Z
+↼−q [i]
+k (xk−1 | xk) dxk dxk−1,
+which we use to solve for the multipliers ↼−λk(xk) by zeroing the associated derivatives
+↼−λ [i+1]
+k
+(xk) = (1 + α)↼−qk(xk)
+h
+−1 + log
+Z h↼−q [i]
+k (xk−1 | xk)
+iα/(1+α)
+×
+h
+fk−1(xk | xk−1) exp
+n↼−
+Vk−1(xk−1)
+o i1/(1+α)
+dxk−1
+i
+(39)
+= (1 + α)↼−qk(xk)
+h
+−1 + log↼−
+ψ [i+1]
+k
+(xk)
+i
+.
+We retrieve the normalized tilted conditionals by plugging (39) into (36)
+↼−q [i+1]
+k
+(xk+1 | xk) =
+h↼−
+ψ [i+1]
+k
+(xk)
+i−1h↼−q [i]
+k (xk−1 | xk)
+iβ
+×
+h
+fk−1(xk | xk−1) exp
+n↼−
+Vk−1(xk−1)
+o i1−β
+,
+(40)
+where have defined β := α/(1 + α), so that β = 0 when α = 0, and β →1 as α →∞. Given the results (39)
+and (40), we simplify the functional ↼−
+G(·) further
+↼−
+G(·) = α ε +
+Z
+↼−q0(x0) log p(x0) dx0 +
+T
+X
+k=1
+Z
+↼−qk(xk) log hk(yk | xk) dxk
+−
+T
+X
+k=0
+Z ↼−
+Vk(xk)↼−qk(xk) dxk + (1 + α)
+T
+X
+k=1
+Z
+↼−qk(xk) log↼−
+ψ [i+1]
+k
+(xk) dxk
++↼−γT + (1 + α)
+Z
+↼−q [i+1]
+T
+(xT) dxT.
+Next, we solve for the optimal multiplier ↼−γT by zeroing the associated derivative
+↼−γ [i+1]
+T
+= (1 + α)
+
+−1 + log
+Z h↼−q [i]
+T (xT)
+iα/(1+α)h
+exp
+n↼−
+VT(xT)
+o i1/(1+α)
+dxT
+
+(41)
+28
+
+= (1 + α)
+h
+−1 + log↼−
+Z [i+1]
+T
+i
+,
+leading to the normalization of the tilted distribution (37)
+↼−q [i+1]
+T
+(xT) =
+h↼−
+Z [i+1]
+T
+i−1h↼−q [i]
+T (xT)
+iβh
+exp
+n↼−
+VT(xT)
+o i1−β
+.
+(42)
+Using (42) and (41) leads to further simplification of the dual ↼−
+G(·)
+↼−
+G(·) = α ε +
+Z
+↼−q0(x0) log p(x0) dx0 +
+T
+X
+k=1
+Z
+↼−qk(xk) log hk(yk | xk) dxk
+−
+T
+X
+k=0
+Z ↼−
+Vk(xk)↼−qk(xk) dxk + (1 + α)
+T
+X
+k=1
+Z
+↼−qk(xk) log↼−
+ψ [i+1]
+k
+(xk) dxk + (1 + α) log↼−
+Z [i+1]
+T
+.
+Finally, by taking (38) into consideration and zeroing the derivative of ↼−
+G(·) with respect to ↼−qk(xk), ∀0 ≤
+k < T, we find the optimal potential functions
+↼−
+V [i+1]
+k
+(xk) =
+
+
+
+log p0(x0)
+if k = 0,
+log hk(yk | xk) + 1/(1 −β) log↼−
+ψ [i+1]
+k
+(xk)
+if 0 < k ≤T.
+If we plug this result back into the dual ↼−
+G(·), we retrieve the simplest form of the dual
+↼−
+G(β) =
+βε
+1 −β +
+1
+1 −β log↼−
+Z [i+1]
+T
+(β).
+D
+Proof of Proposition 4
+At k = T, Assumption 5 readily delivers a quadratic form for the potential function
+−⇀
+V [i+1]
+T
+(xT) = log hT(yT | xT) = −1
+2x⊤
+T
+−⇀
+R [i+1]
+T
+xT + x⊤
+T −⇀r [i+1]
+T
++−⇀ρ [i+1]
+T
+= −1
+2x⊤
+T L[i]
+T xT + x⊤
+T l[i]
+T + ν [i]
+T .
+For −⇀
+V [i+1]
+k
+(xk), for all 0 ≤k < T, we have the backward recursion
+−⇀
+V [i+1]
+k
+(xk) = log hk(yk | xk) + 1/(1 −β) log−⇀
+ψ [i+1]
+k
+(xk)
+= log hk(yk | xk) + 1/(1 −β) log
+Z h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+dxk+1.
+Our aim is to show that this recursion is a tractable reverse propagation of quadratic forms. We start by
+examining −⇀
+ψ [i+1]
+k
+(xk), the integral over xk+1. Let us first drag all terms into the exponential, then we can
+treat the exponent as a quadratic function over xk and xk+1
+−1
+2
+h
+x⊤
+k+1
+x⊤
+k
+i
+
+
+−⇀
+G [i+1]
+¯x¯x,k
+−−⇀
+G [i+1]
+¯xx,k
+−−⇀
+G [i+1]
+x¯x,k
+−⇀
+G [i+1]
+xx,k
+
+
+
+xk+1
+xk
+
++
+h
+x⊤
+k+1
+x⊤
+k
+i
+
+
+−⇀g [i+1]
+¯x,k
+−⇀g [i+1]
+x,k
+
++−⇀θ [i+1]
+k
+= β log−⇀q [i]
+k (xk+1 | xk) + (1 −β) log fk(xk+1 | xk) + (1 −β)−⇀
+V [i+1]
+k+1 (xk+1).
+Now, given an affine-Gaussian−⇀q [i]
+k (xk+1 | xk) (Assumption 3), a quadratic log fk(xk+1 | xk) (Assumption 5),
+and a quadratic potential function −⇀
+V [i+1]
+k+1 (xk) of the form (15), we can match the quadratic factors between
+the left- and right-hand sides, leading to
+−⇀
+G [i+1]
+¯x¯x,k = (1 −β)
+h
+C[i]
+¯x¯x,k +−⇀
+R [i+1]
+k+1
+i
++ β
+h−⇀
+Σ [i]
+k
+i−1
+,
+29
+
+−⇀
+G [i+1]
+xx,k = (1 −β) C[i]
+xx,k + β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k ,
+−⇀
+G [i+1]
+¯xx,k = (1 −β) C[i]
+¯xx,k + β
+h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k ,
+−⇀
+G [i+1]
+x¯x,k = (1 −β) C[i]
+x¯x,k + β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1
+,
+−⇀g [i+1]
+¯x,k
+= (1 −β)
+h
+c[i]
+¯x,k +−⇀r [i+1]
+k
+i
++ β
+h−⇀
+Σ [i]
+k
+i−1−⇀d [i]
+k ,
+−⇀g [i+1]
+x,k
+= (1 −β) c[i]
+x,k −β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀d [i]
+k ,
+−⇀θ [i+1]
+k
+= (1 −β)
+h
+κ[i]
+k +−⇀ρ [i+1]
+k+1
+i
+−β
+2 log
+2π−⇀
+Σ [i]
+k
+ −β
+2
+h−⇀d [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀d [i]
+k .
+Next, we reformulate the quadratic function in the exponent explicitly as a function of xk+1
+−1
+2x⊤
+k+1
+−⇀
+G [i+1]
+¯x¯x,k xk+1 + x⊤
+k+1
+h−⇀
+G [i+1]
+¯xx,k xk +−⇀g [i+1]
+¯x,k
+i
++
+
+−1
+2x⊤
+k
+−⇀
+G [i+1]
+xx,k xk + x⊤
+k −⇀g [i+1]
+x,k
++−⇀θ [i+1]
+k
+
+.
+Consequently, the exponential now resembles an unnormalized Gaussian distribution in information form
+with a precision matrix −⇀
+G [i+1]
+¯x¯x,k . In this case, we can use the identity
+log
+Z
+exp
+
+−1
+2x⊤Ux + x⊤u + σ
+
+dx = 1
+2 log |2π U −1| + 1
+2u⊤U −1u + σ,
+(43)
+to express the log-normalizing function log−⇀
+ψ [i+1]
+k
+(xk) as a quadratic function
+log−⇀
+ψ [i+1]
+k
+(xk) = −1
+2x⊤
+k
+−⇀
+S [i+1]
+k
+xk + x⊤
+k−⇀s [i+1]
+k
++−⇀ξ [i+1]
+k
+= 1
+2 log
+2π
+h−⇀
+G [i+1]
+¯x¯x,k
+i−1  +
+
+−1
+2x⊤
+k
+−⇀
+G [i+1]
+xx,k xk + x⊤
+k −⇀g [i+1]
+x,k
++−⇀θ [i+1]
+k
+
++ 1
+2
+h−⇀
+G [i+1]
+¯xx,k xk +−⇀g [i+1]
+¯x,k
+i⊤h−⇀
+G [i+1]
+¯x¯x,k
+i−1 h−⇀
+G [i+1]
+¯xx,k xk +−⇀g [i+1]
+¯x,k
+i
+which, after matching terms, leads to
+−⇀
+S [i+1]
+k
+= −⇀
+G [i+1]
+xx,k −
+h−⇀
+G [i+1]
+¯xx,k
+i⊤h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀
+G [i+1]
+¯xx,k ,
+−⇀s [i+1]
+k
+= −⇀g [i+1]
+x,k
++
+h−⇀
+G [i+1]
+¯xx,k
+i⊤h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀g [i+1]
+¯x,k
+,
+−⇀ξ [i+1]
+k
+= −⇀θ [i+1]
+k
++ 1
+2 log
+2π
+h−⇀
+G [i+1]
+¯x¯x,k
+i−1  + 1
+2
+h−⇀g [i+1]
+¯x,k
+i⊤h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀g [i+1]
+¯x,k
+.
+To get the final form of the quadratic potential −⇀
+V [i+1]
+k
+(xk), we add the contribution of the quadratic log-
+measurement and log-prior determined by Assumption 5
+−⇀
+R [i+1]
+k
+= L[i]
+k +
+1
+1 −β
+−⇀
+S [i+1]
+k
+,
+−⇀r [i+1]
+k
+= l[i]
+k +
+1
+1 −β
+−⇀s [i+1]
+k
+,
+−⇀ρ [i+1]
+k
+= ν[i]
+k +
+1
+1 −β
+−⇀ξ [i+1]
+k
+.
+Finally, for a Gaussian −⇀q [i]
+0 (x0) and a quadratic −⇀
+V [i+1]
+0
+(x0), we derive a quadratic log−⇀
+Z [i+1]
+0
+log−⇀
+Z [i+1]
+0
+= log
+Z h−⇀q [i]
+0 (x0)
+iβh
+exp
+n−⇀
+V [i+1]
+0
+(x0)
+o i1−β
+dx0.
+Again, we formulate a quadratic function over x0 and − ⇀
+m [i]
+0
+−1
+2
+
+x⊤
+0
+h− ⇀
+m [i]
+0
+i⊤ 
+
+−⇀
+J [i+1]
+xx
+−−⇀
+J [i+1]
+xm
+−−⇀
+J [i+1]
+mx
+−⇀
+J [i+1]
+mm
+
+
+
+
+x0
+− ⇀
+m [i]
+0
+
++
+
+x⊤
+0
+h− ⇀
+m [i]
+0
+i⊤ 
+
+−⇀j [i+1]
+x
+−⇀j [i+1]
+m
+
++−⇀τ [i+1]
+30
+
+= β log−⇀q [i]
+0 (x0) + (1 −β)−⇀
+V [i+1]
+0
+(x0),
+where by matching the quadratic factors, we get
+−⇀
+J [i+1]
+xx
+= (1 −β)−⇀
+R [i+1]
+0
++ β
+h−⇀
+P [i]
+0
+i−1
+,
+−⇀
+J [i+1]
+xm
+= β
+h−⇀
+P [i]
+0
+i−1
+,
+−⇀
+J [i+1]
+mm
+= β
+h−⇀
+P [i]
+0
+i−1
+,
+−⇀
+J [i+1]
+mx
+= β
+h−⇀
+P [i]
+0
+i−1
+,
+−⇀j [i+1]
+x
+= (1 −β)−⇀r [i+1]
+0
+,
+−⇀j [i+1]
+m
+= 0,
+−⇀τ [i+1] = (1 −β)−⇀ρ [i+1]
+0
+−β
+2 log
+2π−⇀
+P [i]
+0
+.
+Using the identity (43), we get a log-normalizer as a quadratic function over − ⇀
+m [i]
+0
+log−⇀
+Z [i+1]
+0
+= −1
+2
+h− ⇀
+m [i]
+0
+i⊤−⇀
+U [i+1]− ⇀
+m [i]
+0
++
+h− ⇀
+m [i]
+0
+i⊤−⇀u [i+1] +−⇀η [i+1],
+where
+−⇀
+U [i+1] = −⇀
+J [i+1]
+mm
+−
+h−⇀
+J [i+1]
+xm
+i⊤h−⇀
+J [i+1]
+xx
+i−1−⇀
+J [i+1]
+xm
+,
+−⇀u [i+1] = −⇀j [i+1]
+m
+−
+h−⇀
+J [i+1]
+xm
+i⊤h−⇀
+J [i+1]
+xx
+i−1−⇀j [i+1]
+x
+,
+−⇀η [i+1] = −⇀τ [i+1] −1
+2
+2π−⇀
+J [i+1]
+xx
+i−1 + 1
+2
+h−⇀j [i+1]
+x
+i⊤h−⇀
+J [i+1]
+xx
+i−1h−⇀j [i+1]
+x
+i
+.
+E
+Proof of Proposition 5
+For k = 0, the log-prior is a quadratic function per Assumption 5, leading to the following parameterization
+of the potential
+↼−
+V [i+1]
+0
+(x0) = log p0(x0) = −1
+2x⊤
+0
+↼−
+R [i+1]
+0
+x0 + x⊤
+0 ↼−r [i+1]
+0
++↼−ρ [i+1]
+0
+= −1
+2x⊤
+0 L[i]
+0 x0 + x⊤
+0 l[i]
+0 + ν [i]
+0 .
+For ↼−
+V [i+1]
+k
+(xk), for all 0 < k ≤T, we have derived a forward recursion
+↼−
+V [i+1]
+k
+(xk) = log hk(yk | xk) + 1/(1 −β) log↼−
+ψ [i+1]
+k
+(xk)
+= log hk(yk | xk) + 1/(1 −β) log
+Z h↼−q [i]
+k (xk−1 | xk)
+iβ
+×
+h
+fk−1(xk | xk−1) exp
+n↼−
+V [i+1]
+k−1 (xk−1)
+o i1−β
+dxk−1.
+We show that this recursion is a tractable forward propagation of quadratic forms. We start by moving all
+terms within the integral into the exponential and treat the exponent as a quadratic function over xk and
+xk−1
+−1
+2
+h
+x⊤
+k
+x⊤
+k−1
+i
+
+
+↼−
+G [i+1]
+¯x¯x,k
+−↼−
+G [i+1]
+¯xx,k
+−↼−
+G [i+1]
+x¯x,k
+↼−
+G [i+1]
+xx,k
+
+
+
+xk
+xk−1
+
++
+h
+x⊤
+k
+x⊤
+k−1
+i
+
+
+↼−g [i+1]
+¯x,k
+↼−g [i+1]
+x,k
+
++↼−θ [i+1]
+k
+= β log↼−q [i]
+k (xk | xk−1) + (1 −β) log fk−1(xk | xk−1) + (1 −β)↼−
+V [i+1]
+k−1 (xk−1).
+For an affine-Gaussian ↼−q [i]
+k (xk−1 | xk) (Assumption 4), a quadratic log fk−1(xk | xk−1) (Assumption 5), and
+a quadratic potential function ↼−
+V [i+1]
+k+1 (xk) of the form (15), we get
+↼−
+G [i+1]
+¯x¯x,k = (1 −β) C[i]
+¯x¯x,k−1 + β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1↼−
+F [i]
+k ,
+31
+
+↼−
+G [i+1]
+xx,k = (1 −β)
+h
+C[i]
+xx,k−1 +↼−
+R [i+1]
+k−1
+i
++ β
+h↼−
+Σ [i]
+k
+i−1
+,
+↼−
+G [i+1]
+¯xx,k = (1 −β) C[i]
+¯xx,k−1 + β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1
+,
+↼−
+G [i+1]
+x¯x,k = (1 −β) C[i]
+x¯x,k−1 + β
+h↼−
+Σ [i]
+k
+i−1↼−
+F [i]
+k ,
+↼−g [i+1]
+¯x,k
+= (1 −β) c[i]
+¯x,k−1 −β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1↼−d [i]
+k ,
+↼−g [i+1]
+x,k
+= (1 −β)
+h
+c[i]
+x,k−1 +↼−r [i+1]
+k−1
+i
++ β
+h↼−
+Σ [i]
+k
+i−1↼−d [i]
+k ,
+↼−θ [i+1]
+k
+= (1 −β)
+h
+κ[i]
+k +↼−ρ [i+1]
+k−1
+i
+−β
+2 log
+2π↼−
+Σ [i]
+k
+ −β
+2
+h↼−d [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1↼−d [i]
+k .
+By writing this quadratic function explicitly in terms of xk−1
+−1
+2x⊤
+k−1
+↼−
+G [i+1]
+xx,k xk−1 + x⊤
+k−1
+h↼−
+G [i+1]
+x¯x,k xk +↼−g [i+1]
+x,k
+i
++
+
+−1
+2x⊤
+k
+↼−
+G [i+1]
+¯x¯x,k xk + x⊤
+k ↼−g [i+1]
+¯x,k
++↼−θ [i+1]
+k
+
+.
+we can make use of identity (43) to express the log-normalizing function log↼−
+ψ [i+1]
+k
+(xk) itself as a quadratic
+function in xk
+log↼−
+ψ [i+1]
+k
+(xk) = −1
+2x⊤
+k
+↼−
+S [i+1]
+k
+xk + x⊤
+k↼−s [i+1]
+k
++↼−ξ [i+1]
+k
+= 1
+2 log
+2π
+h−⇀
+G [i+1]
+xx,k
+i−1  +
+
+−1
+2x⊤
+k
+↼−
+G [i+1]
+¯x¯x,k xk + x⊤
+k ↼−g [i+1]
+¯x,k
++↼−θ [i+1]
+k
+
++ 1
+2
+h−⇀
+G [i+1]
+x¯x,k xk +−⇀g [i+1]
+x,k
+i⊤h−⇀
+G [i+1]
+xx,k
+i−1 h−⇀
+G [i+1]
+x¯x,k xk +−⇀g [i+1]
+x,k
+i
+which, after matching terms, leads to
+↼−
+S [i+1]
+k
+= ↼−
+G [i+1]
+¯x¯x,k −
+h↼−
+G [i+1]
+x¯x,k
+i⊤h↼−
+G [i+1]
+xx,k
+i−1↼−
+G [i+1]
+x¯x,k ,
+↼−s [i+1]
+k
+= ↼−g [i+1]
+¯x,k
++
+h↼−
+G [i+1]
+x¯x,k
+i⊤h↼−
+G [i+1]
+xx,k
+i−1↼−g [i+1]
+x,k
+,
+↼−ξ [i+1]
+k
+= ↼−θ [i+1]
+k
++ 1
+2 log
+2π
+h↼−
+G [i+1]
+xx,k
+i−1  + 1
+2
+h↼−g [i+1]
+x,k
+i⊤h↼−
+G [i+1]
+xx,k
+i−1↼−g [i+1]
+x,k
+.
+Given log↼−
+ψ [i+1]
+k
+(xk), we can now construct the quadratic potential function ↼−
+V [i+1]
+k
+(xk) that accounts for
+the log-measurement contribution according to Assumption 5
+↼−
+R [i+1]
+k
+= L[i]
+k +
+1
+1 −β
+↼−
+S [i+1]
+k
+,
+↼−r [i+1]
+k
+= l[i]
+k +
+1
+1 −β
+↼−s [i+1]
+k
+,
+↼−ρ [i+1]
+k
+= ν[i]
+k +
+1
+1 −β
+↼−ξ [i+1]
+k
+.
+Finally, for a Gaussian ↼−q [i]
+T (xT) and a quadratic ↼−
+V [i+1]
+T
+(xT), we derive a quadratic log↼−
+Z [i+1]
+T
+log↼−
+Z [i+1]
+T
+= log
+Z h↼−q [i]
+T (xT)
+iβh
+exp
+n↼−
+V [i+1]
+T
+(xT)
+o i1−β
+dxT.
+Similar to the proof in Appendix D, we formulate a quadratic over xT and ↼ −
+m [i]
+T
+−1
+2
+h↼ −
+m [i]
+T
+i⊤
+x⊤
+T
+ 
+
+↼−
+J [i+1]
+xx
+−↼−
+J [i+1]
+xm
+−↼−
+J [i+1]
+mx
+↼−
+J [i+1]
+mm
+
+
+
+
+− ⇀
+m [i]
+T
+xT
+
++
+h↼ −
+m [i]
+T
+i⊤
+x⊤
+T
+ 
+
+↼−j [i+1]
+x
+↼−j [i+1]
+m
+
++↼−τ [i+1]
+= β log↼−q [i]
+T (xT) + (1 −β)↼−
+V [i+1]
+T
+(xT),
+where by matching the quadratic factors, we get
+↼−
+J [i+1]
+xx
+= β
+h↼−
+P [i]
+T
+i−1
+,
+↼−
+J [i+1]
+xm
+= β
+h↼−
+P [i]
+T
+i−1
+,
+32
+
+↼−
+J [i+1]
+mm
+= (1 −β)↼−
+R [i+1]
+T
++ β
+h↼−
+P [i]
+T
+i−1
+,
+↼−
+J [i+1]
+mx
+= β
+h↼−
+P [i]
+T
+i−1
+,
+↼−j [i+1]
+x
+= 0,
+↼−j [i+1]
+m
+= (1 −β)↼−r [i+1]
+T
+,
+↼−τ [i+1] = (1 −β)↼−ρ [i+1]
+T
+−β
+2 log
+2π↼−
+P [i]
+T
+.
+Using the identity (43), we get a log-normalizing constant as a quadratic function over ↼ −
+m [i]
+T
+log↼−
+Z [i+1]
+T
+= −1
+2
+h↼ −
+m [i]
+T
+i⊤↼−
+U [i+1]↼ −
+m [i]
+T
++
+h↼ −
+m [i]
+T
+i⊤↼−u [i+1] +↼−η [i+1],
+where
+↼−
+U [i+1] = ↼−
+J [i+1]
+xx
+−
+h↼−
+J [i+1]
+mx
+i⊤h↼−
+J [i+1]
+mm
+i−1↼−
+J [i+1]
+mx
+,
+↼−u [i+1] = ↼−j [i+1]
+x
+−
+h↼−
+J [i+1]
+mx
+i⊤h↼−
+J [i+1]
+mm
+i−1↼−j [i+1]
+m
+,
+↼−η [i+1] = ↼−τ [i+1] −1
+2
+2π↼−
+J [i+1]
+mm
+i−1 + 1
+2
+h↼−j [i+1]
+m
+i⊤h↼−
+J [i+1]
+mm
+i−1h↼−j [i+1]
+m
+i
+.
+F
+Proof of Lemma 1
+For a tilted distribution of the form
+q[i+1](x) =
+h
+Z[i+1]i−1 h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+,
+with a normalizing constant
+Z[i+1] =
+Z h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+dx,
+where q[i](x) = N(x | m[i], P [i]), we compute the moments of q[i+1](x) by considering the derivatives of
+Z[i+1] with respect to m[i]. Starting with the first-order derivative
+∂Z[i+1]
+∂m[i]
+= β
+h
+P [i]i−1 Z
+(x −m[i])
+h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+dx
+= β
+h
+P [i]i−1 Z
+x
+h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+dx
+−β
+h
+P [i]i−1
+m[i]
+Z h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+dx
+= β Z[i+1] h
+P [i]i−1 h
+E[i+1] [x] −m[i]i
+.
+After rearranging the terms, we get
+E[i+1] [x] = m[i] + 1
+β P [i]h
+Z[i+1]i−1 ∂Z[i+1]
+∂m[i]
+= m[i] + 1
+β P [i] ∂log Z[i+1]
+∂m[i]
+,
+which is an expression for the first moment of q[i+1](x).
+Next, we consider the second-order derivative Z[i+1] with respect to m[i]
+∂2Z[i+1]
+∂m[i] ∂
+
+m[i]⊤= β2 h
+P [i]i−1 Z
+(x −m[i])(x −m[i])⊤h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+dx
+ h
+P [i]i−1
+−β
+h
+P [i]i−1 Z h
+q[i](x)
+iβh
+exp
+n
+V [i+1](x)
+o i1−β
+dx
+33
+
+= β2 Z[i+1] h
+P [i]i−1
+E[i+1] h
+x x⊤i h
+P [i]i−1
++ β2 Z[i+1] h
+P [i]i−1
+m[i] h
+m[i]i⊤h
+P [i]i−1
+−2 β2 Z[i+1] h
+P [i]i−1
+E[i+1] [x]
+h
+m[i]i⊤h
+P [i]i−1
+−β Z[i+1] h
+P [i]i−1
+,
+which leads to the second raw moment of q[i+1](xk)
+E[i+1] h
+x x⊤i
+= −m[i] h
+m[i]i⊤
++ 2 E[i+1] [x]
+h
+m[i]i⊤
++ 1
+β P [i] + 1
+β2
+h
+Z[i+1]i−1
+P [i]
+∂2Z[i+1]
+∂m[i] ∂
+
+m[i]⊤P [i].
+We can now derive the second central moment as follows
+V[i+1] [x] = E[i+1] h
+x x⊤i
+−E[i+1] [x] E[i+1] [x]⊤
+= m[i] h
+m[i]i⊤
++ 2 1
+β
+h
+Z[i+1]i−1
+P [i] ∂Z[i+1]
+∂m[i]
+h
+m[i]i⊤
++ 1
+β P [i]
++ 1
+β2
+h
+Z[i+1]i−1
+P [i]
+∂2Z[i+1]
+∂m[i] ∂
+
+m[i]⊤P [i] −m[i] h
+m[i]i⊤
+−2 1
+β
+h
+Z[i+1]i−1
+m[i]
+"
+P [i] ∂Z[i+1]
+∂m[i]
+#⊤
+−1
+β2
+h
+Z[i+1]i−2
+P [i] ∂Z[i+1]
+∂m[i]
+"
+∂Z[i+1]
+∂m[i]
+#⊤
+P [i]
+= 1
+β P [i] + 1
+β2
+h
+Z[i+1]i−1
+P [i]
+∂2Z[i+1]
+∂m[i]∂
+
+m[i]⊤P [i] −1
+β2
+h
+Z[i+1]i−2
+P [i] ∂Z[i+1]
+∂m[i]
+"
+∂Z[i+1]
+∂m[i]
+#⊤
+P [i]
+= 1
+β P [i] + 1
+β2 P [i] ∂2 log Z[i+1]
+∂m[i] ∂
+
+m[i]⊤P [i].
+G
+Proof of Lemma 2
+For a tilted forward-Markov conditional distribution of the form
+−⇀q [i+1]
+k
+(xk+1 | xk) =
+h−⇀
+ψ [i+1]
+k
+(xk)
+i−1h−⇀q [i]
+k (xk+1 | xk)
+iβh
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+,
+with a normalizing function
+−⇀
+ψ [i+1]
+k
+(xk) =
+Z h−⇀q [i]
+k (xk+1 | xk)
+iβh
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+dxk+1,
+where −⇀q [i]
+k (xk+1 | xk) = N(xk+1 | −⇀
+F [i]
+k
+xk +−⇀d [i]
+k ,−⇀
+Σ [i]
+k ) and fk(xk+1 | xk) ≈exp
+
+ℓ[i]
+f (xk+1, xk)
+	
+ℓ[i]
+f (xk+1, xk) ≈−1
+2
+h
+x⊤
+k+1
+x⊤
+k
+i
+
+C[i]
+¯x¯x,k
+−C[i]
+¯xx,k
+−C[i]
+x¯x,k
+C[i]
+xx,k
+
+
+
+xk+1
+xk
+
++
+h
+x⊤
+k+1
+x⊤
+k
+i
+
+c[i]
+¯x,k
+c[i]
+x,k
+
++ κ[i]
+k .
+We compute the conditional moments of q[i+1](y | x) from the derivatives of ψ[i+1](x) with respect to x.
+Starting with the first-order derivative
+∂−⇀
+ψ [i+1]
+k
+(xk)
+∂xk
+= β
+Z ∂log−⇀q [i]
+k (xk+1 | xk)
+∂xk
+h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+dxk+1
++ (1 −β)
+Z ∂log fk(xk+1 | xk)
+∂xk
+h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+dxk+1,
+34
+
+= β
+Z h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1 h
+xk+1 −−⇀
+F [i]
+k
+xk −−⇀d [i]
+k
+i h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+dxk+1
++ (1 −β)
+Z h
+−C[i]
+xx,k xk + C[i]
+x¯x,k xk+1 + c[i]
+x,k
+i h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+dxk+1,
+= −⇀
+ψ [i+1]
+k
+(xk)
+
+(1 −β) C[i]
+x¯x,k + β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1
+E[i+1] 
+xk+1 | xk
+
+−−⇀
+ψ [i+1]
+k
+(xk)
+
+(1 −β) C[i]
+xx,k + β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k
+
+xk
++−⇀
+ψ [i+1]
+k
+(xk)
+
+(1 −β) c[i]
+x,k −β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1 −⇀d [i]
+k
+
+= −⇀
+ψ [i+1]
+k
+(xk)−⇀
+G [i+1]
+x¯x,k E[i+1] 
+xk+1 | xk
+
+−−⇀
+ψ [i+1]
+k
+(xk)−⇀
+G [i+1]
+xx,k x +−⇀
+ψ [i+1]
+k
+(xk)−⇀g [i+1]
+x,k
+,
+where we use the definition of −⇀
+G [i+1]
+x¯x,k , −⇀
+G [i+1]
+xx,k , and −⇀g [i+1]
+x,k
+from Proposition 4.
+Consequently, the first conditional moment of −⇀q [i+1]
+k
+(xk+1 | xk) is
+E[i+1] 
+xk+1 | xk
+
+=
+h−⇀
+G [i+1]
+x¯x,k
+i−1−⇀
+G [i+1]
+xx,k xk −
+h−⇀
+G [i+1]
+x¯x,k
+i−1−⇀g [i+1]
+x,k
++
+h−⇀
+G [i+1]
+x¯x,k
+i−1 ∂log−⇀
+ψ [i+1]
+k
+(xk)
+∂xk
+.
+Now we consider the second-order derivatives of −⇀
+ψ [i+1]
+k
+(xk)(x) with respect to xk
+∂2−⇀
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+= β2
+Z h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1 h
+xk+1 −−⇀
+F [i]
+k
+xk −−⇀d [i]
+k
+i h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+×
+h
+xk+1 −−⇀
+F [i]
+k
+xk −−⇀d [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k
+dxk+1
++ β (1 −β)
+Z h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1 h
+xk+1 −−⇀
+F [i]
+k
+xk −−⇀d [i]
+k
+i h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+×
+h
+−C[i]
+xx,k x + C[i]
+x¯x,k y + c[i]
+x,k
+i⊤
+dxk+1
++ (1 −β)2
+Z h
+−C[i]
+xx,k x + C[i]
+x¯x,k y + c[i]
+x,k
+i h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+×
+h
+−C[i]
+xx,k x + C[i]
+x¯x,k y + c[i]
+x,k
+i⊤
+dxk+1
++ β (1 −β)
+Z h
+−C[i]
+xx,k x + C[i]
+x¯x,k y + c[i]
+x,k
+i h−⇀q [i]
+k (xk+1 | xk)
+iβ
+×
+h
+fk(xk+1 | xk) exp
+n−⇀
+V [i+1]
+k+1 (xk+1)
+o i1−β
+×
+h
+xk+1 −−⇀
+F [i]
+k
+xk −−⇀d [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k
+dxk+1
+−β−⇀
+ψ [i+1]
+k
+(xk)
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k
+−(1 −β)−⇀
+ψ [i+1]
+k
+(xk) C[i]
+xx,k
+35
+
+= −⇀
+ψ [i+1]
+k
+(xk)
+h−⇀
+G [i+1]
+x¯x,k
+i
+E[i+1] h
+xk+1 x⊤
+k+1 | xk
+i h−⇀
+G [i+1]
+¯xx,k
+i
++−⇀
+ψ [i+1]
+k
+(xk)
+h−⇀
+G [i+1]
+xx,k
+i h
+xk x⊤
+k
+i h−⇀
+G [i+1]
+xx,k
+i⊤
++−⇀
+ψ [i+1]
+k
+(xk)
+h−⇀g [i+1]
+x,k
+i h−⇀g [i+1]
+x,k
+i⊤
+−2−⇀
+ψ [i+1]
+k
+(xk)
+h−⇀
+G [i+1]
+x¯x,k
+i
+E[i+1] 
+xk+1 | xk
+
+x⊤
+k
+h−⇀
+G [i+1]
+xx,k
+i⊤
++ 2−⇀
+ψ [i+1]
+k
+(xk)
+h−⇀
+G [i+1]
+x¯x,k
+i
+E[i+1] 
+xk+1 | xk
+ h−⇀g [i+1]
+x,k
+i⊤
+−2−⇀
+ψ [i+1]
+k
+(xk)
+h−⇀
+G [i+1]
+xx,k
+i
+xk
+h−⇀g [i+1]
+x,k
+i⊤
+−−⇀
+ψ [i+1]
+k
+(xk)
+h−⇀
+G [i+1]
+xx,k
+i
+.
+This gives us an expression for the second raw conditional moment
+E[i+1] h
+xk+1 x⊤
+k+1 | xk
+i
+=
+h−⇀
+G [i+1]
+x¯x,k
+i−1 h−⇀
+G [i+1]
+xx,k
+i h−⇀
+G [i+1]
+¯xx,k
+i−1
++
+h−⇀
+ψ [i+1]
+k
+(xk)
+i−1 h−⇀
+G [i+1]
+x¯x,k
+i−1 ∂2−⇀
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+h−⇀
+G [i+1]
+¯xx,k
+i−1
+−
+h−⇀
+G [i+1]
+x¯x,k
+i−1 h−⇀
+G [i+1]
+xx,k
+i h
+xk x⊤
+k
+i h−⇀
+G [i+1]
+xx,k
+i⊤h−⇀
+G [i+1]
+¯xx,k
+i−1
+−
+h−⇀
+G [i+1]
+x¯x,k
+i−1 h−⇀g [i+1]
+x,k
+i h−⇀g [i+1]
+x,k
+i⊤h−⇀
+G [i+1]
+¯xx,k
+i−1
++ 2
+h−⇀
+G [i+1]
+x¯x,k
+i−1 h−⇀
+G [i+1]
+x¯x,k
+i
+E[i+1] 
+xk+1 | xk
+
+x⊤
+k
+h−⇀
+G [i+1]
+xx,k
+i⊤h−⇀
+G [i+1]
+¯xx,k
+i−1
+−2
+h−⇀
+G [i+1]
+x¯x,k
+i−1 h−⇀
+G [i+1]
+x¯x,k
+i
+E[i+1] 
+xk+1 | xk
+ h−⇀g [i+1]
+x,k
+i⊤h−⇀
+G [i+1]
+¯xx,k
+i−1
++ 2
+h−⇀
+G [i+1]
+x¯x,k
+i−1 h−⇀
+G [i+1]
+xx,k
+i
+xk
+h−⇀g [i+1]
+x,k
+i⊤h−⇀
+G [i+1]
+¯xx,k
+i−1
+.
+Finally, we can derive the second central moment according to
+V[i+1] 
+xk+1 | xk
+
+= E[i+1] h
+xk+1 x⊤
+k+1 | xk
+i
+−E[i+1] 
+xk+1 | xk
+
+E[i+1] 
+xk+1 | xk
+⊤
+=
+h−⇀
+G [i+1]
+x¯x,k
+i−1 h−⇀
+G [i+1]
+xx,k
+i h−⇀
+G [i+1]
+¯xx,k
+i−1
++
+h−⇀
+ψ [i+1]
+k
+(xk)
+i−1 h−⇀
+G [i+1]
+x¯x,k
+i−1 ∂2−⇀
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+h−⇀
+G [i+1]
+¯xx,k
+i−1
+−
+h−⇀
+ψ [i+1]
+k
+(xk)
+i−2 h−⇀
+G [i+1]
+x¯x,k
+i−1 ∂−⇀
+ψ [i+1]
+k
+(xk)
+∂xk
+"
+∂−⇀
+ψ [i+1]
+k
+(xk)
+∂xk
+#⊤h−⇀
+G [i+1]
+¯xx,k
+i−1
+=
+h−⇀
+G [i+1]
+x¯x,k
+i−1 h−⇀
+G [i+1]
+xx,k
+i h−⇀
+G [i+1]
+¯xx,k
+i−1
++
+h−⇀
+G [i+1]
+x¯x,k
+i−1 ∂2 log−⇀
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+h−⇀
+G [i+1]
+¯xx,k
+i−1
+.
+H
+Proof of Lemma 3
+For a tilted reverse-Markov conditional distribution of the form
+↼−q [i+1]
+k
+(xk−1 | xk) =
+h↼−
+ψ [i+1]
+k
+(xk)
+i−1h↼−q [i]
+k (xk−1 | xk)
+iβh
+fk−1(xk | xk−1) exp
+n↼−
+V [i+1]
+k−1 (xk−1)
+o i1−β
+,
+36
+
+with a normalizing function
+↼−
+ψ [i+1]
+k
+(xk) =
+Z h↼−q [i]
+k (xk−1 | xk)
+iβh
+fk−1(xk | xk−1) exp
+n↼−
+V [i+1]
+k−1 (xk−1)
+o i1−β
+dxk−1,
+where ↼−q [i]
+k (xk−1 | xk) = N(xk−1 | ↼−
+F [i]
+k
+xk +↼−d [i]
+k ,↼−
+Σ [i]
+k ) and fk−1(xk | xk−1) ≈exp
+
+ℓ[i]
+f (xk, xk−1)
+	
+ℓ[i]
+f (xk, xk−1) ≈−1
+2
+h
+x⊤
+k
+x⊤
+k−1
+i
+
+C[i]
+¯x¯x,k
+−C[i]
+¯xx,k
+−C[i]
+x¯x,k
+C[i]
+xx,k
+
+
+
+xk
+xk−1
+
++
+h
+x⊤
+k
+x⊤
+k−1
+i
+
+c[i]
+¯x,k
+c[i]
+x,k
+
++ κ[i]
+k .
+The following steps are analogous to those described in Appendix G, thus we will omit redundant steps to
+avoid repetition. Starting with the first-order derivative of ↼−
+ψ [i+1]
+k
+(xk)
+∂↼−
+ψ [i+1]
+k
+(xk)
+∂xk
+= ↼−
+ψ [i+1]
+k
+(xk)
+
+(1 −β) C[i]
+¯xx,k + β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1
+E[i+1] 
+xk−1 | xk
+
+−↼−
+ψ [i+1]
+k
+(xk)
+
+(1 −β) C[i]
+¯x¯x,k + β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1↼−
+F [i]
+k
+
+xk
++↼−
+ψ [i+1]
+k
+(xk)
+
+(1 −β) c[i]
+¯x,k −β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1 ↼−d [i]
+k
+
+= ↼−
+ψ [i+1]
+k
+(xk)↼−
+G [i+1]
+¯xx,k E[i+1] 
+xk−1 | xk
+
+−↼−
+ψ [i+1]
+k
+(xk)↼−
+G [i+1]
+¯x¯x,k x +↼−
+ψ [i+1]
+k
+(xk)↼−g [i+1]
+¯x,k
+,
+where we use the definition of ↼−
+G [i+1]
+¯xx,k , ↼−
+G [i+1]
+¯x¯x,k , and ↼−g [i+1]
+¯x,k
+from Proposition 5.
+Consequently, the first
+conditional moment of ↼−q [i+1]
+k
+(xk−1 | xk) is
+E[i+1] 
+xk−1 | xk
+
+=
+h↼−
+G [i+1]
+¯xx,k
+i−1↼−
+G [i+1]
+¯x¯x,k xk −
+h↼−
+G [i+1]
+¯xx,k
+i−1↼−g [i+1]
+¯x,k
++
+h↼−
+G [i+1]
+¯xx,k
+i−1 ∂log↼−
+ψ [i+1]
+k
+(xk)
+∂xk
+.
+Now we consider the second-order derivatives of ↼−
+ψ [i+1]
+k
+(xk)(x) with respect to xk
+∂2↼−
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+= ↼−
+ψ [i+1]
+k
+(xk)
+h↼−
+G [i+1]
+¯xx,k
+i
+E[i+1] h
+xk−1 x⊤
+k−1 | xk
+i h↼−
+G [i+1]
+x¯x,k
+i
++↼−
+ψ [i+1]
+k
+(xk)
+h↼−
+G [i+1]
+¯x¯x,k
+i h
+xk x⊤
+k
+i h↼−
+G [i+1]
+¯x¯x,k
+i⊤
++↼−
+ψ [i+1]
+k
+(xk)
+h↼−g [i+1]
+¯x,k
+i h↼−g [i+1]
+¯x,k
+i⊤
+−2↼−
+ψ [i+1]
+k
+(xk)
+h↼−
+G [i+1]
+¯xx,k
+i
+E[i+1] 
+xk−1 | xk
+
+x⊤
+k
+h↼−
+G [i+1]
+¯x¯x,k
+i⊤
++ 2↼−
+ψ [i+1]
+k
+(xk)
+h↼−
+G [i+1]
+¯xx,k
+i
+E[i+1] 
+xk−1 | xk
+ h↼−g [i+1]
+¯x,k
+i⊤
+−2↼−
+ψ [i+1]
+k
+(xk)
+h↼−
+G [i+1]
+¯x¯x,k
+i
+xk
+h↼−g [i+1]
+¯x,k
+i⊤
+−↼−
+ψ [i+1]
+k
+(xk)
+h↼−
+G [i+1]
+¯x¯x,k
+i
+.
+37
+
+This gives us an expression for the second raw conditional moment
+E[i+1] h
+xk−1 x⊤
+k−1 | xk
+i
+=
+h↼−
+G [i+1]
+¯xx,k
+i−1 h↼−
+G [i+1]
+¯x¯x,k
+i h↼−
+G [i+1]
+x¯x,k
+i−1
++
+h↼−
+ψ [i+1]
+k
+(xk)
+i−1 h↼−
+G [i+1]
+¯xx,k
+i−1 ∂2↼−
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+h↼−
+G [i+1]
+x¯x,k
+i−1
+−
+h↼−
+G [i+1]
+¯xx,k
+i−1 h↼−
+G [i+1]
+¯x¯x,k
+i h
+xk x⊤
+k
+i h↼−
+G [i+1]
+¯x¯x,k
+i⊤h↼−
+G [i+1]
+x¯x,k
+i−1
+−
+h↼−
+G [i+1]
+¯xx,k
+i−1 h↼−g [i+1]
+¯x,k
+i h↼−g [i+1]
+¯x,k
+i⊤h↼−
+G [i+1]
+x¯x,k
+i−1
++ 2
+h↼−
+G [i+1]
+¯xx,k
+i−1 h↼−
+G [i+1]
+¯xx,k
+i
+E[i+1] 
+xk−1 | xk
+
+x⊤
+k
+h↼−
+G [i+1]
+¯x¯x,k
+i⊤h↼−
+G [i+1]
+x¯x,k
+i−1
+−2
+h↼−
+G [i+1]
+¯xx,k
+i−1 h↼−
+G [i+1]
+¯xx,k
+i
+E[i+1] 
+xk−1 | xk
+ h↼−g [i+1]
+¯x,k
+i⊤h↼−
+G [i+1]
+x¯x,k
+i−1
++ 2
+h↼−
+G [i+1]
+¯xx,k
+i−1 h↼−
+G [i+1]
+¯x¯x,k
+i
+xk
+h↼−g [i+1]
+¯x,k
+i⊤h↼−
+G [i+1]
+x¯x,k
+i−1
+.
+Finally, we can derive the second central moment according to
+V[i+1] 
+xk−1 | xk
+
+= E[i+1] h
+xk−1 x⊤
+k−1 | xk
+i
+−E[i+1] 
+xk−1 | xk
+
+E[i+1] 
+xk−1 | xk
+⊤
+=
+h↼−
+G [i+1]
+¯xx,k
+i−1 h↼−
+G [i+1]
+¯x¯x,k
+i h↼−
+G [i+1]
+x¯x,k
+i−1
++
+h↼−
+ψ [i+1]
+k
+(xk)
+i−1 h↼−
+G [i+1]
+¯xx,k
+i−1 ∂2↼−
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+h↼−
+G [i+1]
+x¯x,k
+i−1
+−
+h↼−
+ψ [i+1]
+k
+(xk)
+i−2 h↼−
+G [i+1]
+¯xx,k
+i−1 ∂↼−
+ψ [i+1]
+k
+(xk)
+∂xk
+"
+∂↼−
+ψ [i+1]
+k
+(xk)
+∂xk
+#⊤h↼−
+G [i+1]
+x¯x,k
+i−1
+=
+h↼−
+G [i+1]
+¯xx,k
+i−1 h↼−
+G [i+1]
+¯x¯x,k
+i h↼−
+G [i+1]
+x¯x,k
+i−1
++
+h↼−
+G [i+1]
+¯xx,k
+i−1 ∂2 log↼−
+ψ [i+1]
+k
+(xk)
+∂xk ∂x⊤
+k
+h↼−
+G [i+1]
+x¯x,k
+i−1
+.
+38
+
+I
+Recursive Bayesian Inference Algorithms
+Algorithm 1 Backward Recursion of the Forward Proximal Variational Smoother
+Require: Damping: β, first Gaussian marginal: − ⇀
+m [i]
+0 ,−⇀
+P [i]
+0 ,
+forward affine-Gaussian conditionals: −⇀
+F [i]
+0:T −1,−⇀d [i]
+0:T −1,−⇀
+Σ [i]
+0:T −1,
+log prior ℓp: L[i]
+0 , l[i]
+0 , log measurement ℓh: L[i]
+1:T, l[i]
+1:T,
+log dynamics ℓf: C[i]
+¯x¯x,0:T −1, C[i]
+¯xx,0:T −1, C[i]
+xx,0:T −1, c[i]
+¯x,0:T −1, c[i]
+x,0:T −1.
+1: −⇀
+R [i+1]
+T
+= L[i]
+T ,
+−⇀r [i+1]
+T
+= l[i]
+T
+▷initialize backward recursion
+2: for k ←T −1, . . . , 0 do
+3:
+−⇀
+G [i+1]
+¯x¯x,k = (1 −β)
+h
+C[i]
+¯x¯x,k +−⇀
+R [i+1]
+k+1
+i
++ β
+h−⇀
+Σ [i]
+k
+i−1
+4:
+−⇀
+G [i+1]
+xx,k = (1 −β) C[i]
+xx,k + β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k
+5:
+−⇀
+G [i+1]
+¯xx,k = (1 −β) C[i]
+¯xx,k + β
+h−⇀
+Σ [i]
+k
+i−1−⇀
+F [i]
+k
+6:
+−⇀g [i+1]
+¯x,k
+= (1 −β)
+h
+c[i]
+¯x,k +−⇀r [i+1]
+k+1
+i
++ β
+h−⇀
+Σ [i]
+k
+i−1−⇀d [i]
+k
+7:
+−⇀g [i+1]
+x,k
+= (1 −β) c[i]
+x,k −β
+h−⇀
+F [i]
+k
+i⊤h−⇀
+Σ [i]
+k
+i−1−⇀d [i]
+k
+8:
+−⇀
+S [i+1]
+k
+= −⇀
+G [i]
+xx,k −
+h−⇀
+G [i+1]
+¯xx,k
+i⊤h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀
+G [i+1]
+¯xx,k
+▷update log-normalizers
+9:
+−⇀s [i+1]
+k
+= −⇀g [i]
+x,k +
+h−⇀
+G [i+1]
+¯xx,k
+i⊤h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀g [i+1]
+¯x,k
+10:
+−⇀
+R [i+1]
+k
+= L[i]
+k + 1/(1 −β)−⇀
+S [i+1]
+k
+▷update potential functions
+11:
+−⇀r [i+1]
+k
+= l[i]
+k + 1/(1 −β)−⇀s [i+1]
+k
+12:
+−⇀
+F [i+1]
+k
+=
+h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀
+G [i+1]
+¯xx,k
+▷update conditional posteriors
+13:
+−⇀d [i+1]
+k
+=
+h−⇀
+G [i+1]
+¯x¯x,k
+i−1−⇀g [i+1]
+¯x,k
+14:
+−⇀
+Σ [i+1]
+k
+=
+h−⇀
+G [i+1]
+¯x¯x,k
+i−1
+15: end for
+16: −⇀
+J [i+1]
+xx
+= (1 −β)−⇀
+R [i+1]
+0
++ β
+h−⇀
+P [i]
+0
+i−1
+17: −⇀
+J [i+1]
+xm
+= β
+h−⇀
+P [i]
+0
+i−1
+18: −⇀j [i+1]
+x
+= (1 −β)−⇀r [i+1]
+0
+19: − ⇀
+m [i+1]
+0
+=
+h−⇀
+J [i+1]
+xx
+i−1 h−⇀j [i+1]
+x
++−⇀
+J [i+1]
+xm
+− ⇀
+m [i]
+0
+i
+▷update boundary marginal
+20: −⇀
+P [i+1]
+0
+=
+h−⇀
+J [i+1]
+xx
+i−1
+21: return − ⇀
+m [i+1]
+0
+,−⇀
+P [i+1]
+0
+, −⇀
+F [i+1]
+0:T −1,−⇀d [i+1]
+0:T −1,−⇀
+Σ [i+1]
+0:T −1,−⇀
+R [i+1]
+0:T
+,−⇀r [i+1]
+0:T
+,−⇀
+S [i+1]
+0:T −1,−⇀s [i+1]
+0:T −1.
+39
+
+Algorithm 2 Forward Recursion of the Forward Proximal Variational Smoother
+Require: First Gaussian marginal: − ⇀
+m [i+1]
+0
+,−⇀
+P [i+1]
+0
+,
+forward affine-Gaussian conditionals: −⇀
+F [i+1]
+0:T −1,−⇀d [i+1]
+0:T −1,−⇀
+Σ [i+1]
+0:T −1.
+1: for k ←0, . . . , T −1 do
+2:
+− ⇀
+m [i+1]
+k+1
+= −⇀
+F [i+1]
+k
+− ⇀
+m [i+1]
+k
++−⇀d [i+1]
+k
+▷update marginals
+3:
+−⇀
+P [i+1]
+k+1
+= −⇀
+F [i+1]
+k
+−⇀
+P [i+1]
+k
+h−⇀
+F [i+1]
+k
+i⊤
++−⇀
+Σ [i+1]
+k
+4: end for
+5: return − ⇀
+m [i+1]
+0:T
+,−⇀
+P [i+1]
+0:T
+.
+Algorithm 3 Optimal Damping for Forward Proximal Variational Smoother
+Require: Maximum multiplier: αmax, minimum multiplier: αmin,
+initial multiplier: α0, first Gaussian marginal: − ⇀
+m [i]
+0 ,−⇀
+P [i]
+0 ,
+forward affine-Gaussian conditionals: −⇀
+F [i]
+0:T −1,−⇀d [i]
+0:T −1,−⇀
+Σ [i]
+0:T −1,
+log prior ℓp, log measurement ℓh, log dynamics ℓf.
+1: α ←α0
+2: repeat
+3:
+β ←α/(1 + α)
+4:
+− ⇀
+m [i+1]
+0
+,−⇀
+P [i+1]
+0
+,−⇀
+F [i+1]
+0:T −1,−⇀d [i+1]
+0:T −1,−⇀
+Σ [i+1]
+0:T −1 ←
+Forward Conditionals (β, ℓp, ℓh, ℓf,− ⇀
+m [i]
+0 ,−⇀
+P [i]
+0 ,−⇀
+F [i]
+0:T −1,−⇀d [i]
+0:T −1,−⇀
+Σ [i]
+0:T −1)
+▷Algorithm 1
+5:
+− ⇀
+m [i+1]
+0:T
+,−⇀
+P [i+1]
+0:T
+←
+Forward Marginals (− ⇀
+m [i+1]
+0
+,−⇀
+P [i+1]
+0
+,−⇀
+F [i+1]
+0:T −1,−⇀d [i+1]
+0:T −1,−⇀
+Σ [i+1]
+0:T −1)
+▷Algorithm 2
+6:
+if ε −DKL
+h−⇀q [i+1] || −⇀q [i]i
+> 0 then
+7:
+αmax ←α
+8:
+α ←√α · αmin
+▷reduce multiplier
+9:
+else if ε −DKL
+h−⇀q [i+1] || −⇀q [i]i
+< 0 then
+10:
+αmin ←α
+11:
+α ←√α · αmax
+▷increase multiplier
+12:
+end if
+13: until ε −DKL
+h−⇀q [i+1] || −⇀q [i]i
+≈0
+▷gradient vanishes
+14: β ←α/(1 + α)
+15: return β
+40
+
+Algorithm 4 Forward Recursion of the Reverse Proximal Variational Smoother
+Require: Damping: β, last Gaussian marginal: ↼ −
+m [i]
+T ,↼−
+P [i]
+T ,
+reverse affine-Gaussian conditionals: ↼−
+F [i]
+0:T −1,↼−d [i]
+0:T −1,↼−
+Σ [i]
+0:T −1,
+log prior ℓp(x0): L[i]
+0 , l[i]
+0 , log measurement ℓh(xk): L[i]
+1:T, l[i]
+1:T,
+log dynamics ℓf: C[i]
+¯x¯x,0:T −1, C[i]
+¯xx,0:T −1, C[i]
+xx,0:T −1, c[i]
+¯x,0:T −1, c[i]
+x,0:T −1.
+1: ↼−
+R [i+1]
+0
+= L[i]
+0 ,
+↼−r [i+1]
+0
+= l[i]
+0
+▷initialize forward recursion
+2: for k ←1, . . . , T do
+3:
+↼−
+G [i+1]
+¯x¯x,k = (1 −β) C[i]
+¯x¯x,k−1 + β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1↼−
+F [i]
+k
+4:
+↼−
+G [i+1]
+xx,k = (1 −β)
+h
+C[i]
+xx,k−1 +↼−
+R [i+1]
+k−1
+i
++ β
+h↼−
+Σ [i]
+k
+i−1
+5:
+↼−
+G [i+1]
+x¯x,k = (1 −β) C[i]
+x¯x,k−1 + β
+h↼−
+Σ [i]
+k
+i−1↼−
+F [i]
+k
+6:
+↼−g [i+1]
+¯x,k
+= (1 −β) c[i]
+¯x,k−1 −β
+h↼−
+F [i]
+k
+i⊤h↼−
+Σ [i]
+k
+i−1↼−d [i]
+k
+7:
+↼−g [i+1]
+x,k
+= (1 −β)
+h
+c[i]
+x,k−1 +↼−r [i+1]
+k−1
+i
++ β
+h↼−
+Σ [i]
+k
+i−1↼−d [i]
+k
+8:
+↼−
+S [i+1]
+k
+= ↼−
+G [i+1]
+¯x¯x,k −
+h↼−
+G [i+1]
+x¯x,k
+i⊤h↼−
+G [i+1]
+xx,k
+i−1↼−
+G [i+1]
+x¯x,k
+▷update log-normalizers
+9:
+↼−s [i+1]
+k
+= ↼−g [i+1]
+¯x,k
++
+h↼−
+G [i+1]
+x¯x,k
+i⊤h↼−
+G [i+1]
+xx,k
+i−1↼−g [i+1]
+x,k
+10:
+↼−
+R [i+1]
+k
+= L[i]
+k + 1/(1 −β)↼−
+S [i+1]
+k
+▷update potential functions
+11:
+↼−r [i+1]
+k
+= l[i]
+k + 1/(1 −β)↼−s [i+1]
+k
+12:
+↼−
+F [i+1]
+k
+=
+h↼−
+G [i+1]
+x2,k
+i−1↼−
+G [i+1]
+x¯x,k
+▷update conditional posteriors
+13:
+↼−d [i+1]
+k
+=
+h↼−
+G [i+1]
+xx,k
+i−1↼−g [i+1]
+x,k
+14:
+↼−
+Σ [i+1]
+k
+=
+h↼−
+G [i+1]
+xx,k
+i−1
+15: end for
+16: ↼−
+J [i+1]
+mm
+= (1 −β)↼−
+R [i+1]
+T
++ β
+h↼−
+P [i]
+T
+i−1
+17: ↼−
+J [i+1]
+xm
+= β
+h↼−
+P [i]
+T
+i−1
+18: ↼−j [i+1]
+m
+= (1 −β)↼−r [i+1]
+T
+19: ↼ −
+m [i+1]
+T
+=
+h↼−
+J [i+1]
+mm
+i−1 h↼−j [i+1]
+m
++↼−
+J [i+1]
+xm
+↼ −
+m [i]
+T
+i
+▷update boundary marginal
+20: ↼−
+P [i+1]
+T
+=
+h↼−
+J [i+1]
+mm
+i−1
+21: return ↼ −
+m [i+1]
+T
+,↼−
+P [i+1]
+T
+,↼−
+F [i+1]
+1:T
+,↼−d [i+1]
+1:T
+,↼−
+Σ [i+1]
+1:T
+,↼−
+R [i+1]
+0:T
+,↼−r [i+1]
+0:T
+,↼−
+S [i+1]
+1:T
+,↼−s [i+1]
+1:T
+.
+41
+
+Algorithm 5 Backward Recursion of the Reverse Proximal Variational Smoother
+Require: Last Gaussian marginal: ↼ −
+m [i+1]
+T
+,↼−
+P [i+1]
+T
+,
+reverse affine-Gaussian conditionals: ↼−
+F [i+1]
+1:T
+,↼−d [i+1]
+1:T
+,↼−
+Σ [i+1]
+1:T
+.
+1: for k ←T, . . . , 1 do
+2:
+↼ −
+m [i+1]
+k−1
+= ↼−
+F [i+1]
+k
+↼ −
+m [i+1]
+k
++↼−d [i+1]
+k
+▷update marginals
+3:
+↼−
+P [i+1]
+k−1
+= ↼−
+F [i+1]
+k
+↼−
+P [i+1]
+k
+h↼−
+F [i+1]
+k
+i⊤
++↼−
+Σ [i+1]
+k
+4: end for
+5: return ↼ −
+m [i+1]
+0:T
+,↼−
+P [i+1]
+0:T
+.
+Algorithm 6 Optimal Damping for the Reverse Proximal Variational Smoother
+Require: Maximum multiplier: αmax, minimum multiplier: αmin,
+initial multiplier: α0, last Gaussian marginal: ↼ −
+m [i]
+T ,↼−
+P [i]
+T ,
+reverse affine-Gaussian conditionals: ↼−
+F [i]
+1:T,↼−d [i]
+1:T,↼−
+Σ [i]
+1:T,
+log prior ℓp, log measurement ℓh, log dynamics ℓf.
+1: α ←α0
+2: repeat
+3:
+β ←α/(1 + α)
+4:
+↼ −
+m [i+1]
+T
+,↼−
+P [i+1]
+T
+,↼−
+F [i+1]
+1:T
+,↼−d [i+1]
+1:T
+,↼−
+Σ [i+1]
+1:T
+←
+Reverse Conditionals (β, ℓp, ℓh, ℓf,↼ −
+m [i]
+T ,↼−
+P [i]
+T ,↼−
+F [i]
+1:T,↼−d [i]
+1:T,↼−
+Σ [i]
+1:T)
+▷Algorithm 4
+5:
+↼ −
+m [i+1]
+0:T
+,↼−
+P [i+1]
+0:T
+←
+Reverse Marginals (↼ −
+m [i+1]
+T
+,↼−
+P [i+1]
+T
+,↼−
+F [i+1]
+1:T
+,↼−d [i+1]
+1:T
+,↼−
+Σ [i+1]
+1:T
+)
+▷Algorithm 5
+6:
+if ε −DKL
+h↼−q [i+1] || ↼−q [i]i
+> 0 then
+7:
+αmax ←α
+8:
+α ←√α · αmin
+▷reduce multiplier
+9:
+else if ε −DKL
+h↼−q [i+1] || ↼−q [i]i
+< 0 then
+10:
+αmin ←α
+11:
+α ←√α · αmax
+▷increase multiplier
+12:
+end if
+13: until ε −DKL
+h↼−q [i+1] || ↼−q [i]i
+≈0
+▷gradient vanishes
+14: β ←α/(1 + α)
+15: return β
+42
+
+Algorithm 7 Forward Proximal Variational Smoother
+Require: First Gaussian marginal: − ⇀
+m [0]
+0
+,−⇀
+P [0]
+0
+,
+forward affine-Gaussian conditionals: −⇀
+F [0]
+0:T −1,−⇀d [0]
+0:T −1,−⇀
+Σ [0]
+0:T −1.
+1: i ←0
+2: while not converged do
+3:
+− ⇀
+m [i]
+0:T,−⇀
+P [i]
+0:T ←Forward Marginals (− ⇀
+m [i]
+0 ,−⇀
+P [i]
+0 ,−⇀
+F [i]
+0:T −1,−⇀d [i]
+0:T −1,−⇀
+Σ [i]
+0:T −1)
+▷Algorithm 2
+4:
+ℓp, ℓh, ℓf ←Approximate Model (p, f, h,− ⇀
+m [i]
+0:T,−⇀
+P [i]
+0:T)
+▷Definition 2/3
+5:
+β ←Optimal Damping (ℓp, ℓh, ℓf,− ⇀
+m [i]
+0 ,−⇀
+P [i]
+0 ,−⇀
+F [i]
+0:T −1,−⇀d [i]
+0:T −1,−⇀
+Σ [i]
+0:T −1)
+▷Algorithm 3
+6:
+− ⇀
+m [i+1]
+0
+,−⇀
+P [i+1]
+0
+,−⇀
+F [i+1]
+0:T −1,−⇀d [i+1]
+0:T −1,−⇀
+Σ [i+1]
+0:T −1 ←
+Forward Conditionals (β, ℓp, ℓh, ℓf,− ⇀
+m [i]
+0 ,−⇀
+P [i]
+0 ,−⇀
+F [i]
+0:T −1,−⇀d [i]
+0:T −1,−⇀
+Σ [i]
+0:T −1)
+▷Algorithm 1
+7:
+i ←i + 1
+8: end while
+9: return − ⇀
+m [∞]
+0:T ,−⇀
+P [∞]
+0:T .
+Algorithm 8 Reverse Proximal Variational Smoother
+Require: Last Gaussian marginal: ↼ −
+m [0]
+T
+,↼−
+P [0]
+T
+,
+reverse affine-Gaussian conditionals: ↼−
+F [0]
+1:T ,↼−d [0]
+1:T ,↼−
+Σ [0]
+1:T .
+1: i ←0
+2: while not converged do
+3:
+↼ −
+m [i]
+0:T,↼−
+P [i]
+0:T ←Reverse Marginals (↼ −
+m [i]
+0 ,↼−
+P [i]
+0 ,↼−
+F [i]
+1:T,↼−d [i]
+1:T,↼−
+Σ [i]
+1:T)
+▷Algorithm 5
+4:
+ℓp, ℓh, ℓf ←Approximate Model (p, f, h,↼ −
+m [i]
+0:T,↼−
+P [i]
+0:T)
+▷Definition 2/3
+5:
+β ←Optimal Damping (ℓp, ℓh, ℓf,↼ −
+m [i]
+T ,↼−
+P [i]
+T ,↼−
+F [i]
+1:T,↼−d [i]
+1:T,↼−
+Σ [i]
+1:T)
+▷Algorithm 6
+6:
+↼ −
+m [i+1]
+T
+,↼−
+P [i+1]
+T
+,↼−
+F [i+1]
+1:T
+,↼−d [i+1]
+1:T
+,↼−
+Σ [i+1]
+1:T
+←
+Reverse Conditionals (β, ℓp, ℓh, ℓf,↼ −
+m [i]
+T ,↼−
+P [i]
+T ,↼−
+F [i]
+1:T,↼−d [i]
+1:T,↼−
+Σ [i]
+1:T)
+▷Algorithm 4
+7:
+i ←i + 1
+8: end while
+9: return ↼ −
+m [∞]
+0:T ,↼−
+P [∞]
+0:T .
+43
+
+Algorithm 9 Marginals of the Hybrid Proximal Variational Smoother
+Require: Damping: β, prior Gaussian marginal: m[i]
+1:T −1, P [i]
+1:T −1,
+forward log-normalizing functions: −⇀
+S [i+1]
+1:T −1,−⇀s [i+1]
+1:T −1,
+reverse potential functions: ↼−
+R [i+1]
+1:T −1,↼−r [i+1]
+1:T −1.
+1: for k ←1, . . . , T −1 do
+2:
+P [i+1]
+k
+=
+h
+(1 −β)
+h↼−
+R [i+1]
+k
++−⇀
+S [i+1]
+k
+i
++ β
+h
+P [i]
+k
+i−1i−1
+▷update marginals
+3:
+m[i+1]
+k
+= P [i+1]
+k
+h
+(1 −β)
+h↼−r [i+1]
+k
++−⇀s [i+1]
+k
+i
++ β
+h
+P [i]
+k
+i−1
+m[i]
+k
+i
+4: end for
+5: return m[i+1]
+1:T −1, P [i+1]
+1:T −1.
+Algorithm 10 Hybrid Proximal Variational Smoother
+Require: Initial Gaussian marginals: m[0]
+0:T , P [0]
+0:T ,
+forward affine-Gaussian conditionals: −⇀
+F [0]
+0:T −1,−⇀d [0]
+0:T −1,−⇀
+Σ [0]
+0:T −1,
+reverse affine-Gaussian conditionals: ↼−
+F [0]
+1:T ,↼−d [0]
+1:T ,↼−
+Σ [0]
+1:T .
+1: i ←0
+2: while not converged do
+3:
+ℓp, ℓh, ℓf ←Approximate Model (p, f, h, m[i]
+0:T, P [i]
+0:T)
+▷Definition 2/3
+4:
+β ←Optimal Damping (ℓp, ℓh, ℓf, m[i]
+0 , P [i]
+0 ,−⇀
+F [i]
+0:T −1,−⇀d [i]
+0:T −1,−⇀
+Σ [i]
+0:T −1)
+▷Algorithm 3
+5:
+m[i+1]
+0
+, P [i+1]
+0
+,−⇀
+F [i+1]
+0:T −1,−⇀d [i+1]
+0:T −1,−⇀
+Σ [i+1]
+0:T −1,−⇀
+S [i+1]
+1:T −1,−⇀s [i+1]
+1:T −1 ←
+Forward Normalizers (β, ℓp, ℓh, ℓf, m[i]
+0 , P [i]
+0 ,−⇀
+F [i]
+0:T −1,−⇀d [i]
+0:T −1,−⇀
+Σ [i]
+0:T −1)
+▷Algorithm 1
+6:
+m[i+1]
+T
+, P [i+1]
+T
+,↼−
+F [i+1]
+1:T
+,↼−d [i+1]
+1:T
+,↼−
+Σ [i+1]
+1:T
+,↼−
+R [i+1]
+1:T −1,↼−r [i+1]
+1:T −1 ←
+Reverse Potentials (β, ℓp, ℓh, ℓf, m[i]
+T , P [i]
+T ,↼−
+F [i]
+1:T,↼−d [i]
+1:T,↼−
+Σ [i]
+1:T)
+▷Algorithm 4
+7:
+m[i+1]
+1:T −1, P [i+1]
+1:T −1 ←
+Hybrid Marginals (β, m[i]
+1:T −1, P [i]
+1:T −1,−⇀
+S [i+1]
+1:T −1,−⇀s [i+1]
+1:T −1,↼−
+R [i+1]
+1:T −1,↼−r [i+1]
+1:T −1)
+▷Algorithm 9
+8:
+i ←i + 1
+9: end while
+10: return m[∞]
+0:T , P [∞]
+0:T .
+44

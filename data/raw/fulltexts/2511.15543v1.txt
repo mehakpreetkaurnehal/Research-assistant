@@ -1,0 +1,1404 @@
+Highlights
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and
+Parameter Estimation
+Georgios Venianakis, Constantinos Theodoropoulos, Michail Kavousanakis
+• A PINN framework for joint sensor placement and parameter estimation is presented.
+• Sensor locations are optimized using sensitivity functions and D-optimal design.
+• The framework is demonstrated for reaction-diffusion-advection systems.
+• Optimal placement yields improved parameter estimates over heuristic choices.
+arXiv:2511.15543v1  [stat.ML]  19 Nov 2025
+
+A Physics Informed Machine Learning Framework for Optimal
+Sensor Placement and Parameter Estimation
+Georgios Venianakisa, Constantinos Theodoropoulosa,b,∗and Michail Kavousanakisa,∗
+aSchool of Chemical Engineering, National Technical University of Athens, Iroon Polytechneiou 9, Athens, 15772, Greece
+bDepartment of Chemical Engineering, University of Manchester, Manchester, M13 9PL, United Kingdom
+A R T I C L E I N F O
+Keywords:
+Machine Learning
+Physics Informed Neural Networks
+D-optimality
+distributed-parameter systems
+Fisher Information matrix
+automatic differentiation
+A B S T R A C T
+Parameter estimation remains a challenging task across many areas of engineering. Because
+data acquisition can often be costly, limited, or prone to inaccuracies (noise, uncertainty) it
+is crucial to identify sensor configurations that provide the maximum amount of information
+about the unknown parameters, in particular for the case of distributed-parameter systems, where
+spatial variations are important. Physics-Informed Neural Networks (PINNs) have recently
+emerged as a powerful machine-learning (ML) tool for parameter estimation, particularly in
+cases with sparse or noisy measurements, overcoming some of the limitations of traditional
+optimization-based and Bayesian approaches. Despite the widespread use of PINNs for solving
+inverse problems, relatively little attention has been given to how their performance depends on
+sensor placement. This study addresses this gap by introducing a comprehensive PINN-based
+framework that simultaneously tackles optimal sensor placement and parameter estimation. Our
+approach involves training a PINN model in which the parameters of interest are included
+as additional inputs. This enables the efficient computation of sensitivity functions through
+automatic differentiation, which are then used to determine optimal sensor locations exploiting
+the D-optimality criterion. The framework is validated on two illustrative distributed-parameter
+reaction-diffusion-advection problems of increasing complexity. The results demonstrate that our
+PINNs-based methodology consistently achieves higher accuracy compared to parameter values
+estimated from intuitively or randomly selected sensor positions.
+⋆
+∗Corresponding authors
+k.theodoropoulos@manchester.ac.uk (C. Theodoropoulos); mihkavus@chemeng.ntua.gr (M. Kavousanakis)
+ORCID(s):
+Venianakis et al: Preprint submitted to Elsevier
+Page 1 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+Nomenclature
+NN
+Neural Network
+PINN
+Physics Informed Neural Network
+FIM
+Fisher Information Matrix
+AD
+Automatic Differentiation
+RAR-D
+Residual-based Adaptive Refinement with Distribution
+FEM
+Finite Element Method
+𝐮
+General state variable(s)
+𝜆
+Unknown parameters vector
+𝜆𝑝𝑟𝑖𝑜𝑟
+A priori parameter estimate vector
+𝑠𝜆𝑗
+Sensitivity function to the parameter 𝜆𝑗
+𝐹
+FIM
+𝐱∗
+1, … , 𝐱∗
+𝑁
+Selected spatial coordinates of N sensors
+̃⋅
+Dimensionless form of a variable
+̂𝐮
+Approximation of ̃𝐮(Numerical or PINN)
+𝜃
+NN’s trainable parameters (weights and biases)
+(𝜃)
+NN’s total loss function
+𝑓(𝜃)
+Loss function term corresponding to the PDE residual(s)
+𝑖𝑐(𝜃)
+Loss function term corresponding to the initial condition residual
+𝑏𝑐(𝜃)
+Loss function term corresponding to the boundary conditions residuals
+𝑠𝑒𝑛𝑠(𝜃)
+Loss function term corresponding to the sum of partial derivatives of all residuals w.r.t. all the
+parameters of interest
+𝑐
+Species concentration (𝑘𝑔∕𝑚3)
+𝐯
+Velocity Field (𝑚∕𝑠)
+𝑝
+Pressure (𝑃𝑎)
+𝐷
+Diffusion coefficient (𝑚2∕𝑠)
+𝑘
+Reaction rate constant of an n-th order reaction ((𝑘𝑔∕𝑚3)1−𝑛⋅𝑠−1)
+𝑈
+Fluid’s mean inlet velocity (𝑚∕𝑠)
+𝜌
+Fluid density (𝑘𝑔∕𝑚3)
+𝜇
+Fluid viscosity (𝑃𝑎⋅𝑠)
+𝜏
+Characteristic time scale (𝑠)
+𝑃𝑒
+Péclet number
+𝐷𝑎
+Damköhler number
+𝑅𝑒
+Reynolds number
+1. Introduction
+Distributed-parameter systems, based on partial differential equations (PDEs), typically describing spatiotemporal
+variations, represent a wide range of physical systems and phenomena in science and engineering. These PDE-based
+models typically involve multiple unknown parameters, often corresponding to physical properties of the system, whose
+accurate identification from available data is essential for reliable prediction and effective system design. In general, the
+accuracy of parameter estimation improves as more data is collected. Nevertheless, acquiring large datasets is often
+expensive or impractical. This motivates the development of systematic methods for selecting sensor locations that
+maximize the information gained about the unknown parameters under constraints on the number of sensors.
+Most research on Optimal Sensor Placement has focused on state estimation, while comparatively fewer studies
+have addressed parameter estimation directly (Alaña and Theodoropoulos, 2011, 2012). Existing approaches typically
+rely on scalar measures derived from the Fisher Information Matrix (FIM), which captures the sensitivity of observable
+quantities with respect to parameters. For example, the modified E-criterion (Mehra, 1974; Walter and Pronzato, 1990;
+Nahor et al., 2003) minimizes the ratio of the largest to the smallest eigenvalue of the FIM, while Heredia-Zavoni and
+Esteva (1998) proposed minimizing the expected Bayesian loss involving the trace of the inverse FIM. The widely used
+D-optimality criterion (Qureshi et al., 1980; Vande Wouwer et al., 2000) maximizes the determinant of the FIM (or
+Venianakis et al: Preprint submitted to Elsevier
+Page 2 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+the Gram determinant), and a closely related approach minimizes the information entropy (Papadimitriou et al., 2000),
+reflecting the uncertainty of the parameter under a given sensor configuration.
+In large-scale distributed systems, parameter estimation can be facilitated by combining model reduction with
+optimal sensor placement. In Alonso et al. (2004), the proposed workflow is to construct a Proper Orthogonal
+Decomposition (POD) reduced-order model that captures the dominant spatio-temporal dynamics and then determine
+measurement locations by optimizing an observability-based criterion on this reduced model. Alaña and Theodor-
+opoulos (2011) further streamline this process by proposing sensor placement directly at the extrema of the dominant
+POD modes, an approach that circumvents costly sensitivity-matrix computations while still providing near-optimal
+parameter estimation performance.
+Once sensor locations are defined, the next step is parameter estimation. Optimization-based methods, such as
+Maximum Likelihood Estimation (MLE) (Myung, 2003), remain the most established, with Least Squares as the most
+common implementation under the assumption of Gaussian measurement noise (Biegler et al., 1986; Englezos and
+Kalogerakis, 2000). While effective, these methods typically require repeated model evaluations, resulting in high
+computational cost, particularly when gradients with respect to parameters must also be computed. Moreover, the
+accuracy of estimated parameters may degrade under sparse or noisy data (Kravaris et al., 2013). Bayesian methods
+offer an alternative by incorporating prior information and providing full uncertainty quantification through posterior
+distributions (Coleman and Block, 2006; Hermanto et al., 2008; Kalyanaraman et al., 2015). Nevertheless, Bayesian
+inference often relies on Markov Chain Monte Carlo (MCMC) sampling (Hastings, 1970), which requires extensive
+forward model evaluations and can be sensitive to prior selection in data-limited settings (Lenk and Orme, 2009).
+Recent advances in machine learning have substantially enhanced the field of parameter estimation by introducing
+data-driven methodologies capable of capturing complex relationships between model parameters and observed
+data. Traditional statistical approaches, such as maximum likelihood estimation and Bayesian inference, have been
+extended through modern techniques, such as variational inference (Blei et al., 2017) and neural density estimation
+(Papamakarios et al., 2021) that enable efficient and accurate parameter recovery, even in complex or high-dimensional
+settings. Furthermore, deep neural architectures, coupled with gradient-based optimization algorithms, including
+stochastic gradient descent and its adaptive variants (Bottou, 2010), facilitate scalable and robust inference across
+a wide range of applications.
+Hybrid modeling frameworks that integrate data with first-principles formulations have merged as powerful tools
+for scientific computing. Among these, Physics-Informed Neural Networks (PINNs) (Raissi et al., 2019) exploit the
+expressivity of deep neural networks (Hornik et al., 1989) while embedding governing PDEs as soft constraints. PINNs
+have proven particularly useful in scenarios where traditional solvers face challenges: complex geometries (since PINNs
+are mesh-free), high-dimensional problems (Hu et al., 2024). and systems with incomplete physics that require data-
+driven enhancement (Raissi et al., 2020). Importantly, PINNs enable parameter estimation by directly incorporating
+unknown parameters into the training process, making them robust even under sparse or noisy observations, which is
+of particular relevance to this work.
+Numerous studies have applied PINNs to inverse problems in chemical engineering and related fields. Examples
+include the estimation of thermal properties in additive manufacturing (Liao et al., 2023), thermal diffusivity in two-
+phase flows (Cai et al., 2021), kinetic parameters in catalytic reactors (Ngo and Lim, 2021; Huang et al., 2025), and
+transport coefficients in porous media (Berardi et al., 2025). PINNs have also been used in fluid mechanics, such as
+inferring density fields in high-speed flows (Mao et al., 2020) and thrombus properties in arterial flows (Yin et al.,
+2021).
+Despite these successes, most studies assume dense observations across the spatial domain, often generated from
+numerical simulations, overlooking the constraints of real-world sensor settings. For instance, Ngo and Lim (2021)
+observed that parameter estimation accuracy strongly depends on the spatial region from which data is collected,
+but this conclusion was based on manual experimentation rather than systematic sensor placement strategies. The
+integration of optimal sensor placement with PINNs remains relatively unexplored. A few attempts have been made:
+Forootani et al. (2024) proposed a greedy sampling approach (GS-PINN), which selects informative samples via
+Proper Orthogonal Decomposition (POD) and the Discrete Empirical Interpolation (DEIM) method (Chaturantabut
+and Sorensen, 2010), but their approach requires access to full spatio-temporal data and selects time-varying sensor
+positions, limiting practical use. In Chang et al. (2025), they introduce a sensitivity-based sampling method (SBS) that
+adapts sensor placement based on gradients of the PINN loss with respect to collocation points. However, this method
+was designed for state reconstruction problems in process control, not parameter estimation, as it does not account for
+sensitivities with respect to the parameters.
+Venianakis et al: Preprint submitted to Elsevier
+Page 3 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+In this work, we address this gap by proposing a PINN framework that integrates D-optimal sensor placement
+directly into the parameter estimation process. Our approach relies on two complementary neural network models.
+The first model incorporates the parameters of interest as inputs, enabling the computation of sensitivity functions via
+automatic differentiation (AD). These sensitivities are used to select optimal sensor locations under the D-optimality
+criterion. The second, is a standard PINN model trained on data obtained from these optimal locations to perform
+parameter estimation and state reconstruction.
+We demonstrate our method on two illustrative case studies involving reaction-diffusion-advection systems of
+increased complexity: a one-dimensional steady-state problem, and a two-dimensional transient problem. In each case,
+the goal is to estimate important dimensionless parameters for the system such as the Péclet number and Damköhler
+number and to compare their accuracy against estimations made from sub-optimal sensor locations.
+The paper is organised as follows: Section 2 presents the formulation of our method, including sensor selection
+and PINN training. Section 3 describes the case studies and results. Finally, Section 4 discusses the main conclusions
+and the relevant future directions.
+2. Methods
+2.1. Selection of Optimal Sensor Location for Parameter Estimation
+In this work, we adopt the D-optimality criterion, widely used for sensor placement due to its geometric inter-
+pretability and invariance to parameter rescaling (Franceschini and Macchietto, 2008; Bard, 1974). For implementation,
+we follow the method of Vande Wouwer et al. (2000), chosen for its simplicity. Alternative optimality criteria can also
+be applied as discussed in (Alaña and Theodoropoulos, 2011).
+Consider a system with states 𝐮(𝐱, 𝑡) described by the governing PDE:
+𝜕𝐮
+𝜕𝑡+ [𝐮; 𝜆] = 0,
+𝐱∈Ω,
+𝑡≥0,
+(1)
+subject to the following initial and boundary conditions:
+𝐮(0, 𝐱) = 𝐠(𝐱),
+𝐱∈Ω,
+(2)
+[𝐮] = 0,
+𝐱∈𝜕Ω,
+𝑡≥0,
+(3)
+where [⋅] is a differential operator, and [⋅] a boundary operator, 𝜆= [𝜆1, … , 𝜆𝑃
+] are the 𝑝unknown parameters,
+and Ω the spatial domain.
+For state measurements at 𝑁sensor locations 𝐱1, … , 𝐱𝑁we define sensitivity functions as:
+𝑠𝜆𝑗(𝐱𝑖, 𝑡) = 𝜕𝐮
+𝜕𝜆𝑗
+(𝐱𝑖, 𝑡), 𝑖= 1, … , 𝑁, 𝑗= 1, … , 𝑃,
+(4)
+and collect them into a vector 𝑀:
+𝑀(𝑥1, … , 𝑥𝑁, 𝑡) = [𝑠𝜆1(𝐱1, 𝑡) … 𝑠𝜆𝑃(𝐱1, 𝑡) … 𝑠𝜆1(𝐱𝑁, 𝑡) … 𝑠𝜆𝑃(𝐱𝑁, 𝑡)]𝑇.
+(5)
+The Fisher Information Matrix, 𝐹, is then:
+𝐹(𝐱1, … , 𝐱𝑁) = ∫
+𝑇
+0
+𝑀(𝑥1, … , 𝑥𝑁, 𝑡)𝑀𝑇(𝑥1, … , 𝑥𝑁, 𝑡) 𝑑𝑡,
+(6)
+where [0, 𝑇] is the observation horizon. The matrix 𝐹is positive semi-definite with its diagonal entries quantifying
+sensor sensitivity to parameters, while its off-diagonal entries capture correlations between the corresponding
+parameters.
+The optimal sensor locations 𝐱∗
+1, … , 𝐱∗
+𝑁maximize the Gram determinant (Courant and Hilbert, 1989):
+Venianakis et al: Preprint submitted to Elsevier
+Page 4 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+𝐱∗
+1, … , 𝐱∗
+𝑁= arg max
+𝐱1,…,𝐱𝑁det [𝐹(𝐱1, … , 𝐱𝑁)] .
+(7)
+Maximizing det(𝐹) encourages both large sensitivities (via diagonal dominance) and independence (via small
+off-diagonal terms).
+For steady-state problems the FIM reduces to:
+𝐹(𝐱1, … , 𝐱𝑁) = 𝑀(𝑥1, … , 𝑥𝑁, 𝑡)𝑀𝑇(𝑥1, … , 𝑥𝑁, 𝑡),
+(8)
+which is rank-1 with zero determinant, rendering D-optimality unusable. For these cases, we instead select optimal
+sensor locations by maximizing the FIM trace:
+𝐱∗
+1, … , 𝐱∗
+𝑁= arg max
+𝐱1,…,𝐱𝑁tr [𝐹(𝐱1, … , 𝐱𝑁)] .
+(9)
+Our PINN framework as well as the calculation of sensitivities using PINNs is discussed next.
+2.2. Physics Informed Neural Networks: General Framework
+PINNs are fully connected neural networks that incorporate PDE constraints into their loss function (Wang et al.
+(2023)). They address two problem types:
+(a) Forward Problems: approximating PDE solutions with known parameters and boundary/initial conditions,
+without experimental data.
+(b) Inverse Problems: estimating unknown parameters from experimental data, while simultaneously approximating
+the PDE solution.
+For the forward problem, the system state 𝐮(𝑡, 𝐱) governed by Eqs. (1)–(3) is approximated by a neural network
+̂𝐮(𝑡, 𝐱, 𝜃), where 𝜃denotes trainable weights and biases. Training minimizes a composite loss function, :
+(𝜃) = 𝑓(𝜃) + 𝑖𝑐(𝜃) + 𝑏𝑐(𝜃),
+(10)
+with terms enforcing PDE residuals (𝑓), initial conditions (𝑖𝑐), and boundary conditions (𝑏𝑐). Automatic
+differentiation computes derivatives of the system state required for residual evaluation (PDE and boundary conditions
+residuals).
+For inverse problems, observational data {𝐮𝑖
+𝑑𝑎𝑡𝑎
+}𝑁𝑑𝑎𝑡𝑎
+𝑖=1
+at spatio-temporal coordinates {𝑡𝑖
+𝑑𝑎𝑡𝑎, 𝐱𝑖
+𝑑𝑎𝑡𝑎
+}𝑁𝑑𝑎𝑡𝑎
+𝑖=1
+introduce
+an additional loss term:
+𝑑𝑎𝑡𝑎(𝜃) =
+1
+𝑁𝑑𝑎𝑡𝑎
+𝑁𝑑𝑎𝑡𝑎
+∑
+𝑖=1
+|||̂𝐮(𝑡𝑖
+𝑑𝑎𝑡𝑎, 𝐱𝑖
+𝑑𝑎𝑡𝑎) −𝐮𝑖
+𝑑𝑎𝑡𝑎
+|||
+2 ,
+(11)
+leading to the total loss function:
+(𝜃) = 𝑖𝑐(𝜃) + 𝑏𝑐(𝜃) + 𝑓(𝜃) + 𝑑𝑎𝑡𝑎(𝜃).
+(12)
+In this case, PINNs are optimized with respect to both 𝜽and unknown parameters 𝝀.
+Venianakis et al: Preprint submitted to Elsevier
+Page 5 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+…
+…
+…
+Figure 1: Schematic representation of the methodology for computing sensitivity derivatives using PINNs. The neural
+network admits as input the spatio-temporal coordinates (𝐱, 𝑡) along with the parameters of interest, 𝜆. The loss function
+to be minimized is constructed from the system residuals (PDE and boundary/initial conditions) and their derivatives
+with respect to the parameters, 𝜆.
+2.3. Sensitivity functions with PINNs
+As described in Section 2.1, optimal sensor placement requires sensitivity functions (Eq. (4)). Following Hanna
+et al. (2024), the PINN input is extended to include both spatio-temporal coordinates and parameters 𝜆, enabling
+AD-based computation of 𝜕̂𝐮∕𝜕𝜆𝑗. Additional loss terms enforce accurate parameter sensitivities calculation:
+(𝜃) = 𝑖𝑐(𝜃) + 𝑏𝑐(𝜃) + 𝑓(𝜃) + 𝑠𝑒𝑛𝑠,𝑖𝑐(𝜃) + 𝑠𝑒𝑛𝑠,𝑏𝑐(𝜃) + 𝑠𝑒𝑛𝑠,𝑓(𝜃),
+(13)
+where:
+𝑠𝑒𝑛𝑠,𝑖𝑐(𝜃) =
+1
+𝑁𝑖𝑐
+𝑃
+∑
+𝑗=1
+𝑁𝑖𝑐
+∑
+𝑖=1
+|||||
+𝜕𝑟𝑖𝑐
+𝜕𝜆𝑗
+(0, 𝐱𝑖
+𝑖𝑐, 𝜆, 𝜃)
+|||||
+2
+,
+(14)
+𝑠𝑒𝑛𝑠,𝑏𝑐(𝜃) =
+1
+𝑁𝑏𝑐
+𝑃
+∑
+𝑗=1
+𝑁𝑏𝑐
+∑
+𝑖=1
+|||||
+𝜕𝑟𝑏𝑐
+𝜕𝜆𝑗
+(𝑡𝑖
+𝑏𝑐, 𝐱𝑖
+𝑏𝑐, 𝜆, 𝜃)
+|||||
+2
+,
+(15)
+𝑠𝑒𝑛𝑠,𝑓(𝜃) =
+1
+𝑁𝑓
+𝑃
+∑
+𝑗=1
+𝑁𝑓
+∑
+𝑖=1
+|||||
+𝜕𝑟𝑓
+𝜕𝜆𝑗
+(𝑡𝑖
+𝑓, 𝐱𝑖
+𝑓, 𝜆, 𝜃)
+|||||
+2
+.
+(16)
+Each 𝑠𝑒𝑛𝑠,⋅term penalizes derivatives of residuals with respect to 𝜆.
+Training is performed with prior parameter estimates, 𝜆𝑝𝑟𝑖𝑜𝑟. The resulting sensitivity functions are then used
+to construct the FIM and determine optimal sensor locations. Here we assume that their qualitative structure (e.g.,
+locations of maxima) remains the same when evaluated at 𝜆𝑝𝑟𝑖𝑜𝑟compared to the true 𝜆. When the computed optima
+differ substantially, we use an iterative approach. Fig. 1 illustrates the process.
+Once sensor placement is decided, state data are collected from the corresponding locations, and the inverse
+problem is solved using PINNs. To accelerate training, we apply transfer learning (Zhuang et al., 2021): the inverse
+PINN is initialized from a pretrained forward PINN at prior parameter values, 𝜆𝑝𝑟𝑖𝑜𝑟. A lightweight fine-tuning strategy
+is adopted here (Goswami et al., 2020), which retrains only the last hidden layers while freezing the earlier ones,
+reducing both the number of epochs and the per-iteration cost.
+Finally, to improve PINN training efficiency and stability we incorporate techniques including:
+Venianakis et al: Preprint submitted to Elsevier
+Page 6 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+• Dynamic loss weighting: Following Li and Feng (2022), loss weights 𝑤𝑘multiplying each loss term in the loss
+function are adaptively updated to balance gradients across different terms, preventing dominance by any single
+component (see e.g., Eq. (18) and Eq. (31) below).
+• Residual-based adaptive refinement (RAR-D): Collocation points are adaptively chosen according to the PDE
+residual (Wu et al., 2023), focusing training on regions with higher errors. We extend this strategy to boundary
+and initial condition sampling (collocation) points as well.
+• Non-dimensionalization: PDEs are solved in dimensionless form, preventing vanishing/exploding gradients
+and ensuring balanced loss contributions across variables (Wang et al., 2023).
+3. Case Studies
+This section presents two illustrative examples that demonstate our PINNs-based methodology and also showcase
+how the optimal sensor placement criterion enhances parameter inference accuracy. All PINN models are implemented
+in Python using the PyTorch® library (Paszke et al., 2019) and trained on an NVIDIA® RTX A4000 GPU computer.
+3.1. 1D Steady State Reaction–Advection–Diffusion equation
+3.1.1. Problem Set-Up
+The first simpler example considers a steady state, one-dimensional reaction-advection-diffusion equation, which
+in dimensionless form is given by the following PDE and boundary conditions:
+𝑃𝑒𝑑𝑐
+𝑑𝑥= 𝑑2𝑐
+𝑑𝑥2 −𝐷𝑎𝑐2, 𝑥∈[0, 10] ,
+𝑐(0) = 1,
+𝑑𝑐
+𝑑𝑥
+||||𝑥=𝐿
+= 0,
+(17)
+where 𝑃𝑒and 𝐷𝑎denote the Péclet number and the Damköhler number, respectively. In this example, 𝐷𝑎is fixed
+(𝐷𝑎= 1.0), and the goal is to estimate the unknown value of 𝑃𝑒with a single, optimally placed sensor.
+3.1.2. PINN Framework
+To compute sensitivities for the FIM construction, we employ a Sensitivity PINN model with two inputs (𝑥and
+𝑃𝑒), four hidden layers of 30 neurons each, and hyperbolic tangent activation. This network structure is chosen to
+balance computational efficiency with accuracy. The loss function is
+(𝜃) = 𝑤𝑓𝑓(𝜃) + 𝑤𝑏𝑐1𝑏𝑐1(𝜃) + 𝑤𝑏𝑐2𝑏𝑐2(𝜃) + 𝑤𝑠𝑒𝑛𝑠
+(𝑠𝑒𝑛𝑠,𝑓(𝜃) + 𝑠𝑒𝑛𝑠,𝑏𝑐1(𝜃) + 𝑠𝑒𝑛𝑠,𝑏𝑐2(𝜃)) ,
+(18)
+where 𝑓(𝜃), 𝑏𝑐1(𝜃), 𝑏𝑐2(𝜃) correspond to the PDE and boundary condition residuals. The terms 𝑠𝑒𝑛𝑠,𝑓(𝜃),
+𝑠𝑒𝑛𝑠,𝑏𝑐1(𝜃) and 𝑠𝑒𝑛𝑠,𝑏𝑐2(𝜃) represent the corresponding derivatives with respect to 𝑃𝑒. Analytical expressions are
+provided in Section I of the Supplementary Material. We sample 800 collocation points on an equispaced grid over the
+spatial domain providing sufficient resolution for our PINN model. The loss weights are dynamically updated following
+the gradient ascent scheme of Li and Feng (2022). Training is performed with the Adam optimizer (10−3 learning rate)
+for 2500 epochs. Since the true value of 𝑃𝑒is to be estimated (unknown), the model is initialized with an a priori
+estimate, 𝑃𝑒= 0.1. As noted in Section 2.3, we assume that the maxima of the Gram determinant (or the FIM trace in
+this example) are approximately invariant to whether they are computed at the estimated or true parameter values. This
+is equivalent to having a "reasonable" prior estimate. An iterative procedure can be employed if the computed optima
+vary significantly. For a single-sensor placement problem, the FIM trace reduces to the squared sensitivity of 𝑐with
+respect to 𝑃𝑒.
+𝑡𝑟[𝐹(𝑥)] =
+[ 𝜕𝑐
+𝜕𝑃𝑒(𝑥)
+]2
+, 𝑥∈[0, 10] .
+(19)
+Fig. 2 shows the FIM trace obtained from the PINN alongside the one obtained by numerically soving the PDE
+(equation 17) The results confirm that PINNs accurately compute sensitivity derivatives via automatic differentiation.
+Here, it is easy to locate graphically the trace maximum at 𝑥∗= 1.81.
+Venianakis et al: Preprint submitted to Elsevier
+Page 7 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+Table 1
+Hyperparameters of Sensitivity PINNS and Inference PINNs.
+PINN Hyperparameter
+Sensitivity PINN
+Inference PINN
+Hidden layers
+4
+4
+Neurons per layer
+30
+30
+Inputs
+2 (𝑥, 𝑃𝑒)
+1 (𝑥)
+Activation function
+tanh()
+tanh()
+Optimizer
+Adam
+Adam
+Iterations
+2500
+5000
+Collocation points
+800
+800
+Dynamic weight strategy
+Yes
+Yes
+RAR-D
+No
+No
+Table 2
+Estimated 𝑃𝑒values and relative error for optimal versus suboptimal sensor placement.
+Sensor
+Estimated 𝑃𝑒(true: 1.000)
+Relative Error (%)
+Optimal (𝑥∗= 1.81)
+0.998
+0.20
+Outlet (𝑥∗= 10.0)
+0.153
+84.7
+Consequently, pseudo-experimental data are generated numerically using the true value of 𝑃𝑒= 1.0 at two
+locations: the optimal location 𝑥∗= 1.81, and a suboptimal point at the outlet, 𝑥∗= 10.0, which is an intuitive
+choice for placing the sensor. The inference PINN has the same architecture but accepts only 𝑥as input, with 𝑃𝑒
+treated as a trainable parameter. The loss function now reads:
+(𝜃) = 𝑤𝑓𝑓(𝜃) + 𝑤𝑏𝑐1𝑏𝑐1(𝜃) + 𝑤𝑏𝑐2𝑏𝑐2(𝜃) + 𝑤𝑑𝑎𝑡𝑎𝑑𝑎𝑡𝑎(𝜃),
+(20)
+with the data term being:
+𝑑𝑎𝑡𝑎(𝜃) =
+1
+𝑁𝑑𝑎𝑡𝑎
+𝑁𝑑𝑎𝑡𝑎
+∑
+𝑖=1
+|||̂𝑐(𝑥𝑖
+𝑑𝑎𝑡𝑎) −𝑐𝑖
+𝑑𝑎𝑡𝑎
+|||
+2 .
+(21)
+Since a single sensor is used, 𝑁𝑑𝑎𝑡𝑎= 1. The model is trained with the Adam optimizer for 5000 iterations. The
+hyperparameters for the Sensitivity and Inference PINNs applied to the 1D steady-state reaction-advection-diffusion
+equation are summarized in Table 1.
+Fig. 3 shows the inferred 𝑃𝑒during training for data from the optimal and outlet locations. The results highlight
+the crucial role of sensor placement: the PINN converges closer to the true 𝑃𝑒, when data are taken at the optimal
+location. At the outlet, the parameter fails to converge for the number of epochs used. Final estimates and relative
+errors are listed in Table 2.
+After identifying the parameter, we recompute the optimal sensor location using the true 𝑃𝑒. As shown in Fig. 4, the
+maximum shifts slightly to 𝑥∗= 2.32, very close to the original 𝑥∗= 1.81 supporting the assumption that sensitivity
+maxima remain nearly invariant when evaluated with initial parameter estimates.
+3.2. 2D Transient Reaction–Advection–Diffusion, Flow Around a Fixed Obstacle
+The 1D example demonstrates how our PINN-based methodology guides sensor placement and enables accurate
+estimation of a single parameter. To further test the robustness of the framework, we now consider a more complex
+2D system that combines nonlinear reaction, advection and diffusion in the presence of an obstacle. This example
+introduces additional challenges: heterogeneity due to flow recirculation, transient behavior, as well as the simultaneous
+inference of two parameters.
+Venianakis et al: Preprint submitted to Elsevier
+Page 8 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+In particular, we address the simultaneous estimation of the dimensionless parameters 𝑃𝑒and 𝐷𝑎in a two-
+dimensional, time-dependent reaction-advection-diffusion system. A reactive species is transported by a steady flow
+past a fixed cylindrical obstacle.
+3.2.1. Problem Set-Up
+We consider a 2D rectangular channel of dimensions 𝐿× 𝐻(𝐿= 0.24 m and 𝐻= 0.14 m), with flow from left to
+right bounded by impermeable walls at the top and bottom. A fixed cylindrical obstacle of radius 𝑅= 0.01 m is placed
+inside the channel perpendicular to the flow direction, at {𝑥0, 𝑦0
+} = {0.09, 0.07} m. The fluid is incompressible,
+Newtonian, and the flow is considered to be at steady-state. Its velocity, 𝐯, and pressure, 𝑝, fields satisfy the Navier-
+Stokes equations (neglecting gravity):
+𝜌
+(𝜕𝐯
+𝜕𝑡+ 𝐯⋅∇𝐯
+)
+= −∇𝑝+ 𝜇∇2𝐯,
+(22)
+subject to the incompressibility constraint:
+∇⋅𝐯= 0.
+(23)
+where 𝜌, 𝜇denote the density and dynamic viscosity, respectively.
+At the inlet, a parabolic velocity profile is imposed for the horizontal component of velocity, 𝑣𝑥:
+𝑣𝑥(0, 𝑦) = 6𝑈
+[( 𝑦
+𝐻
+)
+−
+( 𝑦
+𝐻
+)2]
+.
+(24)
+with no-slip conditions at the walls (including the obstacle surface) and zero pressure at the outlet. The fluid properties
+are set to 𝜌= 1000 [𝑘𝑔∕𝑚3], 𝜇= 0.001 [𝑃𝑎⋅𝑠] and average inlet velocity 𝑈= 0.00125 [𝑚∕𝑠].
+Given the steady flow 𝐯, the concentration 𝑐(𝑥, 𝑦, 𝑡) of a reactive species evolves according to:
+𝜕𝑐
+𝜕𝑡+ 𝐯⋅∇𝑐= 𝐷∇2𝑐−𝑘𝑐2, (𝑥, 𝑦) ∈[0, 𝐿] × [0, 𝐻], 𝑡> 0,
+(25)
+where 𝐷is the diffusion coefficient and 𝑘the reaction rate constant. The initial condition is:
+𝑐(𝑥, 𝑦, 0) = 0, (𝑥, 𝑦) ∈(0, 𝐿] × [0, 𝐻].
+(26)
+The inlet concentration profile is set to change linearly with 𝑦:
+𝑐(0, 𝑦, 𝑡) = 𝑦
+𝐻+ 0.3
+[ 𝑘𝑔
+𝑚3
+]
+, 𝑦∈[0, 𝐻], 𝑡> 0.
+(27)
+Zero-flux boundary conditions are applied at the impenetrable walls and the (long) outlet. A schematic of the setup
+is shown in Fig. 5.
+By selecting as characteristic scales, 𝐿, 𝑈, and 𝑐0 = 1 kg/m3, we derive the following dimensionless variables:
+̃𝑥= 𝑥
+𝐿, ̃𝑦= 𝑦
+𝐿, ̃𝐯= 𝐯
+𝑈, ̃𝑝=
+𝑝
+𝜌𝑈2 and ̃𝑐= 𝑐
+𝑐0
+.
+Typically, time is scaled using
+̃𝑡= 𝑡𝐷
+𝐿2 .
+However, in this problem, the diffusion coefficient 𝐷is unknown and will be determined implicitly through the
+dimensionless parameters. Therefore, it cannot serve as the basis for non-dimensionalizing time. Instead, we define
+Venianakis et al: Preprint submitted to Elsevier
+Page 9 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+a characteristic time scale, 𝜏, chosen to be of the same order of magnitude as 𝐿2∕𝐷0, where 𝐷0 is an initial estimate
+of the diffusion coefficient. Numerical tests show that setting 𝜏= 4000 s yields good results. The dimensionless time
+variable is therefore defined as:
+̃𝑡= 𝑡
+𝜏.
+Thus, in dimensionless form, the governing equations are:
+̃𝐯⋅∇̃𝐱̃𝐯= −∇̃𝐱̃𝑝+ 1
+𝑅𝑒∇2
+̃𝐱̃𝐯,
+(28)
+∇̃𝐱⋅̃𝐯= 0,
+(29)
+𝑃𝑒𝐿
+𝜏𝑈
+𝜕̃𝑐
+𝜕̃𝑡+ 𝑃𝑒̃𝐯⋅∇̃𝐱̃𝑐= ∇2
+̃𝐱̃𝑐−𝐷𝑎̃𝑐2,
+̃𝐱∈[0, 1] × [0, 𝐻
+𝐿],
+̃𝑡≥0,
+(30)
+where 𝑅𝑒= 𝜌𝑈𝐿
+𝜇, 𝑃𝑒= 𝑈𝐿
+𝐷and 𝐷𝑎= 𝑘𝑐0𝐿2
+𝐷
+are the Reynolds, Péclet and Damköhler numbers, respectively. From
+this point forward, tildes are omitted for convenience.
+3.2.2. PINN Set-Up
+Following the approach of Laubscher (2021), we construct and train separate PINN models: one for the fluid flow
+PDEs (Navier-Stokes, Eqs. (28) and (29)) and another for the species transport PDE (Eq. (30)). Because of the one-way
+coupling (fluid flow influences mass transport but not vice versa for a dilute system) and since no flow-field parameter
+inference is required, we first train the fluid flow PINN using the fixed parameters and boundary conditions described
+earlier. Its output is then used to compute the residual of Eq. (30), which in turn guides the training of two distinct
+mass transport PINNs: one for computing sensitivity derivatives and another for parameter estimation.
+Fluid Flow PINN
+The fluid flow PINN admits two inputs, 𝑥and 𝑦, and produces: ̂𝐯, and ̂𝑝. The ̂ symbol is used to denote the PINN
+approximation. The architecture is a fully connected neural network with 8 hidden layers of 60 neurons each, using
+hyperbolic tangent activation functions. The loss function minimized during training is:
+(𝜃) = 𝑤𝑖𝑛𝑖𝑛(𝜃) + 𝑤𝑜𝑢𝑡𝑜𝑢𝑡(𝜃) + 𝑤𝑤𝑎𝑙𝑙,𝑢𝑝𝑤𝑎𝑙𝑙,𝑢𝑝(𝜃) + 𝑤𝑤𝑎𝑙𝑙,𝑙𝑜𝑤𝑤𝑎𝑙𝑙,𝑙𝑜𝑤(𝜃)
++ 𝑤𝑤𝑎𝑙𝑙,𝑜𝑏𝑠𝑡.𝑤𝑎𝑙𝑙,𝑜𝑏𝑠𝑡.(𝜃) + 𝑤𝑛𝑠𝑛𝑠(𝜃) + 𝑤𝑐𝑜𝑛𝑡.𝑐𝑜𝑛𝑡.(𝜃),
+(31)
+where 𝑛𝑠(𝜃) and 𝑐𝑜𝑛𝑡.(𝜃) correspond to the residuals of Eqs. (28) and (29), and 𝑖𝑛(𝜃), 𝑜𝑢𝑡(𝜃), 𝑤𝑎𝑙𝑙,𝑢𝑝(𝜃), 𝑤𝑎𝑙𝑙,𝑙𝑜𝑤,
+and 𝑤𝑎𝑙𝑙,𝑜𝑏𝑠𝑡. correspond to the inlet, outlet and wall boundary condition residuals, respectively. Analytical expressions
+for each loss term are provided in Section II.1 of the Supplementary Material. The PINN model is trained for 35,000
+iterations with the Adam optimizer, followed by 2,000 iterations with L-BFGS for improved accuracy. We also
+employ RAR-D (adaptive collocation point sampling) and an adaptive weight strategy (see Section 2.3). Complete
+hyperparameter settings are listed in Table 3. Training requires approximately 95 minutes. The magnitude of the
+predicted flow field, |̂𝐯| =
+√
+̂𝑣2
+𝑥+ ̂𝑣2
+𝑦, is visualized and compared with the corresponding numerical solution in Fig. 6
+showing the high accuracy of the fluid flow PINN model.
+Mass-Transport Sensitivity PINN
+We next construct a PINN model to compute the sensitivity of species concentration with respect to the
+dimensionless parameters 𝑃𝑒and 𝐷𝑎. This model admits five inputs: 𝑥, 𝑦, 𝑡, 𝑃𝑒, and 𝐷𝑎, and outputs ̂𝑐. Its architecture
+consists of 5 hidden layers with 100 neurons each and tanh activations. The loss function is:
+Venianakis et al: Preprint submitted to Elsevier
+Page 10 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+Table 3
+Hyperparameters for different PINN architectures and training settings in the 2D reaction-diffusion-advection problem.
+PINN hyperparameter
+Fluid Flow PINN
+Mass Transport Sensitivity PINN
+Mass
+Transport
+Inference
+PINN
+Hidden layers
+8
+5
+5
+Neurons per layer
+60
+100
+100
+Inputs
+2 (𝑥, 𝑦)
+5 (𝑥, 𝑦, 𝑡, 𝑃𝑒, 𝐷𝑎)
+3 (𝑥, 𝑦, 𝑡)
+Outputs
+̂𝑣, ̂𝑝)
+̂𝑐
+̂𝑐
+Activation function
+tanh
+tanh
+tan
+Optimizer
+Adam and L-BFGS
+Adam and L-BFGS
+L-BFGS
+Optimizer iterations
+35000 (Adam) and 2000 (L-BFGS)
+35000 (Adam) and 1000 (L-BFGS)
+2000
+Number of initially sampled training
+points
+𝑁𝑓= 40000 (collocation)
+𝑁𝑖𝑛= 1500 (inlet)
+𝑁𝑜𝑢𝑡= 1500 (outlet)
+𝑁𝑤𝑎𝑙𝑙= 500 (channel wall)
+𝑁𝑜𝑏𝑠𝑡= 100 (obstacle wall)
+𝑁𝑓= 55000 (collocation)
+𝑁𝑖𝑛= 7000 (inlet)
+𝑁𝑜𝑢𝑡= 3000 (outlet)
+𝑁𝑤𝑎𝑙𝑙= 4000 (channel wall)
+𝑁𝑜𝑏𝑠𝑡= 3000 (obstacle wall)
+𝑁𝑖𝑛𝑖𝑡= 15000 (initial condition)
+𝑁𝑓= 75000 (collocation)
+𝑁𝑖𝑛= 8000 (inlet)
+𝑁𝑜𝑢𝑡= 8000 (outlet)
+𝑁𝑤𝑎𝑙𝑙= 8000 (channel wall)
+𝑁𝑜𝑏𝑠𝑡= 3000 (obstacle wall)
+𝑁𝑖𝑛𝑖𝑡= 15000 (initial condition)
+Dynamic Weight Strategy
+Yes
+Yes
+No
+RAR-D
+Yes
+Yes
+Yes
+Frequency of sampling new training
+points
+Every 2000 (Adam) training itera-
+tions
+Every 2000 (Adam) training iterations
+Every 100 (L-BFGS) training it-
+erations
+Number of added training points with
+RAR-D
+300 collocation points
+20 inlet points
+30 wall points
+1000 collocation points
+300 inlet points
+300 wall points
+800 initial condition points
+750 collocation points
+50 inlet points
+50 wall points
+150 initial points
+(𝜃) = 𝑤𝑓𝑓(𝜃) + 𝑤𝑖𝑛𝑖𝑡𝑖𝑛𝑖𝑡(𝜃) + 𝑤𝑖𝑛𝑖𝑛(𝜃) + 𝑤𝑜𝑢𝑡𝑜𝑢𝑡(𝜃) + 𝑤𝑤𝑎𝑙𝑙,𝑢𝑝𝑤𝑎𝑙𝑙,𝑢𝑝(𝜃)
++ 𝑤𝑤𝑎𝑙𝑙,𝑙𝑜𝑤𝑤𝑎𝑙𝑙,𝑙𝑜𝑤(𝜃) + 𝑤𝑜𝑏𝑠𝑡𝑜𝑏𝑠𝑡(𝜃) + 𝑤sens,𝑃𝑒sens,𝑃𝑒+ 𝑤sens,𝐷𝑎sens,𝐷𝑎,
+(32)
+where 𝑓(𝜃) is the residual of Eq. (30), 𝑖𝑛𝑖𝑡(𝜃) enforces the initial condition, 𝑖𝑛(𝜃), 𝑜𝑢𝑡(𝜃), 𝑤𝑎𝑙𝑙,𝑢𝑝(𝜃), 𝑤𝑎𝑙𝑙,𝑙𝑜𝑤(𝜃),
+𝑜𝑏𝑠𝑡(𝜃) correspond to boundary condition residuals for the species concentration at the inlet, outlet and walls of the
+channel. The sensitivity terms sens,𝑃𝑒, sens,𝐷𝑎are sums of the derivatives of all residuals with respect to 𝑃𝑒and
+𝐷𝑎, respectively. Details are given in Section II.2 of the Supplementary Material; full training parameters are listed
+in Table 3. Since 𝑃𝑒and 𝐷𝑎are initially unknown, this PINN model is trained using initial estimates (here, we use
+𝑃𝑒= 7.0 and 𝐷𝑎= 18.0). As discussed in Section 2.3, we assume that the maxima locations of the Gram determinant
+remain nearly unchanged when computed with these estimates instead of true values. Training requires approximately
+270 minutes.
+Once trained, the model provides sensitivity functions 𝑠𝑃𝑒(𝑥, 𝑦, 𝑡) =
+𝜕̂𝑐
+𝜕𝑃𝑒(𝑥, 𝑦, 𝑡) and 𝑠𝐷𝑎(𝑥, 𝑦, 𝑡) =
+𝜕̂𝑐
+𝜕𝐷𝑎(𝑥, 𝑦, 𝑡)
+computed via automatic differentiation. These functions are used to assemble the FIM (Eqs. (5) and (6)), and evaluate
+its determinant for sensor placement. For a single sensor, the Gram determinant depends only on (𝑥1, 𝑦1), and its spatial
+distribution is illustrated in Fig. 7.
+When multiple sensors are considered, the optimization of the Gram determinant becomes multidimensional. To
+address this, we employ the Covariance Matrix Adaptation Evolution Strategy (CMA-ES) (Hansen, 2016), a derivative-
+free algorithm well suited for high-dimensional, non-convex, and nonlinear problems (Python package 𝑝𝑦𝑐𝑚𝑎(Hansen
+et al., 2019)). We first examine the case of three optimal sensor locations and compare the inference results against
+a configuration of three intuitively placed sensors around the obstacle (see Fig. 8). Pseudo-experimental data are
+generated by computational experiments using the finite element based commercial software COMSOL ® setting
+𝑃𝑒= 12.0 and 𝐷𝑎= 22.0 (target values to be inferred by our PINN-based framework). Virtual sensors record species
+concentration every 3 seconds.
+Venianakis et al: Preprint submitted to Elsevier
+Page 11 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+Table 4
+Inferred 𝑃𝑒and 𝐷𝑎values and relative error from ground truth using data (noise-free) for different sensor counts.
+Number of sensors
+𝑃𝑒(12.0)
+𝐷𝑎(22.0)
+Optimal sensors
+Intuitive sensors
+Optimal sensors
+Intuitive sensors
+1
+11.36 (5.33%)
+11.09 (7.58%)
+20.79 (5.50%)
+20.33 (7.59%)
+2
+11.62 (3.17%)
+10.65 (11.25%)
+21.08 (4.18%)
+19.28 (12.36%)
+3
+11.80 (1.67%)
+11.09 (7.58%)
+21.49 (2.32%)
+20.23 (8.05%)
+5
+11.98 (0.17%)
+11.34 (5.50%)
+21.78 (1.00%)
+20.72 (5.82%)
+Mass-Transport PINN for Parameter Estimation
+Here, we train a PINN to infer the unknown parameters. This neural network has the same architecture as the
+sensitivity PINN, but with only spatio-temporal inputs (𝑥, 𝑦, 𝑡). Its loss function excludes the sensitivity terms (sens,𝑃𝑒
+and sens,𝐷𝑎) and instead incorporates a data loss term:
+𝑑𝑎𝑡𝑎(𝜃) =
+1
+𝑁𝑑𝑎𝑡𝑎
+𝑁𝑑𝑎𝑡𝑎
+∑
+𝑖=1
+|||̂𝑐(𝑥𝑖
+𝑑𝑎𝑡𝑎, 𝑦𝑖
+𝑑𝑎𝑡𝑎, 𝑡𝑖
+𝑑𝑎𝑡𝑎) −𝑐𝑖
+𝑑𝑎𝑡𝑎
+|||
+2 .
+(33)
+For computational efficiency, we first pre-train this network on the forward problem with initial parameter estimates,
+then reuse this state for parameter estimation. During fine-tuning, the weights and biases of the first three layers
+are frozen (see Section 2.3). The dynamic weight strategy is disabled, and to emphasize observational data we set
+𝑤𝑑𝑎𝑡𝑎= 100 (weight of data loss term), while keeping all other weights equal to 1. Further training details are provided
+in Table 3.
+The inference results for the three-sensor configurations are shown in Fig. 9. Both parameters are estimated with
+higher accuracy when using optimally placed sensors. In addition, the three optimally placed sensors provide sufficient
+information for the PINN to reconstruct the concentration field, as illustrated in Fig. 10.
+To study the effect of the number of sensors, we repeat the procedure for 1, 2 and 5 sensors, each time optimizing
+sensor placement using CMA-ES and comparing the results with intuitive arrangements. For completeness, we show
+the locations of optimally placed sensors and the intuitively selected arrangements for 1,2,3 and 5 sensors in Fig. 11.
+Table 4 summarizes the inferred parameter values, showing that optimally placed sensors consistently yield more
+accurate estimates. Notably, adding more intuitively placed sensors does not necessarily improve performance, while
+accuracy increases monotonically with the number of optimally chosen sensors.
+We further tested robustness to noise adding Gaussian noise to the COMSOL-generated pseudo-experimental
+concentration data. Each measurement was drawn from:
+̃𝑐𝑖
+𝑑𝑎𝑡𝑎∼(𝑐𝑖
+𝑑𝑎𝑡𝑎, (0.1𝑐𝑖
+𝑑𝑎𝑡𝑎)2).
+(34)
+To account for the noisy data, we repeated the parameter estimation training five times for each configuration. Fig. 12
+depicts results for the three-sensor case, showing mean trajectories and standard deviations. Optimal sensors again
+led to more accurate averages, particularly for 𝐷𝑎, which corresponds to the nonlinear term of Eq. (30). The same
+trends hold for the 1-, 2-, and 5-sensor cases (Table 5). Fig. 13 compares the PINN solution (fitted to noisy data from
+3 optimal sensors) with the FEM solution at the true parameters. One can observe that the PINN predictions are in
+close agreement with the sensor data in terms of overall trends. Each estimation experiment required approximately
+100 minutes of training.
+4. Conclusions
+In this work, we develop a novel ML-based methodology for optimal sensor placement in large-scale distributed
+parameter systems for efficient parameter estimation. We integrate the D-optimal criterion for sensor placement into the
+PINN framework, with the goal of leveraging PINNs’ parameter estimation capabilities using minimal observational
+Venianakis et al: Preprint submitted to Elsevier
+Page 12 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+Table 5
+Mean Inferred 𝑃𝑒and 𝐷𝑎values (with standard deviation) using noisy data for different sensor counts.
+Number of sensors
+𝑃𝑒(12.0)
+𝐷𝑎(22.0)
+Optimal sensors
+Intuitive sensors
+Optimal sensors
+Intuitive sensors
+1
+10.73 ± 0.61
+10.73 ± 0.19
+20.30 ± 1.14
+19.47 ± 1.02
+2
+11.38 ± 0.35
+11.38 ± 0.76
+20.20 ± 0.97
+20.01 ± 1.07
+3
+12.01 ± 0.26
+11.18 ± 0.60
+21.97 ± 0.75
+19.59 ± 1.94
+5
+11.96 ± 0.43
+11.12 ± 0.38
+21.26 ± 0.55
+20.11 ± 0.97
+data. Our approach first determines optimal sensor locations based on an a priori estimate for the parameters of interest,
+and then identifies these parameters using data collected from those locations.
+To solve the optimal sensor placement problem, we train a PINN that takes as input both the parameters of
+interest and the spatio-temporal coordinates. This design enables the computation of sensitivity functions via automatic
+differentiation, which are then used to select the optimal sensor positions. For parameter inference, we employ a
+standard PINN architecture trained on data sampled from either optimally placed or intuitively chosen virtual sensors
+generated from numerical solutions.
+We evaluate the framework on two illustrative case studies: A 1D steady-state and a 2D transient reaction-diffusion-
+advection problem. In the 1D case, we estimate the Péclet number using a single sensor. Placement at the optimal
+location yields a relative error of only 0.20%, whereas placement at the outlet produces a substantially larger error of
+84.7%, underscoring the importance of optimal sensor positioning. In the 2D transient case, we jointly estimate the
+Péclet and Damköhler numbers using sensor configurations of 1, 2, 3, and 5 sensors. With noiseless data, optimal sensor
+placements consistently provide more accurate estimates, and accuracy improves as the number of sensors increases.
+Introducing measurement noise preserved these trends.
+Training a PINN to compute sensitivity functions is computationally intensive at the outset (≈270 minutes), owing
+to the additional loss terms requiring derivatives of all residuals with respect to all parameters of interest. However,
+once trained, transfer learning enables rapid re-training, offering substantial flexibility. This allows the framework to
+adapt efficiently to changes in boundary or initial conditions, modifications to system geometry, or variations in the
+underlying physics (e.g., altered reaction kinetics), without restarting training from scratch. Moreover, since PINNs
+are mesh-less, sensitivity functions can be computed at any spatio-temporal location.
+Overall, our findings demonstrate that PINNs can be effectively used to compute sensitivity functions for optimal
+sensor placement in parameter estimation. Data collected at these locations significantly improve estimation accuracy,
+even under measurement noise. Beyond the benchmark problems considered here, the framework can be extended
+to more complex systems with multiple unknown parameters or partially defined models (e.g., unknown kinetics in
+plasma reactors), where data acquisition is costly or limited.
+Acknowledgements
+CT acknowledges funding through the program YΠ2TA-0559703 implemented within the framework of the
+National Recovery and Resilience Plan "Greece 2.0" and financed by the European Union (NextGeneration EU)
+Venianakis et al: Preprint submitted to Elsevier
+Page 13 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+0
+2
+4
+6
+8
+10
+x
+0.00
+0.05
+0.10
+0.15
+ ∂c
+∂P e(x)
+2
+PINN Solution
+Numerical Solution
+Figure 2: Spatial profile of the FIM trace computed by PINNs and numerically for 𝑃𝑒= 0.1 (a priori estimate) and
+𝐷𝑎= 1.0.
+0
+1000
+2000
+3000
+4000
+5000
+Training Epoch
+0.2
+0.4
+0.6
+0.8
+1.0
+Pe value
+True value of Pe
+Optimal sensor location
+Sensor at outlet
+Figure 3: Inference of 𝑃𝑒vs. PINN training epochs with sensor placed at the FIM trace maximum (𝑥∗= 1.81 -blue curve)
+versus at the outlet (𝑥∗= 10.0 -red curve)
+Venianakis et al: Preprint submitted to Elsevier
+Page 14 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+0
+2
+4
+6
+8
+10
+x
+0.00
+0.05
+0.10
+0.15
+ ∂c
+∂P e(x)
+2
+Sensitivity, Pe = 1.0
+Sensitivity, Pe = 0.1
+Figure 4: FIM trace for the a priori estimate 𝑃𝑒= 0.1 and true value 𝑃𝑒= 1.0.
+Inlet 
+velocity 
+profile
+0.24
+0.14
+0.07
+y
+x
+0.09
+0.01
+Inlet 
+concentration 
+profile
+Wall
+Wall
+Wall
+Zero pressure and 
+zero flux outlet
+Figure 5: Computational domain: the fluid enters the channel with a parabolic velocity profile at the horizontal direction
+carrying a reactive species, flows past a fixed obstacle, and undergoes transport and reaction.
+(a) |ˆv| - PINN Solution
+(b) |ˆv| - FEM Solution
+(c) Absolute Error
+0.0005
+0.0010
+0.0015
+0.0020
+0.0005
+0.0010
+0.0015
+0.0020
+0.00000
+0.00005
+0.00010
+0.00015
+0.00020
+Figure 6: Magnitude of the velocity field |̂𝐯|: (a) PINN prediction of the fluid flow, (b) FEM numerical solution and (c)
+absolute error of PINN prediction relative to the FEM solution.
+Venianakis et al: Preprint submitted to Elsevier
+Page 15 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+x (m)
+0.000
+0.025
+0.050
+0.075
+0.100
+0.125
+y (m)
+0.0001
+0.0002
+0.0003
+0.0004
+0.0005
+Sensitivity
+Figure 7: Spatial profile of Gram determinant computed with sensitivity PINN for a priori estimate of 𝑃𝑒(7.0) and 𝐷𝑎
+(18.0)
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+x (m)
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+0.14
+y (m)
+Optimal sensor locations
+Intuitive sensor locations
+Figure 8: Optimally selected and intuitively placed sensor locations for the 2D set-up
+Venianakis et al: Preprint submitted to Elsevier
+Page 16 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+0
+500
+1000
+1500
+2000
+Training epoch
+7
+8
+9
+10
+11
+12
+Pe Value
+(a) Pe
+0
+500
+1000
+1500
+2000
+Training epoch
+17
+18
+19
+20
+21
+22
+Da Value
+(b) Da
+Optimal sensor locations
+Intuitive sensor locations
+Ground truth
+Figure 9: Parameter inference using data from optimally placed sensors versus intuitive placements: (a) 𝑃𝑒, (b) 𝐷𝑎.
+t = 25 s
+(a) ˆc - PINN solution
+(b) ˆc - FEM solution
+(c) Absolute Error
+t = 50 s
+t = 120 s
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+[kg/m3]
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+[kg/m3]
+0.01
+0.02
+0.03
+Absolute Error
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+[kg/m3]
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+[kg/m3]
+0.01
+0.02
+0.03
+Absolute Error
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+[kg/m3]
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+[kg/m3]
+0.01
+0.02
+0.03
+Absolute Error
+Figure 10: Predicted Concentration field ̂𝑐(𝑥, 𝑦, 𝑡) at 𝑡= 25, 50, 120 s: (a) PINN prediction trained with data from optimal
+sensors, (b) FEM numerical solution for true parameter values, and (c) Absolute error (|̂𝑐𝑃𝐼𝑁𝑁−̂𝑐𝐹𝐸𝑀|).
+Venianakis et al: Preprint submitted to Elsevier
+Page 17 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+x (m)
+0.000
+0.025
+0.050
+0.075
+0.100
+0.125
+y (m)
+(a) Optimally placed sensors
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+x (m)
+0.000
+0.025
+0.050
+0.075
+0.100
+0.125
+y (m)
+(b) Intuitively placed sensors
+1 Sensor
+2 Sensors
+3 Sensors
+5 Sensors
+Figure 11: (a) Optimally selected and (b) intuitively placed sensor locations for the 2D set-up using 1 sensor (blue circle),
+2 sensors (green triangles), 3 sensors (orange rectangles) and 5 sensors (red crosses).
+0
+500
+1000
+1500
+2000
+Training epoch
+7
+8
+9
+10
+11
+12
+Pe Value
+(a) Pe
+0
+500
+1000
+1500
+2000
+Training epoch
+18
+20
+22
+Da Value
+(b) Da
+Optimal sensor locations
+Intuitive sensor locations
+Ground truth
+Figure 12: Mean and standard deviation (shaded area) of parameter inference with noisy data from optimal sensor locations
+versus intuitive sensor placements: (a) 𝑃𝑒, (b) 𝐷𝑎
+Venianakis et al: Preprint submitted to Elsevier
+Page 18 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+0
+100
+200
+300
+t (s)
+0.00
+0.25
+0.50
+0.75
+1.00
+c (kg/m3)
+Sensor 1 (0.034, 0.139)
+0
+100
+200
+300
+t (s)
+Sensor 2 (0.132, 0.139)
+0
+100
+200
+300
+t (s)
+Sensor 3 (0.24, 0.078)
+PINN solution
+Numerical solution for Pe = 12 and Da = 22
+Noisy data
+Figure 13: PINN prediction fitted to noisy data from 3 optimally placed sensors, compared with FEM solution at true
+parameters.
+Venianakis et al: Preprint submitted to Elsevier
+Page 19 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+References
+Alaña, J.E., Theodoropoulos, C., 2011.
+Optimal location of measurements for parameter estimation of distributed parameter systems.
+Com-
+puters & Chemical Engineering 35, 106–120. URL: https://www.sciencedirect.com/science/article/pii/S0098135410001547,
+doi:https://doi.org/10.1016/j.compchemeng.2010.04.014.
+Alaña, J.E., Theodoropoulos, C., 2012. Optimal spatial sampling scheme for parameter estimation of nonlinear distributed parameter systems.
+Computers & Chemical Engineering 45, 38–49. doi:https://doi.org/10.1016/j.compchemeng.2012.04.014.
+Alonso, A.A., Kevrekidis, I.G., Banga, J.R., Frouzakis, C.E., 2004. Optimal sensor location and reduced order observer design for distributed
+process systems. Computers & chemical engineering 28, 27–35.
+Bard, Y., 1974. Nonlinear parameter estimation. volume 1209. Academic press New York.
+Berardi, M., Difonzo, F.V., Icardi, M., 2025. Inverse physics-informed neural networks for transport models in porous materials. Computer Methods
+in Applied Mechanics and Engineering 435, 117628.
+Biegler, L., Damiano, J., Blau, G., 1986. Nonlinear parameter estimation: a case study comparison. AIChE Journal 32, 29–45.
+Blei, D.M., Kucukelbir, A., McAuliffe, J.D., 2017. Variational inference: A review for statisticians. Journal of the American statistical Association
+112, 859–877.
+Bottou, L., 2010.
+Large-scale machine learning with stochastic gradient descent, in: Proceedings of COMPSTAT’2010: 19th International
+Conference on Computational StatisticsParis France, August 22-27, 2010 Keynote, Invited and Contributed Papers, Springer. pp. 177–186.
+Cai, S., Wang, Z., Wang, S., Perdikaris, P., Karniadakis, G.E., 2021. Physics-informed neural networks for heat transfer problems. Journal of Heat
+Transfer 143, 060801.
+Chang, S., Agarwal, P., McCready, C., Ricardez-Sandoval, L., Budman, H., 2025. Robust pinn modeling via sensitivity-based adaptive sampling:
+Integration of optimal sensor placement and structural uncertainty handling. Journal of Process Control 152, 103493. URL: https://www.
+sciencedirect.com/science/article/pii/S0959152425001210, doi:https://doi.org/10.1016/j.jprocont.2025.103493.
+Chaturantabut, S., Sorensen, D.C., 2010. Nonlinear model reduction via discrete empirical interpolation. SIAM Journal on Scientific Computing
+32, 2737–2764.
+Coleman, M.C., Block, D.E., 2006. Bayesian parameter estimation with informative priors for nonlinear systems. AIChE journal 52, 651–667.
+Courant, R., Hilbert, D., 1989. The Algebra of Linear Transformations and Quadratic Forms. John Wiley & Sons, Ltd. chapter 1. pp. 1–47.
+doi:https://doi.org/10.1002/9783527617210.ch1.
+Englezos, P., Kalogerakis, N., 2000. Applied parameter estimation for chemical engineers. CRC Press.
+Forootani, A., Kapadia, H., Chellappa, S., Goyal, P., Benner, P., 2024. Gs-pinn: Greedy sampling for parameter estimation in partial differential
+equations. arXiv preprint arXiv:2405.08537 .
+Franceschini, G., Macchietto, S., 2008. Model-based design of experiments for parameter precision: State of the art. Chemical Engineering Science
+63, 4846–4872. URL: https://www.sciencedirect.com/science/article/pii/S0009250907008871, doi:https://doi.org/10.
+1016/j.ces.2007.11.034. model-Based Experimental Analysis.
+Goswami, S., Anitescu, C., Chakraborty, S., Rabczuk, T., 2020. Transfer learning enhanced physics informed neural network for phase-field modeling
+of fracture. Theoretical and Applied Fracture Mechanics 106, 102447. URL: https://www.sciencedirect.com/science/article/pii/
+S016784421930357X, doi:https://doi.org/10.1016/j.tafmec.2019.102447.
+Hanna, J.M., Aguado, J.V., Comas-Cardona, S., Askri, R., Borzacchiello, D., 2024. Sensitivity analysis using physics-informed neural networks.
+Engineering Applications of Artificial Intelligence 135, 108764.
+Hansen, N., 2016. The cma evolution strategy: A tutorial. arXiv preprint arXiv:1604.00772 .
+Hansen, N., Akimoto, Y., Baudis, P., 2019. CMA-ES/pycma on Github. Zenodo, DOI:10.5281/zenodo.2559634. URL: https://doi.org/10.
+5281/zenodo.2559634, doi:10.5281/zenodo.2559634.
+Hastings,
+W.K.,
+1970.
+Monte
+carlo
+sampling
+methods
+using
+markov
+chains
+and
+their
+applications.
+Biometrika
+57,
+97–109.
+URL:
+https://doi.org/10.1093/biomet/57.1.97,
+doi:10.1093/biomet/57.1.97,
+arXiv:https://academic.oup.com/biomet/article-pdf/57/1/97/23940249/57-1-97.pdf.
+Heredia-Zavoni, E., Esteva, L., 1998. Optimal instrumentation of uncertain structural systems subject to earthquake ground motions. Earthquake
+engineering & structural dynamics 27, 343–362.
+Hermanto, M.W., Kee, N.C., Tan, R.B., Chiu, M.S., Braatz, R.D., 2008. Robust bayesian estimation of kinetics for the polymorphic transformation
+of l-glutamic acid crystals. AIChE Journal 54, 3248–3259.
+Hornik, K., Stinchcombe, M., White, H., 1989. Multilayer feedforward networks are universal approximators. Neural networks 2, 359–366.
+Hu, Z., Shukla, K., Karniadakis, G.E., Kawaguchi, K., 2024. Tackling the curse of dimensionality with physics-informed neural networks. Neural
+Networks 176, 106369.
+Huang, H., Li, Y., Song, R., Ren, J., Yu, H., Zhou, X., He, C., 2025. Inverse design of the membrane reactors enabled by an inverse-forward
+physics-informed learning framework. Chemical Engineering Science 316, 121910.
+Kalyanaraman, J., Fan, Y., Labreche, Y., Lively, R.P., Kawajiri, Y., Realff, M.J., 2015. Bayesian estimation of parametric uncertainties, quantification
+and reduction using optimal design of experiments for co2 adsorption on amine sorbents. Computers & chemical engineering 81, 376–388.
+Kravaris, C., Hahn, J., Chu, Y., 2013. Advances and selected recent developments in state and parameter estimation. Computers & Chemical
+Engineering 51, 111–123. URL: https://www.sciencedirect.com/science/article/pii/S0098135412001779, doi:https://doi.
+org/10.1016/j.compchemeng.2012.06.001. cPC VIII.
+Laubscher, R., 2021. Simulation of multi-species flow and heat transfer using physics-informed neural networks. Physics of Fluids 33.
+Lenk, P., Orme, B., 2009. The value of informative priors in bayesian inference with sparse data. Journal of Marketing Research 46, 832–845.
+Li, S., Feng, X., 2022.
+Dynamic weight strategy of physics-informed neural networks for the 2d navier–stokes equations.
+Entropy 24.
+doi:10.3390/e24091254.
+Liao, S., Xue, T., Jeong, J., Webster, S., Ehmann, K., Cao, J., 2023. Hybrid thermal modeling of additive manufacturing processes using physics-
+informed neural networks for temperature prediction and parameter identification. Computational Mechanics 72, 499–512.
+Venianakis et al: Preprint submitted to Elsevier
+Page 20 of 21
+
+A Physics Informed Machine Learning Framework for Optimal Sensor Placement and Parameter Estimation
+Mao, Z., Jagtap, A.D., Karniadakis, G.E., 2020. Physics-informed neural networks for high-speed flows. Computer Methods in Applied Mechanics
+and Engineering 360, 112789.
+URL: https://www.sciencedirect.com/science/article/pii/S0045782519306814, doi:https:
+//doi.org/10.1016/j.cma.2019.112789.
+Mehra, R., 1974. Optimal inputs for linear system identification. IEEE Transactions on Automatic Control 19, 192–200.
+Myung, I.J., 2003. Tutorial on maximum likelihood estimation. Journal of mathematical Psychology 47, 90–100.
+Nahor, H., Scheerlinck, N., Van Impe, J.F., Nicolaı, B., 2003. Optimization of the temperature sensor position in a hot wire probe set up for estimation
+of the thermal properties of foods using optimal experimental design. Journal of food engineering 57, 103–110.
+Ngo, S.I., Lim, Y.I., 2021. Solution and parameter identification of a fixed-bed reactor model for catalytic co2 methanation using physics-informed
+neural networks. Catalysts 11, 1304.
+Papadimitriou, C., Beck, J.L., Au, S.K., 2000. Entropy-based optimal sensor location for structural model updating. Journal of Vibration and Control
+6, 781–800.
+Papamakarios, G., Nalisnick, E., Rezende, D.J., Mohamed, S., Lakshminarayanan, B., 2021. Normalizing flows for probabilistic modeling and
+inference. Journal of Machine Learning Research 22, 1–64.
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J., Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga, L., et al., 2019. Pytorch: An
+imperative style, high-performance deep learning library. Advances in neural information processing systems 32.
+Qureshi, Z., Ng, T., Goodwin, G., 1980. Optimum experimental design for identification of distributed parameter systems. International Journal of
+Control 31, 21–29.
+Raissi, M., Perdikaris, P., Karniadakis, G., 2019.
+Physics-informed neural networks: A deep learning framework for solving forward and
+inverse problems involving nonlinear partial differential equations. Journal of Computational Physics 378, 686–707. URL: https://www.
+sciencedirect.com/science/article/pii/S0021999118307125, doi:https://doi.org/10.1016/j.jcp.2018.10.045.
+Raissi, M., Yazdani, A., Karniadakis, G.E., 2020.
+Hidden fluid mechanics: Learning velocity and pressure fields from flow visualizations.
+Science 367, 1026–1030. URL: https://www.science.org/doi/abs/10.1126/science.aaw4741, doi:10.1126/science.aaw4741,
+arXiv:https://www.science.org/doi/pdf/10.1126/science.aaw4741.
+Vande Wouwer, A., Point, N., Porteman, S., Remy, M., 2000. An approach to the selection of optimal sensor locations in distributed parameter
+systems. Journal of Process Control 10, 291–300.
+Walter, É., Pronzato, L., 1990. Qualitative and quantitative experiment design for phenomenological models—a survey. Automatica 26, 195–213.
+Wang, S., Sankaran, S., Wang, H., Perdikaris, P., 2023. An expert’s guide to training physics-informed neural networks.
+Wu, C., Zhu, M., Tan, Q., Kartha, Y., Lu, L., 2023. A comprehensive study of non-adaptive and residual-based adaptive sampling for physics-
+informed neural networks. Computer Methods in Applied Mechanics and Engineering 403, 115671.
+Yin, M., Zheng, X., Humphrey, J.D., Karniadakis, G.E., 2021. Non-invasive inference of thrombus material properties with physics-informed neural
+networks. Computer Methods in Applied Mechanics and Engineering 375, 113603. URL: https://www.sciencedirect.com/science/
+article/pii/S004578252030788X, doi:https://doi.org/10.1016/j.cma.2020.113603.
+Zhuang, F., Qi, Z., Duan, K., Xi, D., Zhu, Y., Zhu, H., Xiong, H., He, Q., 2021. A comprehensive survey on transfer learning. Proceedings of the
+IEEE 109, 43–76. doi:10.1109/JPROC.2020.3004555.
+Venianakis et al: Preprint submitted to Elsevier
+Page 21 of 21

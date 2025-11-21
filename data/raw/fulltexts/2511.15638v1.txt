@@ -1,0 +1,810 @@
+LEARNING FROM IMPERFECT LABELS: A PHYSICS-AWARE
+NEURAL OPERATOR WITH APPLICATION TO DAS DATA
+DENOISING
+A PREPRINT
+Yang Cui
+Department of Geosciences
+King Fahd University of Petroleum and Minerals
+Dhrhran, Saudi Arabia
+yang.cui512@gmail.com
+Denis Anikiev
+Center for Integrative Petroleum Research (CIPR)
+King Fahd University of Petroleum and Minerals
+Dhrhran, Saudi Arabia
+denis.anikiev@kfupm.edu.sa
+Umair Bin Waheed
+Department of Geosciences
+King Fahd University of Petroleum and Minerals
+Dhrhran, Saudi Arabia
+umair.waheed@kfupm.edu.sa
+Yangkang Chen
+Bureau of Economic Geology
+The University of Texas at Austin
+Austin, TX, USA
+chenyk2016@gmail.com
+November 20, 2025
+ABSTRACT
+Supervised deep learning methods typically require large datasets and high-quality labels to achieve
+reliable predictions. However, their performance often degrades when trained on imperfect labels.
+To address this challenge, we propose a physics-aware loss function that serves as a penalty term to
+mitigate label imperfections during training. In addition, we introduce a modified U-Net–Enhanced
+Fourier Neural Operator (UFNO) that achieves high-fidelity feature representation while leveraging
+the advantages of operator learning in function space. By combining these two components, we
+develop a physics-aware UFNO (PAUFNO) framework that effectively learns from imperfect labels.
+To evaluate the proposed framework, we apply it to the denoising of distributed acoustic sensing
+(DAS) data from the Utah FORGE site. The label data were generated using an integrated filtering-
+based method, but still contain residual coupling noise in the near-wellbore channels. The denoising
+workflow incorporates a patching-based data augmentation strategy, including an uplifting step,
+spatial-domain convolutional operations, spectral convolution, and a projection layer to restore data
+to the desired shape. Extensive numerical experiments demonstrate that the proposed framework
+achieves superior denoising performance, effectively enhancing DAS records and recovering hidden
+signals with high accuracy. Codes and data related to this work are fully open-sourced via https:
+//github.com/cuiyang512/PAUFNO (The repository is private now; we will make it public upon
+acceptance of this paper).
+Keywords Physics-Aware Deep Learning · Neural Operator · DAS · Denoising
+1
+Introduction
+Distributed Acoustic Sensing (DAS) is an emerging technique that enables the acquisition of ultra-high-density seismic
+records, offering a cost-effective and high-resolution approach to seismic exploration. In seismology, DAS has been
+successfully deployed in various applications, such as well logging, reservoir monitoring, CO2 storage monitoring,
+and earthquake monitoring, positioning it as a viable alternative to conventional geophone-based approaches [Fichtner
+et al., 2025]. Compared with traditional seismic acquisition methods, DAS offers several unique advantages, including
+arXiv:2511.15638v1  [physics.geo-ph]  19 Nov 2025
+
+Physics-Aware DAS Denoising
+A PREPRINT
+resistance to high temperatures and pressures, ultra–high channel density, and exceptional sensitivity. These features
+allow DAS to deliver high-resolution seismic data even under extreme environmental conditions.
+However, this very sensitivity also makes DAS particularly susceptible to noise, which complicates subsequent data
+processing and interpretation. The noise manifests in diverse and complex forms, such as random noise, erratic noise,
+horizontal noise, chessboard noise, fiber system noise, and zigzag noise, posing significant challenges to accurate
+seismic imaging. Consequently, developing effective denoising strategies for DAS data remains a critical and ongoing
+research priority. Over the past few decades, numerous denoising methods have been proposed for seismic data. These
+approaches can be broadly categorized into mathematical model–driven techniques and deep learning (DL)–based,
+data-driven methods [Mousavi and Beroza, 2022]. Despite their effectiveness, most existing techniques are designed
+to suppress only a single type of noise (e.g., random noise, erratic noise, or surface waves) within seismic profiles,
+limiting their applicability in real-world DAS scenarios. The ultra-dense nature of DAS records provides significant
+advantages for DL-based processing, as deep learning excels at performing complex, nonlinear, high-order mappings
+across massive datasets. In contrast, conventional filter-based methods are computationally inefficient and tend to
+perform poorly when handling DAS records with strong coherent noise [Cui et al., 2025a].
+Over the past decades, DL has drawn significant attention in the seismology community [Mousavi and Beroza,
+2022], with models like Convolutional Neural Networks (CNNs), Autoencoders (AEs), Long Short-Term Memory
+(LSTM), U-Net, Transformers, and Kolmogorov–Arnold Networks (KANs) typically serving as discriminative models,
+while Generative Adversarial Networks (GANs) and Diffusion Models represent the class of generative models.
+Discriminative models have demonstrated high accuracy in seismic phase detection, reconstruction, and inversion by
+effectively capturing complex nonlinear relationships between the training and target domains [Han et al., 2024, Cui
+et al., 2025b]. However, they often show poor robustness when even training with large-scale domain-specific data. In
+contrast, generative models excel at synthesizing realistic seismic records, facilitating denoising, super-resolution, and
+inversion, though their training is often computationally demanding and may lack interpretability [Dou et al., 2023,
+Durall et al., 2023]. Bearing the principles of discriminative and generative models in mind, we introduce Fourier
+Neural Operators (FNOs) [Li et al., 2020, Wen et al., 2022], which have emerged as a promising paradigm in seismology.
+Unlike conventional discriminative or generative approaches, FNOs learn mappings directly between function spaces,
+enabling efficient modeling of wavefield propagation and other PDE-governed processes [Zhu et al., 2023a, Song
+et al., 2024, Badawi and Gildin, 2025, Ma and Alkhalifah, 2025]. In the context of seismic denoising, this unique
+property allows FNOs to capture global frequency-domain features for effective suppression of diverse and complex
+noise types, while simultaneously preserving the physical consistency of seismic wavefields. Xie et al. [2025] proposed
+a physics-informed neural network to suppress terratic and random noise, which is highlighted by embedding physics
+information for seismic denoising. As a result, FNOs provide superior generalization to unseen scenarios and offer
+a robust, computationally efficient, and physically grounded framework for seismic data processing, particularly for
+challenging DAS denoising tasks.
+1.1
+Related work
+In practice, processing techniques developed for geophone-based seismic data are often applied to DAS acquisitions.
+Nevertheless, the unique characteristics of DAS pose challenges for model-specific denoising. For instance, Lellouch
+et al. [2021] employed both low-pass and median filters to suppress strong noise in DAS records. Additionally, trace
+editing is commonly applied to handle severely noisy traces. To mitigate these issues, Chen et al. [2023] proposed
+the integrated denoising framework (IDF), a method that integrates multiple filters to suppress various types of noise.
+Specifically, the bandpass filter removes high-frequency noise, the structure-oriented median filter further suppresses
+high-amplitude erratic noise, and the dip filter in the f −k domain attenuates regular vertical and horizontal noise.
+However, the high computational cost of IDF limits its applicability to large-scale datasets. Oboué et al. [2024] enhanced
+the structure-oriented median filter through a spatially varying scheme and introduced a local orthogonalization (LO)
+approach to suppress strong noise while preserving weak signals, which shows robust denoising performance across
+different tests from the Utah FORGE site [Martin and Nash, 2019].
+DL is characterized by learning a non-linear mapping from massive data, which makes it well-suited for processing
+DAS records. Recently, numerous DAS denoisers based on both supervised learning (SL) and unsupervised learning
+(USL) methods have been developed. Van den Ende et al. [2021] proposed a self-supervised learning method for
+denoising DAS data with complex noise, while Dong et al. [2022] introduced a multiscale spatial attention network
+to eliminate background noise, enhancing the detection of subtle signals by prioritizing local feature extraction in
+DAS data. Similarly, Wu et al. [2022] developed a multiscale denoising framework utilizing convolutional operations
+across various data dimensions. Zhong et al. [2023] presented a multiscale encoder-decoder network aimed at both
+background noise suppression and weak signal recovery. Yang et al. [2023a] proposed a fully convolutional framework
+to extract hidden signals and attenuate diverse noise types in DAS data. Yang et al. [2023b] also introduced SLKNet,
+2
+
+Physics-Aware DAS Denoising
+A PREPRINT
+an SL method for DAS-VSP noise suppression, leveraging a dense-connection network with a kernel-wise attention
+mechanism. Zhu et al. [2023b] developed a diffusion model to mitigate strongly coupled noise in DAS-VSP data,
+generating training data using the wave equation to simulate noise-free labels and an existing algorithm [Yu et al.,
+2018] to produce coupling noise. Building on the work of Zhu et al. [2023b], Xu et al. [2024a] trained a U-net model
+to suppress strong “zigzag” noise, although they relied exclusively on synthetic data for training. Birnie and Ravasi
+[2024] employed a blind-mask self-supervised network to denoise various types of coherent noise in seismic profiles.
+Despite the notable success of these approaches in both geophone and DAS data denoising, developing a robust,
+generalizable unsupervised method capable of handling diverse and unseen data remains an ongoing challenge. Based
+on our investigations, there are very few publications that utilize operator learning for seismic data denoising tasks,
+especially for DAS. Therefore, we aim to explore its potential for suppressing diverse types of noise in DAS data as a
+case study.
+Many researchers have investigated DAS denoising using open-source data from the Utah FORGE site [Yang et al.,
+2023a,b, Saad et al., 2024, Xu et al., 2024b, Cui et al., 2025a]. However, none of these studies have addressed the
+presence of coupling noise in near-wellbore channels. The existence of coupling noise in the near-wellbore channels
+(see Figure 9) can adversely affect subsequent data-processing steps, such as arrival-time picking and microseismic
+event localization. Therefore, developing an approach capable of further suppressing the residual noise in the label data
+is of critical importance. To address this issue, we propose a U-Net–enhanced Fourier Neural Operator (UFNO) that
+integrates a physics-aware loss function to effectively attenuate strong noise in DAS recordings (see Figure 1). PAUFNO
+combines the advantages of operator learning and physics-informed neural networks, enabling it to significantly
+outperform conventional model-driven approaches and the U-Net baseline. Unlike CNNs or U-Nets that learn finite-
+domain mappings, the FNO learns an operator between function spaces, allowing inference at resolutions different
+from those used during training. We employ a patching strategy [Chen, 2020] to extract 2D training patch pairs from
+the Utah FORGE field dataset. Although the model is trained on imperfect labels containing residual coupling noise,
+the incorporation of the physics-aware loss function mitigates the influence of these imperfections. Once trained,
+the learned operator can generalize to various input types and resolutions using the workflow illustrated in Figure 2,
+without the need for retraining. Numerical experiments further confirm the effectiveness and robustness of the proposed
+denoising framework.
+The remainder of this paper is organized as follows. We first introduce the principles of the proposed PAUFNO
+framework and its corresponding DAS denoising workflow. Next, we present a comparative evaluation of denoising
+performance between PAUFNO and several benchmark approaches on field datasets collected from different surveys.
+We then discuss the model’s generalization capability, uncertainty quantification, and limitations. Finally, we summarize
+the proposed DAS denoising strategy, which effectively mitigates coupling noise arising from imperfect fiber–well
+coupling by incorporating physics-aware loss function.
+2
+Methodology
+This section first introduces the problem formulation for DAS denoising, followed by the diagram and operational
+principles of the proposed neural operator (NO)–based denoising framework. Finally, we present the physics-aware loss
+function designed to enhance coupling-noise suppression.
+2.1
+Problem setup
+During the data acquisition process, sensors such as geophones and fiber-optic cables inevitably capture both signal and
+noise. Furthermore, due to the high sensitivity of DAS cables, they are particularly prone to recording additional noise
+sources, including fiber system noise, coupling noise arising from poor contact between the DAS fiber and the wellbore
+wall or ground surface, and ambient noise. The acquired DAS records can be mathematically formulated as:
+Y = S + N + r,
+(1)
+where Y denotes the recorded DAS data, S the desired signal component, N the noise component, and r the residual
+noise. The goal of denoising is to recover the underlying signal S from the field data Y while effectively suppressing
+the variable noise N. In supervised deep learning, large amounts of labeled data are required for training. However,
+obtaining accurate ground-truth labels for field data is inherently challenging, which often leads to residual noise r
+that remains difficult to eliminate completely. The spectral energy distribution differences of signal and coupling noise
+provide the basis for designing the FK masks in the next sections.
+3
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Figure 1: Diagram of the proposed DAS denoising framework. The model begins with an uplifting layer (P) that
+projects the input features into a higher-dimensional space. The resulting feature maps are then processed in parallel
+by the UFNO and FNO blocks, followed by an efficient channel attention (ECA) module that captures fine-grained
+information in both the spatial and frequency domains. Unlike the standard FNO block, the UFNO branch includes an
+additional U-Net channel to enhance feature representation in the time domain. Finally, a projection layer (Q) maps the
+high-dimensional features back to the input dimensionality to produce the denoised output. The symbol σ denotes the
+activation function.
+Figure 2: Inference workflow of the trained operator. The input noisy records are first divided into overlapping patches
+with fixed dimensions. These noisy patches are then processed by the trained operator to perform denoising. After
+obtaining the denoised patches, an inverse patching scheme is applied to reconstruct the full denoised output. It is worth
+noting that the trained operator can effectively handle patches with resolutions different from those used during training,
+as it learns underlying functional relationships rather than fixed nonlinear mappings within finite domains.
+4
+
+Physics-Aware DAS Denoising
+A PREPRINT
+2.2
+Network principle
+The proposed network builds on the Fourier Neural Operator (FNO) [Li et al., 2020], which learns nonlinear mappings
+between infinite-dimensional function spaces and has proven effective for solving partial differential equations (PDEs).
+In this work, we repurpose this operator-learning paradigm for DAS denoising, a non-PDE setting, to explore the
+broader applicability of neural operators (NOs).
+As shown in Figure 1, the architecture comprises an input uplifting layer P, a stack of FNO and U-FNO blocks
+augmented with Efficient Channel Attention (ECA) [Wang et al., 2020], and an output projection layer Q. The
+lifting layer P expands the feature dimensionality from 1 channel to width, enhancing representational capacity. The
+subsequent operator blocks extract complementary information by combining global spectral modeling (via truncated
+Fourier transforms) with local convolutional pathways; in U-FNO blocks, a U -Net branch further refines locality while
+ECA adaptively reweights channels to emphasize informative responses. Finally, the projection layer Q maps the
+features from the lifted space back to the input dimensionality, yielding a denoised estimate with the same spatial
+resolution as the input.
+2.3
+Physics-aware loss function
+In the context of DAS denoising, where fiber-optic coupling artifacts often manifest as high-energy noise in specific
+low-velocity cones within the frequency-wavenumber (FK) domain. The residual high-energy coupled noise is hard
+to suppress, as indicated by Chen et al. [2023]. Furthermore, prior research trained on label data generated by the
+integrated filters proposes that a hybrid supervised loss function is employed to balance data fidelity with physics-aware
+constraints.
+This approach leverages the dual-triangular penalty mask (shown in Figure 3a) to suppress noise in targeted FK regions
+while preserving seismic signal integrity. Specifically, let x ∈RB×C×H×W denote the predicted denoised time-distance
+data, y ∈RB×C×H×W the target labels with residual coupling noise, M ∈RH×W the precomputed triangular penalty
+mask. Figure 3a exhibits the proposed dual-triangle masks, where we keep the values inside as 1 and outside as 0. The
+size of the dual-triangle mask is designed by the energy distribution of coupling noise in FK spectra. By analyzing the
+residual coupled noise and the signal’s FK spectrum, we ultimately selected a dual-triangular mask. As illustrated in
+Figure 3a, the vertices of the two triangles are positioned at the zero-wavenumber point. The short-side vertex angle α
+is set to 35◦, and the leg adjacent to this 35◦angle has a length of 40 sample points. The shape of the triangular mask
+is designed according to the energy distribution of the noise. Our goal is to cover the noise energy region as fully as
+possible while minimizing contamination of the signal energy. Moreover, we discussed the selection of the short-side
+vertex angle α in the “DISCUSSION” section.
+As shown in Figure 3b, s denotes the current training step, sw the number of warmup steps (set to 200 by default,
+consistent with the number of epochs), and 1 −λ represents the hyperparameter that balances the FK term. In the
+hybrid loss function (Equation 6), we set λ = 0.98. This warmup scheme for the FK loss introduces a soft energy
+cutoff, thereby preventing signal degradation in the initial training phase.
+The FK dual-triangle loss, LFK(x, s), penalizes excessive energy within these noise-prone triangular regions of the FK
+spectrum, formulated as
+LF K(x, s) = w(s) ·
+1
+BCHW
+B
+X
+b=1
+C
+X
+c=1
+H
+X
+h=1
+W
+X
+w=1
+h
+Mh,w · |F(xb,c)|h,w
+i2
+,
+(2)
+where F(·) represents the centered 2D fast Fourier transform defined by Equation 3 (unnormalized, with zero frequency
+centered), |·| is the complex modulus. Similar to the implementation in DASCore [Chambers et al., 2024], we computed
+the FK spectra as follows:
+F(xb,c) = fftshift(fft2(xb,c)),
+(3)
+The cosine annealing warmup schedule (shown in Figure 3b) is implemented that gradually ramps the penalty from 0 to
+0.5 over sw steps, thereby avoiding premature over-constraint (causing signal damage) during the early training stage:
+w(s) = 0.5
+
+1 −cos
+
+π · min
+
+1, s
+sw
+
+,
+(4)
+The FK loss proposed by Equations 2 to 4 is to mitigate the remaining noise in labels caused by the poor coupling
+between the fiber optics and wellbore. Therefore, it acts as a correction term in the training loop. However, to maintain
+the correct parts in labels and enforce the pixel-wise reconstruction accuracy, we need to employ the supervised loss
+5
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Figure 3: Diagram of the physics-aware loss function. (a) Dual-triangle masking setup, where the green dot indicates the
+zero wavenumber point, as well as the zero point of the normalized frequency. (b) Warmup factor of the physics-aware
+loss, where the factor rises from 0 to 1 to avoid useful signal damages in the early training stage.
+term as shown in Equation 5:
+LL1(x, y) =
+1
+BCHW
+B
+X
+b=1
+C
+X
+c=1
+H
+X
+h=1
+W
+X
+w=1
+[xb,c,h,w −yb,c,h,w] ,
+(5)
+Therefore, we get the total hybrid loss, Ltotal(x, y, s), integrates these components via a weighted sum:
+L = λ · LL1(x, y) + (1 −λ) · LF K(x, s)
+(6)
+which simultaneously minimizes reconstruction discrepancies and attenuates noise energy in the FK cones, enhancing
+DAS data quality by mitigating coupling-induced artifacts without distorting valid wavefields.
+2.4
+Uncertainty quantification
+MC Dropout has been widely recognized as an effective approach for quantifying uncertainty in deep learning models,
+particularly when assessing the confidence of model predictions. In this study, we employ the MC Dropout technique to
+evaluate the denoising confidence of the PAUFNO model, with a specific focus on the near-wellbore region (channels
+0–50), where the loss term enforces correction.
+The model incorporates dropout layers within the convolutional and U-Net components, which are reactivated during
+inference to generate a set of stochastic predictions. Specifically, for each input sample x, the model produces T
+stochastic predictions {ˆyt}T
+t=1 by applying dropout masks during inference. The predictive mean and uncertainty are
+then computed as:
+¯y = 1
+T
+T
+X
+t=1
+ˆyt,
+(7)
+where ¯y represents the ensemble mean, which serves as the denoised results.
+σ =
+v
+u
+u
+t 1
+T
+T
+X
+t=1
+(ˆyt −¯y)2,
+(8)
+where σ quantifies the model’s epistemic uncertainty. Higher Standard Deviation (STD) values indicate regions of low
+model confidence, often corresponding to areas with low signal-to-noise ratio and complex signal distribution.
+6
+
+Physics-Aware DAS Denoising
+A PREPRINT
+3
+Results
+In this section, we introduce the operator inference results, comparing the results of trained operators with those of
+the IDF [Chen et al., 2023] method. Moreover, we will introduce the out-of-distribution training data to validate the
+generalizability of the trained physics-aware neural operator.
+3.1
+Training data generation
+The fiber-optic cable was installed in a borehole configuration to serve as a dense receiver array in the monitoring well
+78-32. The data were recorded with a sampling interval of 0.5 ms, a channel spacing of 1 m, and a gauge length of 10 m.
+All labels were generated using the integrated, filter-based denoising method proposed by Chen et al. [2023]. After data
+augmentation, this process yielded 1,152 training pairs and 128 validation pairs, each of size 128 × 128. To ensure
+reproducibility, we provide all hyperparameters used in training in Table 1. Moreover, to provide a comprehensive
+comparison, we trained the proposed UFNO in a data-driven manner together with baseline U-Net [Ronneberger
+et al., 2015] to benchmark PAUFNO. All hyperparameters, i.e., learning rate, patch size, number of training samples,
+and epochs, were kept identical across models to ensure a fair comparison. All experiments were conducted on a
+workstation equipped with an NVIDIA RTX A4500 GPU. In addition, we compare PAUFNO with IDF to demonstrate
+its effectiveness relative to an integrated filtering-based approach. Table 2 summarizes the training time, number of
+trainable parameters, and inference time for a single example (with a spatial dimension of 2000×960 samples) from the
+Utah FORGE site. It is evident that PAUFNO and UFNO contain fewer trainable parameters than the U-Net. However,
+both models require longer training and inference times than the U-Net due to their feature representations in the Fourier
+domain are time-consuming.
+Table 1: Hyperparameter configuration
+Hyperparameter
+Specification
+Optimizer
+Adam
+Epoch
+200
+Learning Rate
+5 × 10−4
+Loss Function
+L1 and FK Loss
+Batch Size
+128
+Patch Size
+128 × 128
+Modes
+12
+Width
+16
+Training Samples
+1152
+Validation Samples
+128
+3.2
+Utah FORGE examples
+Figures 4–10 present a comparative visualization of the denoising performance of PAUFNO against baseline approaches.
+The representative raw data shown in Figures 4a, 7a, and 9a exhibit distinct characteristics. For example, Figure 4a
+contains multiple seismic events, Figure 7a displays no visible events but strong residual coupling noise, and Figure 9a
+reveals hidden signals with high-amplitude energy. For better comparison, we also provide spectra comparisons in
+Figures 6, 8, and 10.
+Table 2: Comparison of training efficiency and inference performance among different methods.
+Specification
+Proposed
+UFNO
+U-Net
+Trainable Parameters
+372,045
+372,045
+419,753
+Training Time (s)
+368.52
+371.45
+161.93
+Inference Time (s)
+3.91e-01
+3.29e-01
+4.28e-2
+As shown in Figure 4, all denoising approaches performed remarkably in terms of signal preservation and noise
+suppression. However, with the addition of the FK loss term, PAUFNO achieves superior performance in reducing
+residual noise caused by poor coupling between the fiber-optic cable and the wellbore. In particular, as shown in
+Figure 5, channels 0–50 demonstrate that incorporating the physics-aware loss function further suppresses coupling
+noise, even when the model is trained with imperfect labels. The zoomed-in sections in Figure 5 correspond to
+7
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Figure 4: Denoising comparisons of different methods on DAS record with multiple events. (a) is the raw data. (b–e)
+are corresponding to denoised records using BPSOMFFK, PAUFNO, UFNO, and U-Net, respectively. (f–i) display
+removed noise with BPSOMFFK, Proposed, UFNO, and U-Net, respectively.
+regions containing only residual noise, both signal and coupled noise, and purely signal, respectively. These results
+clearly indicate that the physics-aware UFNO not only effectively recovers the underlying signals but also attenuates
+the coupled noise. To provide a more detailed comparison, the corresponding FK spectra of Figure 4 are presented
+in Figure 6, which further highlights the effectiveness of the proposed dual-triangle penalty in the FK domain. As
+shown in Figures 6b and 6c, the proposed model markedly suppresses energy concentrated in the low-frequency and
+small-wavenumber regions (highlighted by red arrows), consistent with the removal of coupling noise observed in
+Figure 4c.
+The second example (see Figure 7a), characterized by strong residual coupling noise and the absence of visible seismic
+events, is introduced to evaluate whether the denoising approaches generate artifacts when no hidden signal is present.
+The label data (Figure 7b) clearly exhibits persistent coupling noise, which leads to the failure of both the U-Net and
+data-driven UFNO in effectively removing it. In contrast, the PAUFNO significantly attenuates the residual coupling
+noise remaining in the label, demonstrating superior generalization and robustness under poor coupling conditions.
+As shown in Figures 8a–8e, the residual coupling noise exhibits spectral energy concentrated in the low-frequency
+and low-wavenumber regions, forming a trend from the upper right to the lower left. Moreover, the spectra shown in
+Figure 8 further suggest that physics-aware UFNO achieves promising residual coupling noise suppression performance.
+Figure 9a illustrates the DAS record of the poor coupling between the fiber-optical cable and wellbore condition,
+which requires specialized processing to mitigate. Compared with Figures 9b, 9d, and 9e, Figure 9c demonstrates that
+PAUFNO more effectively removes coupling noise while preserving useful signal components. The corresponding FK
+spectra (Figure 10) further confirm this result, showing that PAUFNO attenuates low-frequency and small-wavenumber
+energy with opposite dips to the hidden signals. In contrast to UFNO and U-Net, PAUFNO selectively reduces energy
+in the low-frequency and small-wavenumber regions (highlighted by red arrows) while retaining the spectral energy of
+the seismic signals.
+3.3
+Generalization test
+We demonstrated the denoising performance of different methods on DAS recordings from the Utah FORGE site.
+Typically, for deep learning models trained in a supervised manner, it is necessary to retrain the network or apply
+transfer learning to achieve satisfactory performance on previously unseen data. To further assess their generalization
+and robustness, we conducted additional experiments on DAS data acquired from different field surveys. All models
+were trained exclusively on the Utah FORGE dataset and then applied to unseen data without any retraining. The unseen
+data were obtained from a 3D DAS-VSP survey conducted at the geothermal in-situ laboratory in Groß Schönebeck,
+Germany [Martuganova et al., 2022]. The DAS measurements at this site were recorded with a temporal sampling
+interval of 2 ms and a spatial sampling interval of 5 m along the entire well.
+8
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Figure 5: Zoomed-in comparisons of denoising results from Figure 4. The first row shows the raw data and denoising
+profiles using different methods. The yellow rectangles in the second row indicate regions affected by residual clipping
+noise, which are enlarged in the second row. The green rectangles highlight areas containing both coupling noise and
+signal, shown in the third row. The bottom row presents zoomed-in sections corresponding to regions dominated by
+signals only.
+Figure 6: FK spectra comparisons of different methods on DAS record with multiple events. (a) is the spectra raw data.
+(b–e) are fk spectra corresponding to denoised records using BPSOMFFK, PAUFNO, UFNO, and U-Net, respectively.
+(f–i) display spectra of removed noise with BPSOMFFK, Proposed, UFNO, and U-Net, respectively. Note that we
+calculate the spectra using DASCore Chambers et al. [2024].
+9
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Figure 7: Denoising comparisons of different methods, and the DAS record is characterized by without any visible
+event. (a) is the raw data. (b–e) are corresponding to denoised records using BPSOMFFK, PAUFNO, UFNO, and
+U-Net, respectively. (f–i) display removed noise with BPSOMFFK, Proposed, UFNO, and U-Net, respectively.
+Figure 8: FK spectra comparisons of different methods on DAS record without events. (a) is the spectra raw data. (b–e)
+are fk spectra corresponding to denoised records using BPSOMFFK, PAUFNO, UFNO, and U-Net, respectively. (f–i)
+display spectra of removed noise with BPSOMFFK, Proposed, UFNO, and U-Net, respectively.
+10
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Figure 9: Denoising comparisons of different methods on DAS record with high-amplitude events. (a) is the raw data.
+(b–e) are corresponding to denoised records using BPSOMFFK, PAUFNO, UFNO, and U-Net, respectively. (f–i)
+display removed noise with BPSOMFFK, Proposed, UFNO, and U-Net, respectively.
+Figure 10: FK spectra comparisons of different methods on DAS record with high-amplitude events. (a) is the spectra
+raw data. (b–e) are fk spectra corresponding to denoised records using BPSOMFFK, PAUFNO, UFNO, and U-Net,
+respectively. (f–i) display spectra of removed noise with BPSOMFFK, PAUFNO, UFNO, and U-Net, respectively.
+11
+
+Physics-Aware DAS Denoising
+A PREPRINT
+0.0
+0.5
+1.0
+1.5
+2.0
+2.5
+3.0
+3.5
+Time (s)
+(a)
+(b)
+(c)
+(d)
+(f)
+(g)
+(h)
+0
+1000
+2000
+3000
+Offset (m)
+(j)
+Mean = 0.126
+0
+1000
+2000
+3000
+Offset (m)
+(k)
+Mean = 0.176
+0
+1000
+2000
+3000
+Offset (m)
+(l)
+Mean = 0.164
+15
+10
+5
+0
+5
+10
+15
+15
+10
+5
+0
+5
+10
+15
+15
+10
+5
+0
+5
+10
+15
+15
+10
+5
+0
+5
+10
+15
+15
+10
+5
+0
+5
+10
+15
+15
+10
+5
+0
+5
+10
+15
+15
+10
+5
+0
+5
+10
+15
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Figure 11: Out-of-distribution test on seismic data from the Groß Sch"onebeck site. (a) shows the raw input data. (b–d)
+present the denoised results obtained using PAUFNO, UFNO, and U-Net, respectively. (e–g) display the corresponding
+removed noise sections produced by each model. (h–j) illustrate the local similarity maps computed between the
+denoised data and the removed noise for PAUFNO, UFNO, and U-Net, respectively. Note that we provide the mean
+values of each similarity map, which indicates PAUFNO causes the least signal damage.
+Figure 11 presents the out-of-distribution test conducted on data recorded from a different survey. Compared to the
+Utah FORGE dataset, this dataset contains a new type of “zigzag” noise that was not observed in the training data,
+posing additional challenges for conventional deep learning models. To further evaluate denoising performance, we
+employ local similarity [Chen and Fomel, 2015], which measures the orthogonality between the denoised signal and the
+removed noise. Higher local similarity values indicate greater signal leakage (i.e., more signal damage), whereas lower
+values reflect better signal preservation. Because of the dip differences between the seismic events at the Utah FORGE
+site and those at the Groß Schönebeck site, the data array was flipped horizontally when applying the PAUFNO method.
+As shown in Figures 11b–11d, all methods effectively suppress the strong random noise. However, the PAUFNO
+predictions exhibit greater spatial consistency, particularly around the regions highlighted by the green arrows in
+Figure 11. In contrast, the UFNO and U-Net results show more signal distortion in their corresponding removed-noise
+sections. The local similarity maps in Figures 11h–j further confirm that PAUFNO demonstrates higher robustness and
+better signal preservation than the benchmark methods.
+12
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Figure 12: Side-by-side uncertainty quantification comparison of PAUFNO and UFNO on field data. Top row: (a) raw
+input, (b) PAUFNO prediction, (c) PAUFNO residual (raw - prediction), (d) PAUFNO predictive uncertainty (STD).
+Bottom row: (e) UFNO prediction, (f) UFNO residual, (g) UFNO predictive uncertainty. Seismic panels use a shared
+amplitude scale; uncertainty panels share the same STD scale. Contours mark the top 5% highest uncertainty.
+4
+Discussion
+The results demonstrate a performance comparison across experiments for various methods and provide evidence that
+PAUFNO can effectively enhance weak seismic signals in DAS recordings, even when trained with imperfect labels.
+Nevertheless, a deeper understanding of PAUFNO is necessary, particularly regarding its uncertainty and inherent
+limitations. Therefore, in this section, we introduce Monte Carlo (MC) Dropout [Gal and Ghahramani, 2016] within the
+proposed NOs-based framework to quantify model uncertainty and further investigate the limitations of PAUFNO.
+4.1
+Uncertainty quantification
+To perform UQ experiments, we conduct T = 30 stochastic forward passes for each input patch to estimate the
+predictive distribution. The MC dropout probability is set to 0.2 for both models. We specifically focus our analysis on
+the near-wellbore traces, where the physics-aware loss is designed to correct label imperfections.
+Figure 12 presents the MC Dropout–based UQ results for PAUFNO and UFNO. The yellow contour masks in Figures
+12b and 12e highlight the top 5% highest uncertainty regions. These contours indicate that PAUFNO exhibits higher
+confidence around the near-wellbore area, suggesting that the physics-aware loss effectively suppresses residual coupling
+noise in the label data. Furthermore, Figures 12d and 12g show the STD maps deracross experiments for various
+methods and provide evidence that PAUFNO can effectively enhance weak seismic signals in DAS recordings,an UFNO
+within channels 1–50. However, in the near-offset region, PAUFNO displays slightly higher uncertainty than UFNO,
+which may stem from the physics-aware loss enforcing imperfect labels too directly during training. Overall, the UQ
+experiments demonstrate that the proposed PAUFNO exhibits a strong robustness across the uncertainty test.
+13
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Figure 13: Illustration of selecting the short-side vertex angle α (as defined in Fig. 3a). (a) Label data from the Utah
+FORGE site showing strong residual coupling noise. (b) The first 128 channels of the label and predicted data obtained
+from models trained with dual-triangle masks using different α values (10◦–60◦), where the predicted sections remain
+dominated by residual noise. (c) Normalized mean-squared error (MSE) between the label and predictions in (b) as a
+function of α, with each value normalized by the maximum MSE for consistent comparison.
+4.2
+Mask size determination
+The physics-aware loss with the dual-triangle mask constitutes the principal novelty of this work. Consequently,
+investigating how to design the mask’s geometry – specifically its size and shape is essential. We conducted extensive
+experiments to evaluate the influence of the short-side vertex angle, α, on denoising performance, focusing on the first
+128 channels. Figure 13 illustrates the procedure for selecting the short-side vertex angle. A representative example
+was chosen in which no clear seismic events are visible; however, strong residual coupling noise remains, particularly
+within channels 0–100. Since the physics-aware loss term is designed to suppress this residual noise, analyzing the
+difference between the label and the model predictions provides valuable guidance for selecting an appropriate mask
+configuration, namely the choice of α.
+In this analysis, the leg adjacent to α was fixed at a length of 40 sample points, which is sufficient to encompass the
+majority of the residual noise energy in the FK domain. The mean squared error (MSE) is computed as:
+MSE = 1
+N
+N
+X
+n=1
+( ˆyi −yi)2,
+(9)
+where N = 128 × 2000 denotes the total number of sample points, ˆy represents the predictions obtained from models
+trained with different α values, and y is the corresponding label data.
+Figures 13b and 13c present the predicted results and the normalized MSE curve for vertex angles ranging from 10◦
+to 60◦. The results indicate that α = 35◦achieves satisfactory denoising performance; increasing α further begins to
+affect the signal energy adversely. Therefore, we ultimately selected the dual-triangle masks sharing a common vertex,
+with the vertex angle 35◦, and the leg adjacent to this angle, forming the right angle, has a length of 40 sample points.
+4.3
+Limitation and future work
+In the sections above, we have already demonstrated the power of the proposed UFNO and physics-aware loss function
+across variable experiments. However, it is necessary to point out the limitations of the proposed method to gain a
+deeper understanding of the proposed method, as well as provide guidance for future work.
+• Patch boundary artifacts. Compared with the purely data-driven UFNO model, PAUFNO faces challenges
+in handling predictions at the patch boundaries. During inference, we applied an overlap of 18 samples
+between adjacent patches to alleviate this issue. However, reducing the overlap leads to more noticeable
+“white boundary” artifacts, which can be addressed by conducting the second inference with shifted patching.
+14
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Alternatively, we could only focus on the part with residual noise in which usually appears around the
+near-wellbore channels.
+• Designing triangle masks. In this work, we employed a triangular mask with a short-side vertex angle of 30°
+and a leg length corresponding to 40 sample points. In future research, it would be worthwhile to investigate
+an adaptive mask design strategy potentially guided by the spatial energy distribution or signal-to-noise ratio
+to further improve the model’s physical consistency and generalization capability.
+• To improve the imperfect labels, a physics-aware loss function is introduced to correct residual noise using
+appropriate masks in the FK domain. This approach allows us to focus specifically on regions containing
+residual noise. Once these areas are corrected, we can train another deep learning model in a purely data-driven
+manner, thereby mitigating the impact of imperfect labels.
+5
+Conclusions
+Recovering weak signals obscured by complex noise in DAS data remains a long-standing challenge. Conventional
+denoising methods often struggle to balance effective noise suppression with artifact mitigation. In this work, we
+proposed a new framework that incorporates a physics-aware loss function as a penalty term to correct the imperfect
+labels generated by filter-based approaches. In addition, a patch-based neural operator is introduced to enable high-
+accuracy feature representation in both the time and frequency domains. The synergy between the physics-aware
+loss function and operator learning establishes a novel paradigm for training with imperfect labels while achieving
+outstanding denoising performance. Numerical experiments demonstrate that the data-driven UFNO outperforms the
+U-Net, exhibiting greater flexibility in handling varying input sizes without retraining. Furthermore, by leveraging the
+physics-aware loss, the UFNO effectively suppresses residual coupling noise in near-wellbore channels, highlighting
+the robustness and accuracy of the proposed physics-informed neural operator–based denoising framework.
+This work may inspire future research in areas such as wavefield separation and other types of noise suppression, where
+signal and noise can be disentangled within specific transform domains (e.g., FK, Radon, or wavelet domains). In
+addition, incorporating the physics-aware loss term does not require the inverse of any transform, thereby mitigating
+artifacts and errors that typically arise during inverse transforms.
+6
+Acknowledgments
+We acknowledge the support provided by King Fahd University of Petroleum and Minerals (KFUPM) through the
+International Summer Program Research Grant no. ISP24201.
+References
+Andreas Fichtner, Fabian Walter, Patrick Paitz, Sara Klaasen, Daniel C. Bowden, Sebastian Noe, Nils Müller, Dominik
+Husmann, and Jacques Morel. An illustrated guide to: Distributed and integrated fibre-optic sensing in seismology.
+38(1):67–77, 2025. ISSN 1674-4519. doi:10.1016/j.eqs.2024.09.006.
+S Mostafa Mousavi and Gregory C Beroza. Deep-learning seismology. Science, 377(6607):eabm4470, 2022.
+Yang Cui, Umair Bin Waheed, and Yangkang Chen. Unsupervised deep learning for DAS-VSP denoising using
+attention-based deep image prior. IEEE Transactions on Geoscience and Remote Sensing, 2025a.
+Long Han, Xinming Wu, Zhanxuan Hu, Jintao Li, and Huijing Fang. Mamcl: Multi-attributes masking contrastive
+learning for explainable seismic facies analysis. Computers & Geosciences, 193:105731, 2024.
+Y Cui, M Bai, J Wu, and Y Chen. Earthquake signal detection using a multiscale feature fusion network with hybrid
+attention mechanism. Geophysical Journal International, 240(2):988–1008, 2025b.
+Yimin Dou, Kewen Li, Hongjie Duan, Timing Li, Lin Dong, and Zongchao Huang. Mda gan: Adversarial-learning-
+based 3-d seismic data interpolation and reconstruction for complex missing. IEEE Transactions on Geoscience and
+Remote Sensing, 61:1–14, 2023.
+Ricard Durall, Ammar Ghanim, Mario Ruben Fernandez, Norman Ettrich, and Janis Keuper. Deep diffusion models for
+seismic processing. Computers & Geosciences, 177:105377, 2023.
+Zongyi Li, Nikola Kovachki, Kamyar Azizzadenesheli, Burigede Liu, Kaushik Bhattacharya, Andrew Stuart, and Anima
+Anandkumar. Fourier neural operator for parametric partial differential equations. arXiv preprint arXiv:2010.08895,
+2020.
+15
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Gege Wen, Zongyi Li, Kamyar Azizzadenesheli, Anima Anandkumar, and Sally M Benson. U-fno—an enhanced
+fourier neural operator-based deep-learning model for multiphase flow. Advances in Water Resources, 163:104180,
+2022.
+Min Zhu, Shihang Feng, Youzuo Lin, and Lu Lu. Fourier-deeponet: Fourier-enhanced deep operator networks for
+full waveform inversion with improved accuracy, generalizability, and robustness. Computer Methods in Applied
+Mechanics and Engineering, 416:116300, 2023a.
+Chao Song, Tianshuo Zhao, Umair Bin Waheed, Cai Liu, and You Tian. Seismic traveltime simulation for variable
+velocity models using physics-informed fourier neural operator. IEEE Transactions on Geoscience and Remote
+Sensing, 62:1–9, 2024.
+Daniel Badawi and Eduardo Gildin. Neural operator-based proxy for reservoir simulations considering varying well
+settings, locations, and permeability fields. Computers & Geosciences, 196:105826, 2025.
+Xiao Ma and Tariq Alkhalifah. An effective physics-informed neural operator framework for predicting wavefields.
+arXiv preprint arXiv:2507.16431, 2025.
+Peihong Xie, Yang Liu, Cai Liu, Chao Song, and Xiangjia Zhang. Simultaneous suppression of seismic random and
+erratic noise using pinn with high-frequency preservation. Journal of Geophysics and Engineering, page gxaf109,
+2025.
+Ariel Lellouch, Ryan Schultz, Nathaniel J. Lindsey, Biondo Biondi, and William L. Ellsworth. Low-magnitude
+seismicity with a downhole distributed acoustic sensing array—examples from the FORGE geothermal experiment.
+Journal of Geophysical Research: Solid Earth, 126(1):e2020JB020462, 2021. doi:10.1029/2020JB020462.
+Yangkang Chen, Alexandros Savvaidis, Sergey Fomel, Yunfeng Chen, Omar M Saad, Hang Wang, Yapo Abolé
+Serge Innocent Oboué, Liuqing Yang, and Wei Chen. Denoising of distributed acoustic sensing seismic data using an
+integrated framework. Seismological Society of America, 94(1):457–472, 2023.
+Yapo Abolé Serge Innocent Oboué, Yunfeng Chen, Sergey Fomel, and Yangkang Chen. Protecting the weak signals in
+distributed acoustic sensing data processing using local orthogonalization: The forge data example. Geophysics, 89
+(2):V103–V118, 2024.
+Taylor Martin and Greg Nash. Utah forge: High-resolution das microseismic data from well 78-32. Geothermal Data
+Repository, Energy and Geoscience Institute at the University of Utah, https://doi.org/10.15121/1603679, 2019. URL
+https://gdr.openei.org/submissions/1185. Accessed: 2025-10-03.
+Martijn Van den Ende, Itzhak Lior, Jean-Paul Ampuero, Anthony Sladen, André Ferrari, and Cédric Richard. A
+self-supervised deep learning approach for blind denoising and waveform coherence enhancement in distributed
+acoustic sensing data. IEEE Transactions on Neural Networks and Learning Systems, 34(7):3371–3384, 2021.
+Xintong Dong, Jun Lin, Shaoping Lu, Hongzhou Wang, and Yue Li. Multiscale spatial attention network for seismic
+data denoising. IEEE Transactions on Geoscience and Remote Sensing, 60:1–17, 2022.
+Ning Wu, Tong Xing, and Yue Li. Multi-scale progressive fusion attention network based on small sample training for
+DAS noise suppression. IEEE Transactions on Geoscience and Remote Sensing, 60:1–12, 2022.
+Tie Zhong, Zheng Cong, Hongzhou Wang, Shaoping Lu, Xintong Dong, Shiqing Dong, and Ming Cheng. Multi-scale
+encoder-decoder network for DAS data simultaneous denoising and reconstruction. IEEE Transactions on Geoscience
+and Remote Sensing, 2023.
+Liuqing Yang, Sergey Fomel, Shoudong Wang, Xiaohong Chen, Wei Chen, Omar M Saad, and Yangkang Chen.
+Denoising of distributed acoustic sensing data using supervised deep learning. Geophysics, 88(1):WA91–WA104,
+2023a.
+Liuqing Yang, Sergey Fomel, Shoudong Wang, Xiaohong Chen, Yunfeng Chen, and Yangkang Chen. Slknet: An
+attention-based deep-learning framework for downhole distributed acoustic sensing data denoising. Geophysics, 88
+(6):WC69–WC89, 2023b.
+Donglin Zhu, Lei Fu, Vladimir Kazei, and Weichang Li. Diffusion model for DAS-VSP data denoising. Sensors, 23
+(20):8619, 2023b.
+Gang Yu, Zhidong Cai, Yuanzhong Chen, Ximing Wang, Qinghong Zhang, Yanpeng Li, Yanhua Wang, Congwei
+Liu, Baoyin Zhao, and Joe Greer. Borehole seismic survey using multimode optical fibers in a hybrid wireline.
+Measurement, 125:694–703, 2018.
+Jing-Xia Xu, Hao-Ran Ren, Zhao-Lin Zhu, Tong Wang, and Zhi-Hao Chen. DAS-VSP coupled noise suppression based
+on U-Net network. Journal of Geophysics and Engineering, 21(3):938–950, 2024a.
+Claire Birnie and Matteo Ravasi. Explainable artificial intelligence-driven mask design for self-supervised seismic
+denoising. Geophysical Prospecting, 72(5):1729–1744, 2024.
+16
+
+Physics-Aware DAS Denoising
+A PREPRINT
+Omar M Saad, Islam Helmy, and Yangkang Chen. Unsupervised deep-learning framework for 5D seismic denoising
+and interpolation. Geophysics, 89(4):V319–V330, 2024.
+Zitai Xu, Bangyu Wu, Yisi Luo, Liuqing Yang, and Yangkang Chen. Selfmixed: Self-supervised mixed noise attenuation
+for distributed acoustic sensing data. Geophysics, 89(5):V415–V436, 2024b.
+Yangkang Chen. Fast dictionary learning for noise attenuation of multidimensional seismic data. Geophysical Journal
+International, 222(3):1717–1727, 2020. doi:10.1093/gji/ggaa184.
+Qilong Wang, Banggu Wu, Pengfei Zhu, Peihua Li, Wangmeng Zuo, and Qinghua Hu. ECA-Net: Efficient channel
+attention for deep convolutional neural networks. In Proceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), June 2020.
+Derrick Chambers, Ge Jin, Ahmad Tourei, Abdul Hafiz Saeed Issah, Ariel Lellouch, Eileen R Martin, Donglin Zhu,
+Aaron J Girard, Shihao Yuan, Thomas Cullison, et al. Dascore: A python library for distributed fiber optic sensing.
+Seismica, 3(2):10–26443, 2024.
+Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-net: Convolutional networks for biomedical image segmenta-
+tion. In International Conference on Medical image computing and computer-assisted intervention, pages 234–241.
+Springer, 2015.
+Evgeniia Martuganova, Manfred Stiller, Ben Norden, Jan Henninges, and Charlotte M. Krawczyk. 3D DAS-VSP data
+from the Groß Schönebeck site, Germany, February 2017, 2022. URL https://doi.org/10.5880/GFZ.4.8.
+2022.014. Dataset.
+Yangkang Chen and Sergey Fomel. Random noise attenuation using local signal-and-noise orthogonalization. Geo-
+physics, 80(6):WD1–WD9, 2015.
+Yarin Gal and Zoubin Ghahramani. Dropout as a bayesian approximation: Representing model uncertainty in deep
+learning. In international conference on machine learning, pages 1050–1059. PMLR, 2016.
+17

@@ -1,0 +1,732 @@
+US-X Complete: A Multi-Modal Approach to
+Anatomical 3D Shape Recovery
+Miruna-Alexandra Gafencu1,2,3, Yordanka Velikova1,2, Nassir Navab1, and
+Mohammad Farid Azampour1,2
+1 Computer-Aided Medical Procedures (CAMP), Technical University of Munich,
+Munich, Germany
+2 Munich Center for Machine Learning (MCML), Germany
+3 Konrad Zuse School of Excellence in Reliable AI (relAI), Germany
+Abstract. Ultrasound offers a radiation-free, cost-effective solution for
+real-time visualization of spinal landmarks, paraspinal soft tissues and
+neurovascular structures, making it valuable for intraoperative guidance
+during spinal procedures. However, ultrasound suffers from inherent lim-
+itations in visualizing complete vertebral anatomy, in particular verte-
+bral bodies, due to acoustic shadowing effects caused by bone. In this
+work, we present a novel multi-modal deep learning method for complet-
+ing occluded anatomical structures in 3D ultrasound by leveraging com-
+plementary information from a single X-ray image. To enable training,
+we generate paired training data consisting of: (1) 2D lateral vertebral
+views that simulate X-ray scans, and (2) 3D partial vertebrae repre-
+sentations that mimic the limited visibility and occlusions encountered
+during ultrasound spine imaging. Our method integrates morphological
+information from both imaging modalities and demonstrates significant
+improvements in vertebral reconstruction (p < 0.001) compared to state
+of art in 3D ultrasound vertebral completion. We perform phantom stud-
+ies as an initial step to future clinical translation, and achieve a more
+accurate, complete volumetric lumbar spine visualization overlayed on
+the ultrasound scan without the need for registration with preoperative
+modalities such as computed tomography. This demonstrates that inte-
+grating a single X-ray projection mitigates ultrasound’s key limitation
+while preserving its strengths as the primary imaging modality. Code and
+data can be found at https://github.com/miruna20/US-X-Complete
+Keywords: Ultrasound · Multi-modal · 3D Shape Completion · Anatom-
+ical Structure Reconstruction
+1
+Introduction
+Ultrasound imaging is increasingly gaining attention in spinal procedures, due
+to its ability to provide real-time, radiation-free visualization of paraspinal soft
+tissues and superficial bone landmarks. As an affordable and highly portable
+modality, ultrasound allows for bedside or operating-room use in diverse set-
+tings. In spinal injections such as epidural steroid injections, or lumbar facet
+arXiv:2511.15600v1  [cs.CV]  19 Nov 2025
+
+2
+M-A. Gafencu et al.
+joint injections the use of ultrasound increases the accuracy of needle place-
+ment and reduces the number of performed punctures at a lower radiation cost
+compared to fluoroscopy [1, 2]. In surgical procedures such as spinal tumor resec-
+tions, ultrasound enables delineating the margins of tumors which minimizes the
+risk of residual tumor [3], while in spinal decompression procedures, ultrasound
+provides real time feedback of spinal cord and dural movements [4]. Overall,
+spine sonography not only provides real-time, radiation free guidance and assis-
+tance during these procedures, but also minimizes the risk for complications and
+surgical trauma.
+However, spinal ultrasound imaging has well known limitations and chal-
+lenges. The bony structures of the spine severely attenuate ultrasound, causing
+acoustic shadows under the surface. These shadows occlude deeper structures
+such as the laminae, pedicles and the vertebral body [5]. In practice, an ac-
+quisition only covers a few vertebral levels per sweep, giving a limited field of
+view relative to the full spine. These constraints mean that ultrasound images
+capture partial surface information and often only for the nearest surface. More-
+over, image quality and interpretation is highly dependent on the skill of the
+operator. Inexperienced users may fail to obtain suitable scan planes, leading to
+inconsistent or incomplete bone visualization. Therefore, ultrasound alone does
+not readily offer an easily interpretable, volumetric view of spine anatomy which
+limits standalone ultrasound guidance [6].
+To address the challenge of incomplete information, previous methods have
+explored registering intraoperative ultrasound images to preoperative CT scans.
+This enables clinicians to overlay accurately depicted CT-derived anatomy onto
+the live intraoperative ultrasound view, providing a more complete visualiza-
+tion of the spine. However, this process is technically challenging. Differences
+in patient positioning between the preoperative computer tomography (CT)
+and the intraoperative setting can lead to changes in spine curvature and, con-
+sequently, anatomical misalignments that rigid registration alone cannot re-
+solve [7–9]. Moreover, patient movement during surgery typically requires the
+registration to be repeated. Finally, the approach depends on the availability of
+a recent CT scan, which may not always be feasible due to clinical, logistical or
+radiation-related constraints.
+As an alternative, Gafencu et al. [10] proposed reconstructing the full spine
+anatomy directly and solely from intraoperative ultrasound. While this elimi-
+nates the need for preoperative imaging, it inherits the above-mentioned fun-
+damental limitations of ultrasound, most notably the systematical occlusion of
+entire sub-structures of a vertebra such as the vertebral body. As a result, the in-
+verse problem of reconstruction becomes highly under-constrained and ill-posed.
+Although this method produces anatomically plausible spine completions on
+both phantom and patient data, it struggles to estimate accurate vertebral body
+dimensions in real anatomical settings.
+Given the limitations of both CT-based registration and ultrasound-only re-
+construction, we propose a lightweight, intraoperative solution that combines
+ultrasound with a single lateral X-ray. This hybrid approach leverages the com-
+
+Title Suppressed Due to Excessive Length
+3
+plementary strengths of the two modalities. A lateral radiograph offers a global,
+projection-based view of the full spinal column, capturing vertebral alignment
+and anchoring the overall geometry and scale. Ultrasound, on the other hand,
+provides localized, real-time information on bony landmarks and surrounding
+soft tissues. Acquiring a single X-ray is fast, introduces minimal radiation, and
+is already part of many spine procedures for level confirmation. By fusing these
+two data sources, we enable accurate, patient-specific 3D reconstruction of the
+spine without relying on preoperative imaging or complex intraoperative regis-
+tration.
+We formulate the recovery of the complete spine as a 3D shape completion
+problem. Point cloud-based shape completion has been widely studied in com-
+puter vision, particularly on synthetic object datasets such as ShapeNet [11].
+Early methods used encoder–decoder architectures such as PCN [12] to recon-
+struct full shapes from partial inputs with extensions introducing hierarchical
+generation TopNet [13] or parametric surface decoders [14]. Recent works ex-
+plore advanced architectures such as transformed-based models like PoinTr [15]
+that capture long-range structural dependencies in the point set and methods
+such as SnowflakeNet [16] that progressively refine details by fractally splitting
+points with skip-transformer blocks. Other methods, such as VRCNet [17] use
+variational inference with relational reasoning to capture shape priors and local
+geometric structures more effectively.
+Multi-modal, also called cross-modal shape completion extends this paradigm
+by integrating additional inputs to guide completion. Typically, features from
+different modalities are fused during coarse shape prediction and subsequent re-
+finement. For instance, ViPC [18] leverages a single-view image for its global
+context to infer missing parts, while CSDN [19] treats shape completion as a
+style transfer problem, using images to refine coarse predictions. Other methods
+incorporate attention mechanisms to fuse multi-view 2D and 3D information [20],
+or apply view-based reasoning for refinement. Beyond RGB guidance, additional
+modalities such as semantic segmentation [21], temporal sequences [22], textual
+descriptions [23], or geometric priors like symmetry [24] have been employed
+to further improve performance. These methods often rely on aligned modali-
+ties and abundant training data with uniformly distributed occlusions. In con-
+trast, medical imaging presents fundamentally different challenges: occlusions
+are structured and modality-specific, anatomical variability is high, and training
+data is limited.
+In this work, we introduce the first multi-modal shape recovery framework
+designed specifically for spine imaging. Our approach integrates anatomical in-
+formation from a 3D-tracked ultrasound(US) sweep and a single lateral X-ray by
+registering them into a shared 3D representation space to form a unified, multi-
+modal partial observation. We then reconstruct the full spine using a two-stage,
+coarse-to-fine probabilistic deep learning framework built upon VRCNet [17]
+and enhance it with modality fusion modules. The final 3D reconstruction can
+be overlaid onto the ultrasound volume to support downstream navigation and
+interpretation. For training, we use simulated, modality-specific partial views.
+
+4
+M-A. Gafencu et al.
+2. Multi-modal Shape Completion Pipeline 
+CT + Annotation
+Physics-aware Ray-casted 
+Point Cloud
+Simulated X-Ray Projection
+Coarse 
+Completion
+Refinement 
+Network
+One Hot 
+Encoding 
+Fine 
+Completion
+1. Data generation pipeline 
+Late Fusion Block
+Masked Point 
+Cloud 
+Cropped 
+Labelmap 
+Aligned
+Decoder
+Coarse Completion Network
+Fig. 1. Overview of the proposed method: (a) Data Generation Pipeline: Synthetic
+training data is derived from annotated CT scans, simulating ultrasound-consistent
+partial vertebral observations to mimic acoustic shadowing. Simultaneously, 2D lateral
+X-ray projections of 3D vertebral segmentations are generated. These multi-modal
+observations are merged into an anatomically aligned 3D point cloud representation.(b)
+The aligned observations undergo a two-stage completion process. The coarse stage
+extracts global features from both modalities to generate a vertebral template, which
+is then refined with detailed features from ultrasound and X-ray data to produce the
+final complete shape.
+At inference time, our framework operates using only the 3D ultrasound scan
+and a single lateral X-ray, eliminating the need for CT/US registration. Our
+contributions are threefold:
+(1) A novel multi-modal shape completion framework that combines X-ray
+and ultrasound for lumbar spine reconstruction, leveraging their complementary
+strengths and addressing the limitations of ultrasound-only approaches.
+(2) A joint representation space that fuses anatomical features from both
+modalities, specifically designed for accurate shape reasoning.
+(3) Comprehensive validation using synthetic data and physical phantom
+experiments conducted under operating room conditions.
+2
+Methodology
+2.1
+Data Generation
+Within an operating room setting for spine procedures, ultrasound scans enable
+real-time guidance of tools toward the target site, while X-ray imaging is typically
+used for final confirmation of their placement relative to the vertebral anatomy.
+To replicate this imaging scenario, we simulate X-ray and ultrasound views of
+the spine from the annotated CT scans of the VerSe2020 [25] dataset. Displayed
+in Figure 1, our synthetic data generation accounts for the physical principles
+and acquisition constrains of each modality.
+
+Title Suppressed Due to Excessive Length
+5
+Simulation of vertebral partial observation from ultrasound. Ultra-
+sound imaging of the spine is fundamentally limited by acoustic shadowing.
+This effect renders large portions of the vertebrae invisible. As shown in the
+compounded 3D ultrasound scan displayed in Figure 3, typically only the verte-
+bral arch is distinguishable.
+To simulate this partial visibility, we generate ultrasound-consistent point
+clouds from CT-derived spine meshes using a physics-aware ray-casting method [10].
+We simulate transverse ultrasound acquisitions by positioning a virtual camera
+above each spinous process and casting rays into the mesh. Only points with
+a surface normal forming an angle of less than 90° with the incoming ray are
+retained, mimicking the reflection behavior of ultrasound waves at oblique an-
+gles. This ensures that structures not favorably oriented toward the probe are
+appropriately occluded.
+To further approximate ultrasound-specific artifacts such as off-plane scat-
+tering, we apply a set of lateral and anterior-posterior shifts to the mesh prior to
+ray-casting. By retaining only points that remain visible across these perturbed
+acquisitions, we simulate the effect of incoherent echo returns and spatial shad-
+owing. The resulting surface point clouds exhibit varying degrees of occlusion
+and limited field of view, closely reflecting real ultrasound scans of the spine.
+Finally, to generate inputs for vertebra-wise completion, we heuristically seg-
+ment the spine into individual vertebral levels by applying fixed-size bounding
+box masks centered on each vertebral centroid. This results in noisy partial
+point clouds, which improve the completion network’s robustness to vertebral
+segmentation inaccuracies. This dataset has been used to train and evaluate the
+ultrasound-based shape completion method in [10].
+Simulation of vertebral partial observation from X-ray. Lateral spinal
+X-ray scans, as shown in Figure 3, capture vertebral bodies but lack depth
+information along the ray path. To simulate this projection, we start from the 3D
+vertebral segmentations in VerSe20 and project each vertebra’s points onto the
+central transverse plane along the left–right axis, corresponding to the assumed
+X-ray beam direction in a lateral view. The resulting 2D projection and the
+projection plane (highlighted in yellow) are illustrated in Figure 1. We then
+assign the third coordinate z of each point to the midpoint slice of the 3D
+segmented volume along the same axis, effectively placing the 2D projection
+into 3D space. This simulated 3D X-ray observation enables alignment with the
+corresponding 3D surface observations from ultrasound.
+Joint Representation Space. Combining different imaging modalities in an
+anatomically-consistent manner remains a key challenge in medical imaging anal-
+ysis [26]. To address this, we construct a joint 3D point cloud representation
+that integrates anatomical information from both ultrasound and X-ray within
+a shared coordinate space.
+In the simulated setting, the partial views are inherently registered, as both
+originate from the same CT scan. As a result, the simulated ultrasound surface
+
+6
+M-A. Gafencu et al.
+Coarse Completion Network
+Coarse 
+Completion
+Multi-modal Partial 
+Point Cloud
+Complete 
+Point Cloud
+Encoder
+Prior 
+inference
+Reconstructed 
+Point Cloud
+Shared MLP 
+(128)
+Shared MLP 
+(256)
+maxpool
+Shared MLP 
+(512)
+Shared MLP 
+(1024)
+maxpool
+Expand
+FC Layer
+Sample
+US Encoder
+FC Layer
+Early Fusion Block
+Posterior 
+inference
+Sample
+X-Ray Encoder
+Share Weights
+1 Linear 
+Residual Block
+2 Linear 
+Residual Block
+Element-wise Product
+Concatenation
+Element-wise Summation
+Posterior 
+inference
+Prior 
+inference
+Training only
+Training and Inference
+Distribution link
+Shared MLP
+ (128)
+Shared MLP
+ (256)
+maxpool
+Shared MLP
+ (512)
+Shared MLP
+ (1024)
+maxpool
+Expand
+Shared MLP
+ (128)
+Shared MLP
+ (256)
+maxpool
+Shared MLP
+ (512)
+Shared MLP
+ (1024)
+maxpool
+Expand
+feature 
+selection
+Fig. 2. The coarse-stage network is trained to reconstruct the full vertebral shape
+from ground truth data, which implicitly teaches it a shape prior for lumbar vertebrae.
+Simultaneously, it learns to complete the shape conditioned on multi-modal partial
+observations from ultrasound and X-ray. As a result, the network outputs anatomically
+plausible coarse vertebral templates that integrate prior knowledge with image-based
+observations.
+(marked in orange) and the simulated X-ray projection expanded from 2D to
+3D as previously explained (marked in blue) are geometrically and anatomically
+aligned, forming a coherent multi-modal observation. This observation is further
+used as input to the multi-modal shape completion pipeline.
+In contrast, such inherent registration is not present in the OR. The regis-
+tration strategy for the realistic OR scenario is described in Section 3.1.
+2.2
+Multi-modal Shape Completion Pipeline
+Our multi-modal shape completion pipeline, illustrated in Figure 1 comprises two
+main stages: a coarse shape completion network that learns prior shape distribu-
+tion of the vertebrae, and a refinement stage based on self-attention mechanisms
+that recovers detailed anatomical structures. Both stages are implemented as
+variational autoencoders and trained jointly using a combined loss function with
+two terms: Kullback-Leibler (KL) as a distribution divergence term and Chamfer
+Distance (CD) term to supervise completion accuracy. To enable integration of
+complementary information from different imaging modalities, we introduce two
+novel components: an Early Fusion block in the coarse completion stage and a
+Late Fusion block in the refinement stage.
+Coarse Completion Stage The coarse completion network depicted in Fig-
+ure 2 is trained to simultaneously reconstruct the full vertebral shape from com-
+plete input and to perform shape completion from partial observations. This dual
+objective enables the model to capture a prior distribution over complete verte-
+
+Title Suppressed Due to Excessive Length
+7
+brae geometries while also learning to infer plausible completions from limited
+observations.
+To effectively integrate the complementary anatomical cues provided by ul-
+trasound and X-ray segmentations, we introduce an Early Fusion module. Each
+modality is first processed by a dedicated MLP-based encoder that produces
+modality-specific latent features. These features are concatenated and passed
+through a feature selection block to project them into a unified 1024-dimensional
+latent space that serves as a shared representation across modalities. This rep-
+resentation is then passed to a posterior inference module, which estimates a
+Gaussian distribution over the latent space. During training, we enforce align-
+ment between the posterior derived from partial inputs and the prior learned
+from complete shapes via a KL divergence loss. Sampling from the prior enables
+the network to reconstruct full shapes, while sampling from the posterior enables
+coarse completion conditioned on partial observations.
+At inference time, only partial data is available. The model encodes the
+ultrasound and X-ray inputs, samples from the learned posterior, and generates
+a coarse completion that is then passed to the refinement stage. At this stage,
+the completed point cloud is predicted in the same coordinate space as the
+multi-modal partial observation and is therefore inherently co-registered to it.
+This property ensures that subsequent fusion and refinement operations can be
+performed without additional alignment steps.
+Refinement Stage To enhance the anatomical accuracy of the initial coarse
+prediction, we integrate a refinement stage using a point-based encoder–decoder
+architecture with integrated self-attention mechanisms as proposed by Pan et
+al. [17]. This network is designed to aggregate point-level features across multiple
+spatial scales, which is particularly important for vertebral shape completion:
+vertebrae have complex morphological patterns with fine-grained details, such
+as processes, and curvature that are difficult to recover from global encodings
+and shape priors alone.
+To incorporate local geometric details from multi-modal partial observations
+into the refinement process, we introduce a late fusion strategy. In this setup,
+the coarse shape completion, the ultrasound segmentation, and the X-ray seg-
+mentation are first concatenated into a single point cloud. Each point is then
+augmented at input stage with a one-hot encoding that defines its origin, allow-
+ing the network to distinguish between data sources.
+This fusion strategy enables the network to treat each input differently. This
+distinction is critical, as the three sources differ fundamentally in nature: the
+coarse completion is a prior-based prediction, the X-ray point cloud is a projec-
+tive 2.5D observation, and the ultrasound data, although noisy contains rich local
+morphological information. By explicitly encoding these differences we hypoth-
+esise that the network can effectively make use of the complementary strengths
+of each modality to improve refinement quality.
+
+8
+M-A. Gafencu et al.
+Compounded 3D 
+US Scan
+3D Partial PC 
+from US
+2D US 
+Acquisition
+Lateral X-Ray 
+Scan
+2D Partial PC 
+from X-Ray
+X-Ray 
+Acquisition
+Ultrasound Acquisition
+X-Ray Acquisition 
+Registered
+Fig. 3. Data acquisition and pre-processing for validating the proposed method using
+two spine phantoms. We acquire registered ultrasound and X-ray scans and integrate
+both modalities into our unified 3D point cloud representation before feeding it into
+the multi-model shape completion pipeline.
+2.3
+Evaluation methodology
+We evaluate the impact of X-ray information as additional guidance to the
+ultrasound-based shape completion. Furthermore, we investigate the role of in-
+tegrating X-ray segmentation at different stages of our end-to-end shape com-
+pletion pipeline within our ablation studies. This comprehensive analysis helps
+identify the optimal strategy for incorporating X-ray segmentation into the shape
+completion process. We additionally perform phantom studies and present both
+quantitative and qualitative results for a comprehensive understanding of our
+outcomes.
+Our evaluation combines established shape completion metrics such as CD,
+Earth Mover’s Distance (EMD) and F1-score [10] with anatomically-specific
+evaluation. To obtain additional insights, we perform a separate evaluation of
+the vertebral arch and body completion accuracy. Heuristically, we separate
+the structures based on the vertebra’s centre of gravity cg ∈R3. Assuming
+anteroposterior axis alignment with the y axis, we define ArchPoints ∈R3,
+ArchPoints = {p|py > cgy} for the vertebral arch and BodyPoints ∈R3,
+BodyPoints = {q|qy < cgy} for the vertebral body.
+Statistical significance is assessed using the Wilcoxon signed-rank test, cho-
+sen for our paired, non-normally distributed results (confirmed by Shapiro-Wilk
+test).
+3
+Experimental Setup
+3.1
+Image Acquisition Setup for Phantom Validation
+We conduct experiments on two spine phantoms (see appendix for details) con-
+taining lumbar vertebrae L1–L5, using a clinical-like setup to evaluate the fea-
+sibility of clinical translation of our proposed method (Figure 3). Transverse
+ultrasound scans are acquired with a 2D curvilinear transducer (5C1) connected
+to an ACUSON Juniper ultrasound system4. The probe is mounted on the end-
+4 Siemens Healthineers, Germany
+
+Title Suppressed Due to Excessive Length
+9
+effector of a robotic manipulator5 using a custom 3D-printed holder, and roboti-
+cally tracked to enable 3D volume compounding. From the compounded volume,
+vertebrae are manually segmented and divided into individual levels.
+We also acquire paired lateral X-ray and cone-beam CT (CBCT) scans using
+a Loop-X system6, aligning the X-ray projection with the phantom’s left–right
+axis to capture lateral spine views. Since the system acquires both X-ray and
+CBCT images, they are inherently co-registered. We further register the CBCT
+volume to the ultrasound data using the registration approach described by Li
+et al. [27]. We segment vertebral bodies semi-automatically from the X-ray scan
+and extract the complete ground truth spine shape from the CBCT, which we
+then divide into individual levels.
+To place the X-ray scan within the 3D ultrasound volume, we first use the
+known registration chain between X-ray/CBCT and CBCT/ultrasound. This
+allows alignment along the craniocaudal and anteroposterior directions. To es-
+timate the position of the X-ray scan along the lateral axis, we analyze the
+segmented spine in the ultrasound volume. Specifically, we compute the oriented
+bounding box of the segmented spine and determine its second principal axis,
+which typically corresponds to the left–right anatomical direction. Along this
+axis, we identify the two outermost points of the segmentation, representing
+the lateral extent of the visible spine, and calculate their midpoint. This mid-
+point serves as a reference for placing the X-ray scan in the left–right direction,
+ensuring it is centered relative to the spine and positioned in an anatomically
+meaningful way.
+Finally, the registered ultrasound and X-ray segmentations are transformed
+into a multi-modal partial point cloud within the joint representation space
+described in Section 2.1. This point cloud is subsequently passed to the shape
+completion network.
+3.2
+Training Setup
+Throughout the experiments, a synthetic dataset derived from VerSe20 is used,
+split 60-20-20 into training, validation, and testing sets, totaling 149 lumbar spine
+samples, each containing 5 vertebrae. Training is conducted over 100 epochs
+using the Adam optimizer (learning rate = 0.0001), with batch sizes of 4 and
+2 for training and testing, respectively. All experiments are performed on an
+NVIDIA GeForce RTX 4080 GPU. At inference time, completing one vertebra,
+on average, takes 0.31 seconds.
+4
+Results
+4.1
+Evaluation of the proposed method against baseline
+We evaluate our multi-modal shape completion approach against previously in-
+troduced baseline that uses only partial observations from ultrasound [10]. Ta-
+5 KUKA LBR iiwa 14 R820, KUKA Roboter GmbH, Augsburg, Germany
+6 medPhoton GmbH, Salzburg, Austria
+
+10
+M-A. Gafencu et al.
+Table 1. Quantitative performance comparison (in terms of CD, EMD multiplied by
+104 and F1-Score) of our proposed multi-modal method compared to the ultrasound-
+based baseline [10] on synthetic and phantom data, as well as results of the ablation
+studies of Early Fusion(EF) and Late Fusion(LF).
+Method
+Synthetic
+Phantom
+CD↓
+EMD↓
+F1-Score↑
+CD↓
+EMD↓
+F1-Score↑
+Baseline [10] Arch 5.3±1.8
+329.5±65.2
+0.34±0.06 11.4±2.4 647.4±85.2
+0.24±0.03
+Body 7.7±4.8
+349.2±90.3
+0.30±0.10 20.7±5.1 530.4±46.6
+0.14±0.03
+Ours
+Arch 4.6±1.4 279.4±48.1 0.41±0.07 7.8±2.5 422.6±59.1 0.35±0.05
+Body 4.0±1.6 252.8±74.8 0.48±0.10 7.1±2.0 359.3±79.5 0.32±0.05
+EF
+Arch 5.3±1.8
+317.4±57.1
+0.32±0.07 10.9±2.9 491.7±54.9
+0.19±0.05
+Body 8.0±4.7 360.4±103.9 0.27±0.09 22.7±6.8 569.8±83.7
+0.14±0.03
+LF
+Arch 5.6±2.4
+303.7±56.3
+0.36±0.07 10.8±5.0 444.8±74.0
+0.31±0.06
+Body 4.2±2.3
+263.8±64.3
+0.46±0.10 13.7±9.5 386.1±81.4
+0.29±0.05
+Completion | Ground truth | Ultrasound partial observation
+US-Based Shape 
+Completion
+Multi-modal Shape 
+Completion
+Phantom 1
+Phantom 2
+US-Based Shape 
+Completion
+Multi-modal Shape 
+Completion
+Fig. 4. Qualitative comparison of previously introduced ultrasound-based vertebral
+shape completion method [10] versus our proposed multi-modal approach on two spine
+phantoms.
+ble 1 displays results on synthetic and phantom dataset. From the synthetic
+dataset evaluation we demonstrate that our multi-modal approach significantly
+improves vertebral shape completion across all metrics with p-values smaller
+than 1.00e-6.
+The phantom evaluation further validates these findings, with substantial
+improvements in vertebral body accuracy compared to the baseline with a mean
+CD difference of 13.6. Figure 4 provides visual evidence of these improvements
+through a lateral view of the completed spine phantoms, specifically showing
+how a single X-ray scan helps correct both vertebral body shape and size. This
+shows that our network, trained on synthetic data, successfully generalizes to the
+phantom-based clinical-like scenarios and effectively integrates real X-ray data.
+Importantly, our network is trained exclusively on synthetic data but general-
+izes effectively to phantom datasets, demonstrating strong robustness to domain
+shifts and validating its potential for clinical transfer. Furthermore, we observe
+consistent improvements not only in the vertebral body but also in the verte-
+bral arch. This suggests that the availability of global context from the X-ray
+
+Title Suppressed Due to Excessive Length
+11
+data may provide indirect constraints that help refine the geometry of adjacent
+structures.
+4.2
+Ablation studies
+In this experiment, we conduct ablation studies to evaluate the impact of differ-
+ent architectural design choices for multi-modal shape completion, as introduced
+in Section 2.2. Table 1 summarizes the results, with rows labeled EF (Early Fu-
+sion) and LF (Late Fusion) and average scores over all 140 completed vertebrae
+from the synthetic dataset and a total of 10 vertebrae from the two lumbar
+phantoms.
+Integrating X-ray segmentation through late fusion results in a significant
+improvement in shape completion accuracy across all metrics (p-values < 1.00e-
+6). This suggests that incorporating X-ray morphological information during
+the refinement stage effectively captures the geometric details specific to the
+projective modality.
+In contrast, stand-alone early fusion has a more limited effect. While the
+encoded global representation of the X-ray segmentation slightly improves the
+initial vertebral template in the coarse stage, it does not substantially enhance
+the final output. Combining early and late fusion achieves the highest overall ac-
+curacy, demonstrating that first providing a multi-modal global representation,
+followed by refinement with detailed geometric information, yields the most ef-
+fective multi-modal shape completion.
+5
+Discussion and Conclusion
+Our experimental results highlight the capability of our method to generalize ef-
+fectively from synthetic datasets to phantom-based acquisitions. This successful
+generalization demonstrates that our synthetic data pipeline realistically cap-
+tures the characteristics of both ultrasound and X-ray imaging modalities, sug-
+gesting strong potential for translation to clinical patient data. Further improve-
+ments could be performed by additionally accounting for diverse patient posi-
+tioning and therefore various spine curvatures to improve generalizibility across
+different setups.
+To fully benefit from this capability in clinical settings, our approach requires
+precise alignment between ultrasound and X-ray modalities. In our current setup,
+the placement of the X-ray within the ultrasound volume is heuristically deter-
+mined based on the spatial extent of the ultrasound spine segmentation. This
+heuristic approach can be affected by anatomical variability, limited ultrasound
+field of view, and segmentation noise, potentially introducing alignment errors.
+Although ultrasound/X-ray registration introduces its own set of challenges,
+intraoperatively acquired X-ray images naturally reflect the patient’s real-time
+posture, reducing misalignment compared to preoperative modalities such as CT.
+Nevertheless, even small registration inaccuracies can lead to erroneous shape
+estimations, representing a current limitation of our method. To address this,
+
+12
+M-A. Gafencu et al.
+future work should focus on improving the robustness of the shape completion
+pipeline against such misalignments or exploring registration-free alternatives,
+while still leveraging global geometric cues to guide the reconstruction process
+effectively.
+Looking forward, increasing shape completion accuracy could be achieved
+by incorporating anatomical constraints across the entire spinal structure. Cur-
+rently, our reconstruction operates vertebra-by-vertebra. However, treating the
+spine as an interconnected structure with inherent spatial constraints between
+adjacent vertebrae could lead to more accurate and anatomically consistent re-
+sults.
+In conclusion, this study represents the first exploration of multi-modal med-
+ical imaging for shape completion in spinal procedures. By integrating critical
+vertebral information from ultrasound and X-ray imaging, our approach over-
+comes the inherent limitations of standalone ultrasound visualization. This initial
+proof-of-concept integration within the clinical workflow lays the foundation for
+automated ultrasound-based navigation and guidance and represents a further
+step towards intelligent, anatomy-aware surgical guidance systems.
+A
+Appendix
+A.1
+Phantom Description
+We have conducted experiments using two lumbar spine phantoms displayed in
+Figure 5. The first phantom, displayed on the left side, contains the five lumbar
+vertebrae L1-L5 and the sacrum as well as intervertebral disks from a different,
+softer material. The second phantom, displayed on the right side, is a 3D printed
+version of the volumetric annotations of lumbar vertebrae from subject 818 in
+the VerSe 2020 dataset.
+Fig. 5. Two lumbar spine phantoms utilized to conduct validation of our method within
+a clinical-like setup.
+
+Title Suppressed Due to Excessive Length
+13
+References
+1. Rasoulian, A., Seitel, A., Osborn, J., Sojoudi, S., Nouranian, S., Lessoway, V.A.,
+Rohling, R.N., Abolmaesumi, P.: Ultrasound-guided spinal injections: a feasibility
+study of a guidance system. International journal of computer assisted radiology
+and surgery 10, 1417–1425 (2015)
+2. Kalagara, H., Nair, H., Kolli, S., Thota, G., Uppal, V.: Ultrasound imaging of the
+spine for central neuraxial blockade: a technical description and evidence update.
+Current Anesthesiology Reports 11(3), 326–339 (2021)
+3. Zhou, H., Miller, D., Schulte, D.M., Benes, L., Bozinov, O., Sure, U., Bertalanffy,
+H.: Intraoperative ultrasound assistance in treatment of intradural spinal tumours.
+Clinical neurology and neurosurgery 113(7), 531–537 (2011)
+4. Kimura, A., Seichi, A., Inoue, H., Endo, T., Sato, M., Higashi, T., Hoshino, Y.:
+Ultrasonographic quantification of spinal cord and dural pulsations during cervical
+laminoplasty in patients with compressive myelopathy. European Spine Journal
+21, 2450–2455 (2012)
+5. Li, K., Xu, Y., Wang, J., Ni, D., Liu, L., Meng, M.Q.H.: Image-guided navigation
+of a robotic ultrasound probe for autonomous spinal sonography using a shadow-
+aware dual-agent framework. IEEE Transactions on Medical Robotics and Bionics
+4(1), 130–144 (2021)
+6. Hu, X., Liu, T., Zhang, Z., Xiao, X., Chen, L., Wei, G., Wang, Y., Yang, K., Jin, H.,
+Zhu, Y.: Standalone ultrasound-based highly visualized volumetric spine imaging
+for surgical navigation. Scientific Reports 15(1), 4922 (2025)
+7. Azampour, M.F., Tirindelli, M., Lameski, J., Gafencu, M., Tagliabue, E., Fatem-
+izadeh, E., Hacihaliloglu, I., Navab, N.: Anatomy-aware computed tomography-to-
+ultrasound spine registration. Medical Physics 51(3), 2044–2056 (2024)
+8. Nagpal, S., Abolmaesumi, P., Rasoulian, A., Hacihaliloglu, I., Ungi, T., Osborn,
+J., Lessoway, V.A., Rudan, J., Jaeger, M., Rohling, R.N., et al.: A multi-vertebrae
+ct to us registration of the lumbar spine in clinical data. International journal of
+computer assisted radiology and surgery 10, 1371–1381 (2015)
+9. Nagpal, S., Abolmaesumi, P., Rasoulian, A., Ungi, T., Hacihaliloglu, I., Osborn,
+J., Borschneck, D.P., Lessoway, V.A., Rohling, R.N., Mousavi, P.: Ct to us regis-
+tration of the lumbar spine: a clinical feasibility study. In: Information Processing
+in Computer-Assisted Interventions: 5th International Conference, IPCAI 2014,
+Fukuoka, Japan, June 28, 2014. Proceedings 5. pp. 108–117. Springer (2014)
+10. Gafencu, M.A., Velikova, Y., Saleh, M., Ungi, T., Navab, N., Wendler, T., Azam-
+pour, M.F.: Shape completion in the dark: completing vertebrae morphology from
+3d ultrasound. International Journal of Computer Assisted Radiology and Surgery
+pp. 1–9 (2024)
+11. Chang, A.X., Funkhouser, T., Guibas, L., Hanrahan, P., Huang, Q., Li, Z.,
+Savarese, S., Savva, M., Song, S., Su, H., et al.: Shapenet: An information-rich
+3d model repository. arXiv preprint arXiv:1512.03012 (2015)
+12. Yuan, W., Khot, T., Held, D., Mertz, C., Hebert, M.: Pcn: Point completion net-
+work. In: 2018 international conference on 3D vision (3DV). pp. 728–737. IEEE
+(2018)
+13. Tchapmi, L.P., Kosaraju, V., Rezatofighi, H., Reid, I., Savarese, S.: Topnet: Struc-
+tural point cloud decoder. In: Proceedings of the IEEE/CVF conference on com-
+puter vision and pattern recognition. pp. 383–392 (2019)
+14. Groueix, T., Fisher, M., Kim, V.G., Russell, B.C., Aubry, M.: A papier-mâché
+approach to learning 3d surface generation. In: Proceedings of the IEEE conference
+on computer vision and pattern recognition. pp. 216–224 (2018)
+
+14
+M-A. Gafencu et al.
+15. Yu, X., Rao, Y., Wang, Z., Liu, Z., Lu, J., Zhou, J.: Pointr: Diverse point cloud
+completion with geometry-aware transformers. In: Proceedings of the IEEE/CVF
+international conference on computer vision. pp. 12498–12507 (2021)
+16. Xiang, P., Wen, X., Liu, Y.S., Cao, Y.P., Wan, P., Zheng, W., Han, Z.:
+Snowflakenet: Point cloud completion by snowflake point deconvolution with skip-
+transformer. In: Proceedings of the IEEE/CVF international conference on com-
+puter vision. pp. 5499–5509 (2021)
+17. Pan, L., Chen, X., Cai, Z., Zhang, J., Zhao, H., Yi, S., Liu, Z.: Variational rela-
+tional point completion network. In: IEEE/CVF conference on computer vision
+and pattern recognition (2021)
+18. Zhang, X., Feng, Y., Li, S., Zou, C., Wan, H., Zhao, X., Guo, Y., Gao, Y.: View-
+guided point cloud completion. In: Proceedings of the IEEE/CVF conference on
+computer vision and pattern recognition. pp. 15890–15899 (2021)
+19. Zhu, Z., Nan, L., Xie, H., Chen, H., Wang, J., Wei, M., Qin, J.: Csdn: Cross-
+modal shape-transfer dual-refinement network for point cloud completion. IEEE
+Transactions on Visualization and Computer Graphics (2023)
+20. Zhang, S., Wang, R., Zhang, X.: Identification of overlapping community structure
+in complex networks using fuzzy c-means clustering. Physica A. 374, 483–490
+(2007)
+21. Yang, X., Zou, H., Kong, X., Huang, T., Liu, Y., Li, W., Wen, F., Zhang, H.:
+Semantic segmentation-assisted scene completion for lidar point clouds. In: 2021
+IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS).
+pp. 3555–3562. IEEE (2021)
+22. Shi, J., Xu, L., Li, P., Chen, X., Shen, S.: Temporal point cloud completion with
+pose disturbance. IEEE Robotics and Automation Letters 7(2), 4165–4172 (2022)
+23. Kasten, Y., Rahamim, O., Chechik, G.: Point cloud completion with pretrained
+text-to-image diffusion models. Advances in Neural Information Processing Sys-
+tems 36, 12171–12191 (2023)
+24. Ren, Y., Cong, P., Zhu, X., Ma, Y.: Self-supervised point cloud completion on real
+traffic scenes via scene-concerned bottom-up mechanism. In: 2022 IEEE Interna-
+tional Conference on Multimedia and Expo (ICME). pp. 1–6. IEEE (2022)
+25. Löffler, M.T., Sekuboyina, A., Jacob, A., Grau, A.L., Scharr, A., El Husseini,
+M., Kallweit, M., Zimmer, C., Baum, T., Kirschke, J.S.: A vertebral segmenta-
+tion dataset with fracture grading. Radiology: Artificial Intelligence 2(4), e190138
+(2020)
+26. Darzi, F., Bocklitz, T.: A review of medical image registration for different modal-
+ities. Bioengineering 11(8), 786 (2024)
+27. Li, F., Bi, Y., Huang, D., Jiang, Z., Navab, N.: Robotic cbct meets robotic ultra-
+sound. International Journal of Computer Assisted Radiology and Surgery pp. 1–9
+(2025)

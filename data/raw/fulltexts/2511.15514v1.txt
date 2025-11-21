@@ -1,0 +1,588 @@
+Revealing the Atomistic Mechanism of Rare
+Events in Molecular Dynamics
+Jakob J. Kresse,∗,† Alexander Sikorski,‡,† and Marcus Weber†
+†Computational Molecular Design, Zuse Institut Berlin, 14195 Berlin, Germany
+‡Institut für Mathematik, Freie Universität Berlin, 14195 Berlin, Germany
+* E-mail: kresse@zib.de
+Abstract
+Interpretable reaction coordinates are essential for understanding rare conforma-
+tional transitions in molecular dynamics. The Atomistic Mechanism Of Rare Events
+in Molecular Dynamics (AMORE-MD) framework enhances interpretability of deep-
+learned reaction coordinates by connecting them to atomistic mechanisms, without
+requiring any a priori knowledge of collective variables, pathways, or endpoints. Here,
+AMORE-MD employs the ISOKANN algorithm to learn a neural membership func-
+tion χ representing the dominant slow process, from which transition pathways are
+reconstructed as minimum-energy paths aligned with the gradient of χ, and atomic
+contributions are quantified through gradient-based sensitivity analysis. Iterative en-
+hanced sampling further enriches transition regions and improves coverage of rare events
+enabling recovery of known mechanisms and chemically interpretable structural rear-
+rangements at atomic resolution for the Müller-Brown potential, alanine dipeptide, and
+the elastin-derived hexapeptide VGVAPG.
+1
+arXiv:2511.15514v1  [physics.chem-ph]  19 Nov 2025
+
+Keywords
+Deep Learning; Reaction Coordinates; Explainable Artificial Intelligence; Minimum Energy
+Pathways; Enhanced Sampling; Koopman Operator Theory
+2
+
+Introduction
+Understanding the physical mechanisms that govern conformational transitions in biomolecules
+remains a central challenge in computational biophysics. While molecular dynamics (MD)
+simulations offer atomistic resolution, separating slow, collective movements from stochastic
+thermal fluctuations is notoriously difficult. A central question is how to identify representa-
+tive transition pathways and the key atomistic motions that drive them. Traditionally, this
+required expert-driven identification of collective variables (CVs), such as interatomic dis-
+tances, torsion angles, or root-mean-square displacements as a low dimensional description
+of the process.1 Capturing these rare events reliably often necessitates enhanced sampling
+strategies of these CVs, since unbiased simulations might fail to sufficiently explore transition
+pathways on accessible timescales.2
+Several principled approaches for discovering collective variables have been developed.
+Semi-supervised or self-supervised methods such as Robust Perron Cluster Analysis (PCCA+),3
+variational approaches to conformational dynamics (VAC),4 and Spectral Gap Optimization
+of Order Parameters (SGOOP)5 extract slow dynamical modes by utilizing approximative
+eigenfunctions of the backward generator L. Deep learning extensions of these methods,
+including the variational approach for Markov processes (VAMPnets)6 and other machine-
+learning approaches for collective variable discovery,7–16 have demonstrated remarkable suc-
+cess in identifying slow molecular modes and accelerating sampling.
+Nevertheless, their
+highly nonlinear architectures and large parameter counts often render a direct chemical in-
+terpretation challenging. Meanwhile, the field of explainable artificial intelligence (XAI) has
+developed techniques such as gradient-based saliency attribution maps,17,18 which make it
+possible to probe how neural networks arrive at their decisions. First applications of XAI in
+molecular kinetics have shown that post-hoc explanations can highlight which features drive
+a learned reaction coordinate.19–22 Complementary to such post-hoc analyses, intrinsically
+interpretable architectures have been developed, including models that identify compact,
+human-readable subsets of molecular descriptors23 and, more recently, geometric graph neu-
+3
+
+ral networks that learn descriptor-free collective variables with explicit node-level attribution
+of atomic relevance.24
+Beyond the domain of learned representations, classical theoretical frameworks also aim
+to uncover mechanistic insight from molecular dynamics. Transition Path Theory (TPT)25
+relates rates to committor functions, but directly computing committors in high-dimensional
+systems is intractable. String and nudged elastic band methods26–28 yield clear atomistic
+pathways once suitable CVs and endpoints are chosen, yet their interpretability depends on
+these predefined coordinates. The main challenge, therefore lies in uncovering mechanis-
+tic insight without requiring any a priori specification of collective variables, endpoints, or
+pathways.
+Here, we present the Atomistic Mechanism Of Rare Events in Molecular Dynamics
+(AMORE-MD) framework, designed to enhance the interpretability of deep-learned reac-
+tion coordinates at the chemical and atomic levels. In this work, we apply it in combination
+with the ISOKANN algorithm,29 which learns a smooth membership function χ approximat-
+ing the dominant eigenfunction of the backward operator L. While the Molecular Kinetics
+through Topology (MoKiTo)30 framework combines ISOKANN with topological clustering to
+construct global kinetic networks and identify multiple pathways in given datasets, AMORE-
+MD focuses on extracting local mechanistic information directly from the χ-function without
+enforcing clustering or predefined projections, while also enhancing sampling of rare events.
+We can extract mechanistic information in two complementary ways. First, by integrat-
+ing along the gradient of χ under orthogonal energy minimization, we obtain a representative
+trajectory, the χ-minimum-energy path (χ-MEP), which follows the dominant kinetic mode
+without requiring predefined collective variables, endpoints, a string of initial states or ex-
+plicit reparameterization. Second, we analyze the gradients of χ with respect to its inputs,
+providing sensitivity maps that identify which atomic distances or coordinates contribute
+most strongly to changes in the reaction coordinate (χ-sensitivity). The χ-MEP can further
+be used to initialize new simulations, enabling iterative sampling and retraining of χ to im-
+4
+
+prove coverage of rare transition states. This strategy is conceptually related to the recently
+developed path-committor-consistent artificial neural networks (PCCANN),31 which itera-
+tively refine a committor-consistent string. In contrast to PCCANN, our framework requires
+neither predefined boundary sets nor an initial path guess, making it particularly suitable
+when no a priori mechanistic information is available.
+This combination of slow-mode learning and gradient analysis allows AMORE-MD to
+bridge ensemble and single-path perspectives.
+The ensemble view arises from averaging
+the gradients over the stationary ensemble, which captures statistically meaningful atomic
+contributions across the thermodynamic landscape in the χ-sensitivity, while the single-
+path view is represented by the χ-MEP, providing a smooth and physically interpretable
+trajectory through conformational space. Together, these two levels of interpretation link
+machine-learned reaction coordinates directly to mechanistic insight.
+We validate this framework in three representative systems. First, the Müller-Brown
+potential demonstrates that the χ-MEP recovers the zero-temperature string in a controlled
+benchmark. Second, alanine dipeptide in vacuum tests the method in a molecular setting
+with well-understood metastabilities. Finally, the hexapeptide VGVAPG in implicit solvent
+serves as a realistic proof of concept for larger, biologically relevant conformational transi-
+tions with multiple transition tubes. Through these examples, AMORE-MD illustrates how
+deep-learned reaction coordinates can be made transparent and chemically interpretable,
+combining statistical and mechanistic understanding within a single framework.
+Koopman operator Theory
+The dynamical behavior of a system can be described in terms of operators acting on ob-
+servable functions f : Ω→R. In molecular dynamics, Ω⊂R3n denotes the state space,
+where n is the number of atoms. The time evolution of an observable is governed by the
+infinitesimal generator L,
+∂ft(x)
+∂t
+= Lft(x),
+5
+
+which can be regarded as the continuous analogue of a rate matrix in discrete state space.
+The corresponding Koopman operator
+Kτ = exp(Lτ)
+propagates observables in time,
+ft+τ(x) = Kτft(x) = E[ft(xt+τ) | xt = x],
+where the conditional expectation can be estimated from short burst simulations.
+The
+constant function Ψ0 = 1 is an eigenfunction of the Koopman operator with eigenvalue 1. A
+non-trivial eigenfunction Ψ1 with the next largest eigenvalue captures the slowest relaxation
+process. From these a membership function χ : Ω→[0, 1] can be constructed as a linear
+combination of Ψ0 and Ψ1, representing the grade of membership to one of two fuzzy sets A
+or B.
+The dynamics of χ is governed by the macroscopic rate equation
+Lχ = −ϵ1 χ + ϵ2(1 −χ)
+(1)
+for the one membership function χ considered here, also derived in the supporting in-
+formation. Thus χ(x) ≈1 and χ(x) ≈0 represent perfect membership to A and B, while
+χ(x) ≈0.5 correspond to transition-states x. Therefore the membership functions represent
+the macro-states associated with these metastabilities and provide insights into the slowest
+dynamic of a system, with macroscopic rates ϵ directly available from eq (1).32
+ISOKANN
+ISOKANN29 extends the classical von Mises iteration,33 which successively applies a linear
+operator and normalizes the result to converge toward its dominant eigenfunction. A direct
+6
+
+fixed-point iteration of the Koopman operator, however, collapses to the trivial constant
+function. To prevent this, ISOKANN replaces the normalization step by a simple affine
+shift–scale transformation S and learns a bounded membership function χθ : Ω→[0, 1]
+using a neural network (NN) with trainable parameters θ.
+The network parameters are optimized in a self-supervised manner by iteratively mini-
+mizing the loss function
+J (θ) =
+χθ −S Kτχθ−1
+2
+over molecular configurations separated by a lag time τ. This iterative procedure yields
+a stable membership function that distinguishes the dominant metastable regions of the
+system, serving as a low-dimensional reaction coordinate capturing the slowest process and
+solves eq (1).
+We want to increase the interpretability of deep learned reaction coordinates, here χ-
+functions, by extracting the most probable zero temperature transition pathways aligned
+with the slowest process and determining the atomic movements driving the ensemble of
+transition pathways.
+Method
+We present a method for uncovering the Atomistic Mechanism Of Rare Events in Molecular
+Dynamics (AMORE-MD), providing mechanistic insight into slow molecular transitions. Our
+approach delivers a representative transition trajectory for the slowest dynamical process,
+with sensitivity resolved both along the reaction coordinate and at atomic resolution.
+The method consists of four main steps:
+1. Run molecular dynamics simulations of the system of interest.
+2. Train a smooth neural membership function χ, which captures the slowest reaction
+coordinate.
+7
+
+3. Approximate the minimum energy path aligned with the slowest process (χ-MEP).
+4. Identify atomistic and feature saliency via the χ-sensitivity measure ⟨∥∇iχ∥2⟩z.
+We enhance rare-event discovery through an iterative sampling scheme consisting of the
+first three steps: After an initial cycle of MD simulation, χ-training, and χ-MEP extraction,
+we restart MD trajectories from χ-MEP states. The resulting Koopmann samples are merged
+with the original set to continue training χ. The cycle is repeated until convergence, thereby
+improving coverage of transition pathways.
+Although χ-MEP extraction and atom-wise
+relevance analysis are independent, they synergize for interpretability: the χ-MEP yields a
+compact transition trajectory, while the χ-sensitivity measure ⟨∥∇iχ∥2⟩z resolves atomistic
+contributions at finite temperature.
+A representative pathway of the slowest process
+The Minimum Energy Path (MEP) is the most likely trajectory a molecule will follow when
+transitioning from state A to B in the zero temperature limit.26 The level-sets of the commit-
+tor function q : R3n →R lie normal to the MEP near the transition state.25 The committor
+gives the probability that a trajectory started in a state reaches the manually defined set B
+before reaching A and solves:
+Lq = 0,
+with boundary conditions
+q(x) =
+
+
+
+
+
+
+
+1,
+if x ∈B,
+0,
+if x ∈A.
+Given a sufficient spectral gap, i.e. in the case of a free energy barrier separating A and
+B much larger than the thermal energy, the committor is a monotone transform of the
+dominant eigenfunction Ψ1 of L.34 As shown in the supporting information χ = aΨ0 + bΨ1
+8
+
+with constant function Ψ0 and therefore:
+∇χ = b∇ψ1
+But this also implies that in the zero temperature regime along the transition barrier:
+∇χ ∝∇Ψ1 ∝∇q
+(2)
+and therefore the level-sets of χ and q coincide. We exploit this to define a practical pro-
+cedure for approximating the MEP. Starting from an initial state x0 one performs energy
+minimization orthogonal to ∇χ thereby recovering a state on the MEP. An Euler step along
+∇χ,
+xi+1 = xi + ϵ ∇χ
+∥∇χ∥,
+(3)
+allows to reach the next level-set on which the orthogonal energy minimization ensures
+staying on the MEP. This will iteratively trace the MEP until χ(xn) ≈1 is reached. The
+same procedure following −∇χ traces the path to χ(xm) ≈0.
+We do not employ the zero-temperature χ-function, but instead train on finite-temperature
+simulation data. In the presence of a sufficiently large spectral gap, as is typically the case
+in metastable MD systems, this approach can still approximate the MEP, but we will use
+the term χ-MEP to distinguish from classical methods. In any case, the χ-MEP should be
+interpreted as a representative of an ensemble of thermally fluctuating transition pathways
+along the slowest process, rather than a unique microscopic trajectory.
+Gradients of membership functions reveal atomistic sensitivity
+The membership function χ learned by ISOKANN represents the slowest dynamical process
+of a molecular system. Its gradient ∇χ measures how infinitesimal perturbations of the
+atomic coordinates change the value of χ, thereby indicating local kinetic sensitivity. For
+9
+
+each atom i, the gradient norm
+∥∇iχ∥=
+
+ ∂χ
+∂xi
+, ∂χ
+∂yi
+, ∂χ
+∂zi
+
+quantifies the influence of atomic displacements on the learned reaction coordinate. Project-
+ing ∥∇iχ∥onto the molecular structure yields a saliency map of atomistic relevance along
+the transition.
+To obtain a statistically meaningful view, we average the squared gradients over the
+Boltzmann ensemble,
+
+∥∇iχ∥2
+ρ =
+Z
+Ω
+∥∇iχ(x)∥2 ρ(x) dx,
+with ρ(x) ∝e−V (x)/kBT the stationary distribution. This ensemble average captures contri-
+butions from all thermally accessible transition pathways, rather than a single trajectory,
+and thus reflects the collective character of the slow process. A more detailed, reaction-
+coordinate-resolved picture is obtained by conditioning on the level sets of χ. Defining the
+marginal density
+P(z) =
+Z
+Ω
+ρ(x) δ(χ(x) −z) dx,
+the level-set average of the atomic sensitivity becomes
+
+∥∇iχ∥2
+z =
+1
+P(z)
+Z
+Σz
+∥∇iχ(x)∥2 ρ(x) δ(χ(x) −z) dx,
+(4)
+where Σz = {x ∈Ω| χ(x) = z}. Large values of ⟨∥∇iχ∥2⟩z indicate that displacement of
+atom i drives progress through the corresponding region of the reaction coordinate and thus
+contributes strongly to the overall transition. In addition to coordinate-based analysis, the
+gradient can also be evaluated directly at the model level when χ = ν ◦f, where f denotes
+the molecular featurizer and ν the neural network. The quantity ⟨∥∇iν∥2⟩ρ then provides a
+feature-space analogue of atom-wise saliency, identifying which internal coordinates dominate
+the learned slow mode.
+10
+
+Results
+Müller-Brown potential
+As an illustrative benchmark, we first apply our approach to the two-dimensional Müller-
+Brown potential energy surface.35 This system exhibits two metastable minima separated
+by a potential barrier, making transitions between them rare events. The conformational
+landscape, together with the identified pathways, is shown in Fig. 1.
+For comparison we display the result of the string method,26 initialized as a straight line
+between the minima endpoints shown in cyan and discretized into 50 states. This chain of
+states converges to a minimum energy pathway (MEP) shown as a black curve. The χ-MEP
+is obtained by following the gradient of the membership function χ with orthogonal energy
+minimization, ensuring that the path remains aligned with the learned slow coordinate. Both
+pathways traverse the minima and saddle point, and while they are overall similar, the χ-
+MEP is slightly less skewed and cuts through somewhat higher-energy regions. The initial
+states used for the χ-MEP are shown as magenta diamonds, with the pathways indicated in
+blue, where all are following a single dominant trace.
+The learned membership function χ smoothly separates the metastable basins, taking
+values close to 0 in one basin and close to 1 in the other. Importantly, the exact values
+χ = 0 and χ = 1 are typically not reached inside the minima but only in the infinite-time
+limit.
+On the right-hand side of Fig. 1, the gradients of χ are displayed as downscaled
+arrows for a subsample of training points. These arrows indicate the local direction of slow
+progress along the transition pathway. Notably, the gradient magnitudes are largest away
+from the metastable basins, hinting at the transition region. This simple example provides
+intuition for our approach: by combining learned membership functions, MEP-extraction and
+gradient-based sensitivity, we obtain both representative transition pathways and a natural
+measure of relevant transition steps.
+11
+
+Figure 1: Transition pathways and deep learned gradients in a toy system. The
+Müller-Brown potential energy landscape is shown as a heatmap of its two coordinates (left).
+Local minima are shown in cyan, the string MEP in black, and the χ-MEP in blue, initialized
+from the magenta diamonds. On the right, the gradient of the learned membership function
+χ is displayed as downscaled arrows for a subsample of the training data points (colored by
+their reaction coordinate value). Larger gradient magnitudes highlight the regions of highest
+χ-sensitivity along the transition barrier.
+Alanine dipeptide
+Alanine dipeptide can undergo rare conformational transitions via rotation around its back-
+bone dihedral angles ϕ and ψ. The most prominent transition involves a peptide bond flip
+that is associated with a high free energy barrier, making it a prototypical rare event in
+molecular dynamics simulations.36 After training, ISOKANN captures the dominant slow
+transition coordinate χ separating the two metastable basins (Fig. 2). The χ-MEP traced
+along this learned reaction coordinate aligns with the equilibrium probability density, form-
+ing a characteristic tube in Ramachandran space. Notably, 34 initial states sampled around
+the transition region (χ ∈[0.49, 0.51]) all evolve along an indistinguishable path in (ϕ, ψ)
+space, further confirming that χ captures the dominant transition channel.
+Along all transition pathways, AMORE-MD reveals the atom-wise contributions to the
+12
+
+transition rate via the χ-sensitivity. These level-set averaged squared gradient norms ⟨∥∇iχ∥2⟩z,
+are computed by back-propagating through the neural membership function χ = ν ◦f, with
+neural network ν and featurizer f mapping to pairwise distances. The resulting heatmap
+shows maximal contributions from backbone atoms involved in the dihedral transition, in
+particular atoms 6, 16, and 18, consistent with the mechanistic expectation for a peptide
+bond rotation. The central barrier region (around χ ≈0.5) exhibits the largest gradient
+magnitudes, indicating the location and character of the kinetic bottleneck as the formation
+of a hydrogen-bond between the amide hydrogen atom 6 and carbonyl oxygen atom 18.
+13
+
+Figure 2: Conformational transitions and atomistic sensitivities in alanine dipep-
+tide. The conformational landscape of alanine dipeptide is projected onto the Ramachan-
+dran dihedral angles (ϕ, ψ), revealing two dominant metastable states (bottom right). The
+slowest kinetic mode is learned as a smooth neural membership function χ. The χ-MEP, ini-
+tialized in the magenta diamonds, is shown in blue and follows the equilibrium distribution
+(gray), which forms a characteristic tube-like structure around the path. Three represen-
+tative conformations along the χ-MEP corresponding to χ values 0.1, 0.5, and 0.95 are
+displayed above the landscape (left to right). The atomistic contributions to the learned
+mode are identified via the derived χ-sensitivity measure. This level-set averaged squared
+norm of the gradient components, ⟨∥∇iχ∥2⟩z, highlights when and where specific atomic
+movements contribute most to the transition. These contributions are shown as a heatmap
+(bottom left) and further projected onto the representative structures for interpretability.
+VGVAPG
+VGVAPG adopts β-turn conformations, primarily stabilized by a salt bridge between the C-
+terminal carboxyl group of glycine and the N-terminal amino group of valine, along with an
+internal hydrogen-bonding network. Computational evidence suggest that VGVAPG follows
+multiple distinct transition pathways, rather than a single dominant route.37 This makes it
+a representative system for studying complex biomolecular dynamics, where the ensemble of
+14
+
+transitions cannot be captured by a single trajectory.
+Our method does not aim to reconstruct a globally optimal pathway. Instead, we identify
+representative transitions within each tube and combine them with ensemble-weighted atom-
+resolved sensitivity attribution. This yields mechanistic insights into the slowest process that
+go beyond any one trajectory. We identify rotation of the backbone dihedral ψ of the central
+valine as a kinetic bottleneck for VGVAPG-folding in implicit solvent. ψ-values close to zero
+radians represent closed states of the hexapeptide, while ψ values close to π radians are open
+states.
+We identify ψ through the χ-sensitivity ⟨∥∇iχ∥2⟩z, which is dominated by the Val2
+backbone atoms 27, 29, 41 and 43 (the ψ dihedral itself is defined by the directly attached
+atoms 26, 28, 40 and 42). As an orthogonal degree of freedom we visualize the ϕ dihedral of
+the same residue and identify at least four dominant transition channels from 11 initial states
+(Fig. 3). Although multiple structurally and energetically distinct transition channels are
+accessible, the associated mechanistic abstraction is similar across them. The Val2 backbone
+has to rearrange first, followed by internal hydrogen-bond formation and, lastly, salt-bridge
+reorganization. For clarity, we therefore display only the pathway with the highest stationary
+density around it in Fig. 3.
+The results reported here were obtained after 100 generations of our adaptive training
+scheme (see section ). This iterative procedure, where new Koopmann samples are initialized
+from χ-MEP states and added to the training data until convergence, allows the network
+to extrapolate rare events more effectively. As a result, discontinuities in sparsely sampled
+regions are greatly reduced, and the χ-MEPs shown in Fig. 3 provide relatively continuous
+pathways across the transition channels, without explicit reparameterization.
+To assess how representative the χ-MEPs are of the global mechanism, we compared the
+local gradients ∥∇iχ∥2 evaluated along each χ-MEP to the ensemble-averaged sensitivities
+⟨∥∇iχ∥2⟩z. The resulting mean squared error is below 0.01
+1
+nm2for all pathways except the
+channel at positive ϕ values, indicating that χ-MEPs generally provide a faithful atomistic
+15
+
+representation of the ensemble-averaged mechanism.
+Figure 3: Conformational transitions and atomistic sensitivities in VGVAPG. The
+conformational landscape of the elastin-mimetic peptide VGVAPG is projected onto the
+central valine dihedrals ϕ and ψ (right). The equilibrium distribution is shown in gray, initial
+states are marked in magenta, and the χ-MEP states after adaptive sampling are displayed
+in blue. Multiple transition channels are visible, reflecting the heterogeneous ensemble of
+conformational pathways.
+The χ-sensitivity measure ⟨∥∇iχ∥2⟩z reveals localized atomic
+regions with high influence on the learned collective mode, with strongest responses for atoms
+27, 29, 41, and 43 corresponding to the ψ rotation of Val2 (left). For clarity, representative
+structures above the plots are shown only for the pathway with the highest stationary density,
+illustrating the associated backbone rearrangements (see supplementary Movies S2-S5 for all
+four pathways).
+Saliency attribution based on coordinates highlights the central valine backbone atoms,
+and chemical intuition allows one to recognize the dihedral ψ as the learned slow CV. How-
+ever, this identification can also be made more directly. While the featurizer f is usually
+chosen to map to pairwise distances, it can instead map to all 10 backbone dihedral angles.
+Training a χ = ν ◦f-function on these features allows the central valine ψ to be identified
+directly, by evaluating the ensemble-averaged squared gradient of the neural network ν with
+16
+
+respect to the features, ⟨∥∇iν∥2⟩ρ. In this representation, the central valine ψ has a value
+of 0.0162
+1
+rad2, over one order of magnitude larger than the second-highest feature and more
+than two order of magnitudes larger than most other features, which lie below 0.0002
+1
+rad2.
+Discussion
+AMORE-MD increases the interpretability of deep-learned reaction coordinates by linking
+them to representative pathways and ensemble-averaged atomistic sensitivities. Across the
+systems considered, the framework consistently identifies physically meaningful transition
+mechanisms without the need to prespecify collective variables.
+On the Müller-Brown surface, the χ-MEP and the string MEP traverse the same metastable
+regions and barrier, yet deviate slightly in regions of high curvature. This difference can be
+attributed to the smoothness and regularization imposed during neural training, which bias
+χ. Despite these deviations, the χ-MEP remains faithful in a thermally averaged sense and
+captures the transition region reliably.
+In alanine dipeptide at 310 K, AMORE-MD recovers the backbone-centered peptide-bond
+flip as the slow process analyzed in our study. A third metastable basin is known to exist
+on much longer time scales, but we do not observe it here. By focusing on the faster process
+at moderately high temperature, we deliberately probe the limits of the infinite spectral-
+gap assumption: while timescale separation is imperfect, the learned χ still yields a robust
+mechanistic description and atom-resolved sensitivity profile for the dominant transition.36
+In VGVAPG, studied in implicit solvent, multiple transition channels emerge, each char-
+acterized by rearrangements of the central valine backbone. AMORE-MD consistently iden-
+tifies the valine ψ dihedral as the separating CV, in agreement with computational expec-
+tations.37 Despite the presence of several dominant transition channels, our method reveals
+that they all follow a common mechanistic pattern. Through this, AMORE-MD captures
+how diverse dynamical pathways can be represented by a shared set of defining atomistic mo-
+17
+
+tions. The use of implicit solvent underlines the proof-of-concept nature of this application
+and does not yet constitute a contribution to protein folding studies, but it demonstrates
+the applicability of AMORE-MD to more complex peptides.
+Several caveats apply to the machine-learning component. Gradient-based sensitivities
+may reflect correlations rather than direct causality. For example, directly attached atoms
+can appear relevant because their positions are highly correlated, as seen in VGVAPG. In
+addition, the network may overemphasize the valine backbone due to correlated features.
+While recognizing such artifacts can be diagnostically valuable for improving network train-
+ing, in our case retraining with dihedral features recovered the valine ψ as the dominant
+signal, indicating that the essential mechanism was correctly captured.
+AMORE-MD provides a unified framework that connects deep-learned reaction coordi-
+nates with their associated atomistic mechanisms, without requiring any a priori knowledge
+of the system. It identifies kinetically relevant coordinates, yields representative pathways
+aligned with the slowest process, and reveals sensitivities at atomic resolution. Iterative sam-
+pling further enhances the method by improving coverage of rare-event regions and stabilizing
+the training of the reaction coordinate through repeated cycles of simulation, learning, and
+resampling. While the present work focuses on proof-of-concept systems, the approach is
+general and scalable. Furthermore, AMORE-MD is not tied to membership functions learned
+by ISOKANN but can be applied to deep-learned Koopman eigenfunctions or committors
+in general. By linking self-supervised learning with atomistic interpretation, AMORE-MD
+makes it possible to uncover how slow molecular processes occur and which atomic motions
+drive them, providing a practical route to mechanistic understanding and design in complex
+chemical systems.
+18
+
+Supporting Information
+Supporting Information: Theoretical motivation, methodological details, simulation param-
+eters (PDF), and five sensitivity-colored χ-MEP movies for alanine dipeptide and VGVAPG
+(MP4).
+Acknowledgements
+This work was funded by the Deutsche Forschungsgemeinschaft (DFG) through the Collab-
+orative Research Center SFB 1114 “Scaling Cascades in Complex Systems”, Projects A05
+and B03. We thank Dr. Surahit Chewle, Dr. Vikram Sunkara and Prof. Dr. Bettina Keller
+for insightful discussions.
+Bibliography
+(1) Bhakat, S. Collective variable discovery in the age of machine learning: reality, hype
+and everything in between. RSC advances 2022, 12, 25010–25024.
+(2) Hénin, J.; Lelièvre, T.; Shirts, M. R.; Valsson, O.; Delemotte, L. Enhanced Sampling
+Methods for Molecular Dynamics Simulations. Living Journal of Computational Molec-
+ular Science 2022, 4, 1583, Article v1.0.
+(3) Deuflhard, P.; Weber, M. Robust Perron cluster analysis in conformation dynamics.
+Linear algebra and its applications 2005, 398, 161–184.
+(4) Nuske, F.; Keller, B. G.; Pérez-Hernández, G.; Mey, A. S.; Noé, F. Variational approach
+to molecular kinetics. Journal of chemical theory and computation 2014, 10, 1739–1752.
+(5) Tiwary, P.; Berne, B. Spectral gap optimization of order parameters for sampling com-
+plex molecular systems. Proceedings of the National Academy of Sciences 2016, 113,
+2839–2844.
+19
+
+(6) Mardt, A.; Pasquali, L.; Wu, H.; Noé, F. VAMPnets for deep learning of molecular
+kinetics. Nature communications 2018, 9, 5.
+(7) Sultan, M. M.; Pande, V. S. Automated design of collective variables using supervised
+machine learning. The Journal of chemical physics 2018, 149.
+(8) Bonati, L.; Rizzi, V.; Parrinello, M. Data-driven collective variables for enhanced sam-
+pling. The journal of physical chemistry letters 2020, 11, 2998–3004.
+(9) Rydzewski, J.; Valsson, O. Multiscale reweighted stochastic embedding: Deep learning
+of collective variables for enhanced sampling. The Journal of Physical Chemistry A
+2021, 125, 6286–6302.
+(10) Ketkaew, R.; Luber, S. DeepCV: A deep learning framework for blind search of collec-
+tive variables in expanded configurational space. Journal of Chemical Information and
+Modeling 2022, 62, 6352–6364.
+(11) Monroe, J. I.; Shen, V. K. Learning efficient, collective Monte Carlo moves with varia-
+tional autoencoders. Journal of chemical theory and computation 2022, 18, 3622–3636.
+(12) Sipka, M.; Erlebach, A.; Grajciar, L. Constructing collective variables using invariant
+learned representations. Journal of Chemical Theory and Computation 2023, 19, 887–
+901.
+(13) Sun, L.; Vandermause, J.; Batzner, S.; Xie, Y.; Clark, D.; Chen, W.; Kozinsky, B.
+Multitask machine learning of collective variables for enhanced sampling of rare events.
+Journal of Chemical Theory and Computation 2022, 18, 2341–2353.
+(14) Ray, D.; Trizio, E.; Parrinello, M. Deep learning collective variables from transition
+path ensemble. The Journal of Chemical Physics 2023, 158.
+(15) Dietrich, F. M.; Advincula, X. R.; Gobbo, G.; Bellucci, M. A.; Salvalaglio, M. Machine
+20
+
+learning nucleation collective variables with graph neural networks. Journal of Chemical
+Theory and Computation 2023, 20, 1600–1611.
+(16) Majumder, A.; Straub, J. E. Machine learning derived collective variables for the study
+of protein homodimerization in membrane. Journal of Chemical Theory and Computa-
+tion 2024, 20, 5774–5783.
+(17) Ancona, M.; Ceolini, E.; Öztireli, C.; Gross, M. Explainable AI: Interpreting, explaining
+and visualizing deep learning; Springer, 2019; pp 169–191.
+(18) Adebayo, J.; Gilmer, J.; Muelly, M.; Goodfellow, I.; Hardt, M.; Kim, B. Sanity checks
+for saliency maps. Advances in neural information processing systems 2018, 31.
+(19) Kikutsuji, T.; Mori, Y.; ichi Okazaki, K.; Mori, T.; Kim, K.-M.; Matubayasi, N. Ex-
+plaining reaction coordinates of alanine dipeptide isomerization obtained from deep
+neural networks using Explainable Artificial Intelligence (XAI). The Journal of chemi-
+cal physics 2022, 156 15, 154108.
+(20) Naleem, N.; Abreu, C. R.; Warmuz, K.; Tong, M.; Kirmizialtin, S.; Tuckerman, M. E.
+An exploration of machine learning models for the determination of reaction coordinates
+associated with conformational transitions. The Journal of Chemical Physics 2023,
+159.
+(21) Okada, K.; Kikutsuji, T.; Okazaki, K.-i.; Mori, T.; Kim, K.; Matubayasi, N. Unveiling
+interatomic distances influencing the reaction coordinates in alanine dipeptide isomer-
+ization: An explainable deep learning approach. The Journal of Chemical Physics 2024,
+160.
+(22) Kawashima, K.; Sato, T.; Okazaki, K.-i.; Kim, K.; Matubayasi, N.; Mori, T. Investigat-
+ing the hyperparameter space of deep neural network models for reaction coordinates.
+APL Machine Learning 2025, 3.
+21
+
+(23) Hooft, F.; Perez de Alba Ortiz, A.; Ensing, B. Discovering collective variables of molec-
+ular transitions via genetic algorithms and neural networks. Journal of chemical theory
+and computation 2021, 17, 2294–2306.
+(24) Zhang, J.; Bonati, L.; Trizio, E.; Zhang, O.; Kang, Y.; Hou, T.; Parrinello, M.
+Descriptor-free collective variables from geometric graph neural networks. Journal of
+Chemical Theory and Computation 2024, 20, 10787–10797.
+(25) Vanden-Eijnden, E. Computer Simulations in Condensed Matter Systems: From Mate-
+rials to Chemical Biology Volume 1; Springer, 2006; pp 453–493.
+(26) Weinan, E.; Ren, W.; Vanden-Eijnden, E. String method for the study of rare events.
+Physical Review B 2002, 66, 052301.
+(27) Weinan, E.; Ren, W.; Vanden-Eijnden, E. Finite temperature string method for the
+study of rare events. j. Phys. Chem. B 2005, 109, 6688–6693.
+(28) Henkelman, G.; Uberuaga, B. P.; Jónsson, H. A climbing image nudged elastic band
+method for finding saddle points and minimum energy paths. The Journal of chemical
+physics 2000, 113, 9901–9904.
+(29) Rabben, R. J.; Ray, S.; Weber, M. ISOKANN: Invariant subspaces of Koopman oper-
+ators learned by a neural network. The Journal of chemical physics 2020, 153.
+(30) Donati, L.; Chewle, S.; St Pierre, D.; Natarajan, V.; Weber, M. Topological analysis
+reveals multiple pathways in molecular dynamics. Journal of Chemical Theory and
+Computation 2025,
+(31) Megías, A.; Contreras Arredondo, S.; Chen, C. G.; Tang, C.; Roux, B.; Chipot, C. It-
+erative variational learning of committor-consistent transition pathways using artificial
+neural networks. Nature Computational Science 2025, 1–11.
+22
+
+(32) Sikorski, A.; Rabben, R. J.; Chewle, S.; Weber, M. Capturing the Macroscopic
+Behaviour of Molecular Dynamics with Membership Functions. arXiv preprint
+arXiv:2404.10523 2024,
+(33) Mises, R.; Pollaczek-Geiringer, H. Praktische Verfahren der Gleichungsauflösung.
+ZAMM-Journal of Applied Mathematics and Mechanics/Zeitschrift für Angewandte
+Mathematik und Mechanik 1929, 9, 58–77.
+(34) Schütte, C.; Sarich, M. Metastability and Markov state models in molecular dynamics;
+American Mathematical Soc., 2013; Vol. 24.
+(35) Müller, K.; Brown, L. D. Location of saddle points and minimum energy paths by a
+constrained simplex optimization procedure. Theoretica chimica acta 1979, 53, 75–93.
+(36) Mironov, V.; Alexeev, Y.; Mulligan, V. K.; Fedorov, D. G. A systematic study of
+minima in alanine dipeptide. Journal of Computational Chemistry 2019, 40, 297–309.
+(37) Floquet, N.; Héry-Huynh, S.; Dauchez, M.; Derreumaux, P.; Tamburro, A. M.;
+Alix, A. J. Structural characterization of VGVAPG, an elastin-derived peptide. Peptide
+Science: Original Research on Biomolecules 2004, 76, 266–280.
+23
+
+Figure 4: For Table of Contents Only
+24

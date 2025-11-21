@@ -1,0 +1,856 @@
+Astronomy & Astrophysics manuscript no. aanda
+©ESO 2025
+November 20, 2025
+LCS: A Learnlet-Based Sparse Framework for Blind Source
+Separation
+V. Bonjean1, A. Gkogkou1, J.-L. Starck1, 2, and P. Tsakalides1
+1 Institutes of Computer Science and Astrophysics, Foundation for Research and Technology Hellas (FORTH), Greece
+e-mail: victor.bonjean40@gmail.com
+2 Université Paris-Saclay, Université Paris Cité, CEA, CNRS, AIM, 91191, Gif-sur-Yvette, France
+Received XXX; accepted XXX
+ABSTRACT
+Blind source separation (BSS) plays a pivotal role in modern astrophysics by enabling the extraction of scientifically meaningful
+signals from multi-frequency observations. Traditional BSS methods, such as those relying on fixed wavelet dictionaries, enforce
+sparsity during component separation, but may fall short when faced with the inherent complexity of real astrophysical signals.
+In this work, we introduce the Learnlet Component Separator (LCS), a novel BSS framework that bridges classical sparsity-based
+techniques with modern deep learning. LCS utilizes the Learnlet transform—a structured convolutional neural network designed to
+serve as a learned, wavelet-like multiscale representation. This hybrid design preserves the interpretability and sparsity-promoting
+properties of wavelets while gaining the adaptability and expressiveness of learned models. The LCS algorithm integrates this learned
+sparse representation into an iterative source separation process, enabling effective decomposition of multi-channel observations.
+While conceptually inspired by sparse BSS methods, LCS introduces a learned representation layer that significantly departs from
+classical fixed-basis assumptions. We evaluate LCS on both synthetic and real datasets, demonstrating superior separation performance
+compared to state-of-the-art methods (average gain of about 5 dB on toy model examples). Our results highlight the potential of
+hybrid approaches that combine signal processing priors with deep learning to address the challenges of next-generation cosmological
+experiments.
+Key words. Blind Source Separation, Component Separation, Learnlet, Deep Learning
+1. Introduction
+The separation of astrophysical components from multi-
+frequency sky observations is a fundamental task in observa-
+tional cosmology and astrophysics. It enables the isolation of
+a source signal from a complex mixture of astrophysical fore-
+grounds and instrumental noise. A prominent example is the
+extraction of the Cosmic Microwave Background (CMB) from
+multi-band observations, which played a central role in the suc-
+cess of the Planck mission (Planck HFI Core Team et al. 2011).
+Traditional component separation methods in this context in-
+clude Principal Component Analysis (PCA), which removes the
+most dominant modes in the frequency domain (Ma´ckiewicz &
+Ratajczak 1993), and ICA-based approaches (Hyvärinen & Oja
+2000), which exploit the statistical independence of components.
+While simple and model-agnostic, these methods risk partial loss
+of the cosmological signal. More sophisticated techniques were
+developed for Planck including internal linear combination tech-
+niques like NILC (Needlet Independent Linear Combination,
+Delabrouille et al. 2009) and MILCA (Modified Internal Lin-
+ear Combination Algorithm, Hurier et al. 2013a), blind source
+separation methods such as SMICA (Spectral Matching ICA,
+Delabrouille et al. 2003), self-supervised deep learning methods
+(Bonjean et al. 2024), and sparse techniques like GMCA (Gener-
+alised Morphological Component Analysis, Bobin et al. 2007).
+These methods disentangle sources from multi-channel observa-
+tions by leveraging assumptions such as statistical independence,
+spectral diversity, or sparse representability.
+In particular, sparse component separation has proven to be a
+powerful approach for modeling structured, non-Gaussian emis-
+sions such as foregrounds exhibiting filamentary or localized
+morphologies. GMCA exploits the assumption that astrophysical
+components can be sparsely represented in a certain transform
+domain. The typically used domains are wavelets and specifi-
+cally starlet, biorthogonal, or mexican hat and they are all chosen
+based on the complexity of the image under study. By promot-
+ing sparsity via morphological diversity, GMCA has been shown
+to achieve accurate CMB and foreground reconstruction in both
+simulated and real data in astrophysical applications and beyond
+(Bobin et al. 2014, 2008; Yong et al. 2009; Xu et al. 2020). How-
+ever, a key limitation stems from the fixed nature of the wavelet
+dictionary: while efficient and interpretable, it may not optimally
+capture the statistical structure of all signal types or adapt to
+data variability, particularly in non-Gaussian or non-stationary
+regimes.
+In astrophysics, the need for efficient and robust compo-
+nent separation techniques extends beyond the CMB. With the
+upcoming deployment of radio interferometers like the Square
+Kilometre Array (SKA, Weltman et al. 2020), there is a renewed
+interest in separating diffuse emission from target cosmological
+signals. In particular, HI intensity mapping aims to detect the
+21-cm emission from neutral hydrogen across cosmic time, of-
+fering a promising probe of large-scale structure, dark energy,
+and the epoch of reionization (Bull et al. 2015; Santos et al.
+2015). However, this faint cosmological signal is contaminated
+by foregrounds several orders of magnitude brighter, including
+Galactic synchrotron and free-free emission, as well as extra-
+Article number, page 1 of 11
+arXiv:2511.15475v1  [astro-ph.IM]  19 Nov 2025
+
+A&A proofs: manuscript no. aanda
+galactic point sources (Alonso et al. 2015). Effective foreground
+cleaning is thus essential for recovering the HI signal with high
+fidelity. Recent works (Carucci et al. 2020; Makinen et al. 2021;
+Matshawule et al. 2021; Spinelli et al. 2022; Carucci et al. 2024;
+Mertens et al. 2024, Gkogkou et al., in prep.) have explored
+deep learning-based priors, regularization schemes, and learned
+sparse representations to tackle the challenge of foreground re-
+moval in simulated SKA data.
+In parallel, the field of signal processing and machine learn-
+ing has made a significant progress in data-driven sparse mod-
+eling. A classical approach in sparse coding is the Iterative
+Shrinkage-Thresholding Algorithm (ISTA, Beck & Teboulle
+2009), which solves linear inverse problems with sparsity con-
+straints by iteratively applying a soft-thresholding operation to
+promote sparse solutions. While ISTA is based on convex opti-
+mization and offers well-characterized convergence guarantees,
+its iterative nature often results in slow convergence in prac-
+tice. To address this, Gregor & LeCun (2010) introduced the
+Learned ISTA (LISTA), a neural network architecture that un-
+rolls the ISTA iterations into a fixed-depth feedforward network.
+By learning the optimal parameters of each iteration (such as
+the dictionary and thresholding functions) from data, LISTA
+achieves significantly faster convergence and better adaptability
+to specific signal classes, while maintaining the interpretability
+of sparse coding. Building upon these ideas, Fahes et al. (2021)
+developed LPALM (Learned Proximal Alternating Linearized
+Minimization), a hybrid framework that combines deep super-
+vised learning with optimization-based sparse component sepa-
+ration. LPALM extends the principles of LISTA by integrating it
+into a proximal optimization loop tailored for separating astro-
+physical sources, demonstrating promising results in the identi-
+fication of elemental components in supernova remnants on X-
+Ray data.
+Expanding on the concept of hybrid methods offering both
+interpretability and learning capability, we investigate the use
+of neural networks designed to enhance classical signal trans-
+forms. Among them, the Learnlet transform (Ramzi et al. 2021)
+introduces a neural network architecture designed to emulate
+wavelet-like behavior while learning filters and thresholding pa-
+rameters directly from data. This approach preserves the inter-
+pretability and multiscale structure of classical wavelets, while
+offering greater adaptability to complex signal distributions. Un-
+like traditional wavelet-based dictionaries, the learned filters -
+the learnlets - can adapt to complex and noisy environments, im-
+proving the robustness of source separation. While they have al-
+ready demonstrated effectiveness in deconvolving astronomical
+images Akhaury et al. (2022), their integration into structured
+component separation frameworks remains largely unexplored.
+In this work, we introduce the Learnlet Component Separa-
+tor (LCS), a novel BSS algorithm that embeds a learned sparse
+representation—called the Learnlet transform—into an iterative
+separation procedure. The Learnlet transform is a structured con-
+volutional neural network (CNN) designed to emulate a wavelet-
+like multiscale behavior while allowing for data-driven adapta-
+tion. Its architecture preserves key characteristics of traditional
+wavelet bases, such as locality, multiresolution decomposition,
+and interpretability, while improving upon them through learned
+filter banks optimized via deep learning for the specific signal
+class.
+The LCS algorithm iteratively estimates the sources that are
+mixed in each frequency channel by leveraging the sparsity-
+promoting capabilities of the Learnlet transform within a
+sources-mixing matrix estimation loop. This design allows LCS
+to combine the robustness and theoretical grounding of sparse
+representation methods with the adaptability and expressive
+power of deep neural networks. In this paper, we describe the
+architecture of LCS, examine its relationship to classical meth-
+ods like GMCA, and assess its performance through exten-
+sive numerical experiments including toy models with struc-
+tured scenes (airplane, boat, Barbara) and real-world astrophys-
+ical data (X-ray supernova remnants and the extraction of CMB
+and Sunyaev-Zel’dovich—SZ—signals).
+Our findings demonstrate that LCS consistently outperforms
+conventional BSS techniques, especially in complex scenarios
+involving nonstationary foregrounds or non-ideal mixing condi-
+tions (such as in the presence of noise). These results highlight
+the potential of LCS for future applications to SKA data, where
+accurate foreground removal will be essential for an accurate ex-
+traction of the HI signal in cosmology.
+The remainder of this paper is structured as follows. In
+Sect. 2, we present in detail the Learnlet transform, its archi-
+tecture and its training on the ImageNet dataset. Section 3 de-
+scribes the main LCS algorithm for source separation, which
+incorporates the Learnlet transform. Section 4 provides experi-
+mental results and comparative evaluations across four distinct
+experiments involving both toy models and astrophysical im-
+ages. Finally, Section 5 concludes the paper with a discussion of
+the methods, their relevance to astrophysical applications, and
+potential future directions.
+2. Learnlets
+2.1. Architecture
+Learnlet is a transform designed for image denoising, built upon
+a specialized Convolutional Neural Network (CNN) architec-
+ture, inspired by wavelet transforms and leveraging the repre-
+sentational power of deep learning, as originally introduced in
+Ramzi et al. (2021). Compared to other state-of-the-art deep
+learning denoisers like UNets (Ronneberger et al. 2015), Learn-
+let offers greater interpretability. Its learned filters—referred to
+as learnlets—form a sparse basis, enabling the imposition of
+sparsity in subsequent tasks. The transform takes as input a noisy
+image X = Y + N, where Y is the ground truth image and N is
+a realization of noise with standard deviation σ, and estimates a
+denoised image ˆY. The architecture is structured as follows:
+– We begin by applying the starlet transform (Starck et al.
+2015) to the input image X, α = ΨX, decomposing it into
+J distinct scales with coefficients α j. In our case, J = 5.
+– The first J−1 scales are sequentially passed through an anal-
+ysis layer A, a thresholding layer T , and a synthesis layer S.
+The analysis layer A consists of nf +1 filters with kernel size
+h × w, producing convolved outputs with the same variance
+as the input. To ensure this variance consistency, the filters
+are normalized by the sum of their squared coefficients. A
+total of nf × (J −1) filters are learned, while the remaining
+J −1 filters (indexed as nf + 1) are fixed to the identity filter
+δ. In our implementation, we set h = w = 5 and n f = 64.
+– Next, a thresholding operation T is applied to the output fea-
+ture maps from the analysis layer for each of the J −1 scales
+A(α j). We employ hard thresholding, using a threshold of
+kj × σ at each scale j, where σ denotes the standard devi-
+ation of the input noise. The J −1 threshold parameters kj
+for each scale are also learned during training and are con-
+strained within the range 0 < k j < 5.
+– The thresholded feature maps T (A(α j), k j × σ) are then
+passed to the synthesis layer S, which also consists of nf + 1
+Article number, page 2 of 11
+
+V. Bonjean et al.: LCS: A Learnlet-Based Sparse Framework for Blind Source Separation
+Fig. 1. Architecture of the Learnlet network: Example with a number of scales J = 5. The nf first filters of the J −1 first scales of both the analysis
+A and of the synthesis S layers are learned, as well as the J −1 thresholding parameters k j of the threshold layer T .
+filters of size h × w for each of the first J −1 scales. Of
+these, nf × (J −1) filters are learned, while the remaining
+filters n f + 1 are set to δ −Pn
+i=1 FS ji*FA ji, where FS ji and
+FA ji represent the i-th synthesis and analysis filters at scale
+j, respectively. This construction ensures that the sum of the
+outputs from S(T (A(αj), k j × σ)) exactly reconstructs the
+input when σ = 0, guaranteeing perfect reconstruction in the
+absence of noise.
+– The final denoised map ˆY is obtained by summing the de-
+noised outputs from the first J −1 scales along with the un-
+changed coarse scale αJ. This is expressed as:
+ˆY = αJ +
+J−1
+X
+j=1
+S(T (A(α j), kj × σ)).
+(1)
+A schematic representation of the Learnlet architecture is
+shown in Fig. 1. We reimplemented the original Learnlet algo-
+rithm from Ramzi et al. (2021) in PyTorch to enable more ef-
+ficient GPU utilization. Additionally, we created a user-friendly
+and well-documented Python class, along with example note-
+books, all available on GitHub1.
+2.2. Training on ImageNet
+The learnlets must first be trained. To achieve this, we selected
+a subset of the ImageNet database (Russakovsky et al. 2015),
+which offers a diverse range of images with rich and complex
+features—ideal for training generalizable and robust learnlets.
+The dataset is publicly accessible via their website2. Specifically,
+we used the first 10.000 images from the ImageNet test set, con-
+verting them from RGB to gray scale (with pixel values normal-
+ized between 0 and 1) and resizing them to 256 × 256 pixels.
+1 https://github.com/vicbonj/learnlet.git
+2 https://www.image-net.org
+Fig. 2. PSNR of the denoised test images for Learnlet (green), UNet-8
+(blue), and UNet-64 (orange) plotted against the input noise level σN.
+The legend includes the number of trainable parameters for each net-
+work.
+The dataset was then split into 8.000 images for training, 1.000
+for validation, and 1.000 for testing.
+For all sets, we added synthetic Gaussian noise N to the im-
+ages, with the noise standard deviation σN randomly sampled
+between 0 and 0.5. This resulted in a collection of noisy images
+X and their corresponding clean counterparts Y, such that where
+X = Y + N.
+We trained the Learnlet model using X as input and Y as the
+corresponding ground truth output. The network was configured
+with nf = 64 filters of size 5 × 5, differing from the original
+setup in Ramzi et al. (2021), but yielding improved and faster
+performance. We removed all bias parameters from the convo-
+Article number, page 3 of 11
+
+A&A proofs: manuscript no. aanda
+lutional layers. We used an Adam optimizer with a learning rate
+ℓr = 10−4 and mean squared error (MSE) as the loss function.
+The training ran on an NVIDIA A100 GPU and completed in
+approximately 8 hours.
+The performance of the Learnlet model on the test set is
+shown in green in Fig. 2. The plot displays the average Peak
+Signal-to-Noise Ratio (PSNR, defined in the next section) val-
+ues (in dB) of the reconstructed images as a function of the input
+noise standard deviation σN. For comparison, we evaluate two
+UNet architectures (Ronneberger et al. 2015): a lightweight ver-
+sion (UNet-8, shown in blue) initialized with 8 filters, and a more
+complex variant (UNet-64, shown in orange) initialized with 64
+filters. The numbers in parentheses in the legend indicate the to-
+tal number of trainable parameters in each model, highlighting
+the markedly lower complexity of Learnlet (12,800 parameters)
+compared to the UNet architectures, which range from 239,440
+(UNet-8) to 15,319,680 (UNet-64).
+Overall, the Learnlet model delivers strong performance,
+matching that of a small UNet-8 and even outperforming the
+larger UNet-64 at very low values of σN, thanks to its ability
+to achieve exact reconstruction. Although learnlets may perform
+slightly worse than a UNet, they offer several advantages: they
+are fully trustworthy, provide exact reconstruction, are mathe-
+matically well defined as frames, inherit the convergence prop-
+erties of wavelets in proximal iterative algorithms, and require
+∼100 times fewer parameters. Hence, Learnlets provide an in-
+teresting trade-off between efficiency and robustness.
+In the appendix, we show an example of learned filters and
+the evolution of the thresholding parameters as a function of σN.
+The learnlets form an optimized sparse basis tailored to nat-
+ural image structures. Building on this foundation, we introduce
+a Blind Source Separation algorithm called LCS, which shares
+structural similarities with GMCA but incorporates key novel-
+ties, which are discussed in the following sections.
+3. The Learnlet Component Separator (LCS)
+In this section, we describe in detail the algorithm LCS in the
+context of BSS.
+3.1. Formalism of BSS
+Blind Source Separation is a core challenge in signal processing,
+aiming to recover unknown source signals S from observed mix-
+tures Y that may also include noise N, all without prior knowl-
+edge of the mixing process A. Mathematically, this can be ex-
+pressed as:
+Y = A · S + N.
+(2)
+BSS has broad applications across multiple fields, including
+biomedical signal analysis (e.g., EEG and fMRI), audio process-
+ing (e.g. speech separation), and notably in astrophysical imag-
+ing, for tasks such as CMB and SZ extraction, HI signal recov-
+ery, and source detection.
+3.2. LCS main algorithm
+The algorithm iteratively estimates both the sources, denoised
+using the Learnlet transform, and the mixing matrix, drawing
+inspiration from GMCA. LCS employs an iterative scheme that
+alternates between updating the source estimates and refining the
+mixing matrix:
+– S estimate: We first estimate ˆS with a fixed estimate of the
+mixing matrix ˆA, by minimizing the equation:
+min
+S ||Y −ˆA · S||2
+2 + λ||LS||p,
+(3)
+where the second term is obtained, with p=0, by performing
+a ℓ0-norm constraint on S to promote sparsity. This is done by
+the hard-thresholding operation from the Learnlet transform
+LSi for each source component Si.
+– A estimate: the estimate of the mixing matrix, ˆA, is refined
+by minimizing the equation:
+min
+A ||Yno−coarse −A · LˆS
+no−coarse||2
+2,
+(4)
+where the coarse scales have been removed to eliminate low-
+frequency spatially correlated components that could other-
+wise introduce ambiguity and degrade the quality of source
+separation.
+Convergence is typically reached when successive iterations
+produce only minimal changes in all ˆS, indicating that both the
+source separation and the estimate of A have stabilized.
+After the minimization has converged, an additional post-
+processing step is performed to denoise each estimated source ˆSi
+using the Learnlet transform as a denoiser, with the noise level
+estimated individually for each component i. The noise level is
+derived from the known noise covariance ΣN and the pseudo-
+inverse of the estimated mixing matrix ˆA, leading to the compu-
+tation of the source covariance:
+ΣˆS = ˆA+ΣN( ˆA+)T.
+(5)
+The main differences of LCS and GMCA are as follows:
+– Fixed Thresholding: In LCS, the threshold is fixed, elim-
+inating the need for a threshold decay strategy, which in
+GMCA often depends on the image type. We tried several
+multiplicative factor of the σNMAD of the sources and found
+that 1.5 × σNMAD gives the best results for most of our appli-
+cations.
+– Hard
+vs.
+Soft
+Thresholding:
+LCS
+employs
+hard-
+thresholding instead of the soft-thresholding used in
+GMCA, thereby avoiding bias introduced by the latter.
+– Source Update Domain: LCS updates the source estimates
+ˆS in the real space, whereas GMCA performs this update in
+the wavelet domain—an approximation if the decomposition
+is not orthogonal.
+– Post-processing Denoising Step: LCS includes an addi-
+tional final denoising step applied to the estimated sources
+ˆS.
+The learnlets LˆSi are individually trained for each of the
+component i to enhance separation quality by learning optimal
+bases and thresholding parameters tailored to the morphology,
+features, and contrasts of each component. However, a shared
+basis L can also be used for all components. In this work, we
+explore the use of such a common basis by employing Learn-
+lets pre-trained on ImageNet (see Sect. 2.2) as a general-purpose
+option. Additionally, we investigate component-specific training
+using numerical simulations or texture datasets, leveraging trans-
+fer learning with weights initialized from the ImageNet-trained
+models.
+Article number, page 4 of 11
+
+V. Bonjean et al.: LCS: A Learnlet-Based Sparse Framework for Blind Source Separation
+Fig. 3. Performance comparison of various BSS methods on standard test images: LCS (orange), GMCA (blue), GMCA-biorthogonal (green), and
+FastICA (red). Left panel: mean PSNR values on the source matrix S as a function of the input noise level knoise. Right panel: corresponding mean
+Component Angle (CA) values on the mixing matrix A. Each point represents the average and standard error over 10 independent realizations of
+both the mixing matrices A and the noise.
+3.3. Quality assessment
+For all experiments presented in this paper, we assess the quality
+of the source reconstruction S using the Peak Signal-to-Noise
+Ratio (PSNR) in decibels (dB). PSNR is a widely used metric
+in signal processing that quantifies the accuracy of image recon-
+struction and is defined as:
+PSNR = 10 · log10
+ max2
+MSE
+!
+,
+(6)
+where max denotes the maximum possible pixel value in the
+image (set to 1 in our case), and MSE represents the mean
+squared error between the estimated sources ˆS and the ground
+truth sources S.
+The quality of the mixing matrix reconstruction is evaluated
+using the Criterion on A (CA), which measures how closely the
+product of the pseudoinverse of the estimated mixing matrix ˆA
+with the true matrix A approximates the identity matrix. Ideally,
+this product satisfies ˆA+ · A = I, where I is the identity matrix.
+The CA metric, expressed in decibels (dB), is defined as:
+CA = −10 · log10
+ 1
+N
+ ˆA+ · A −I
+F
+!
+,
+(7)
+where N is the number of channels and || · ||F denotes the Frobe-
+nius norm.
+4. Numerical experiments
+In this paper, we conduct four distinct experiments to evaluate
+the source separation capabilities of Learnlets. Two experiments
+use a shared, general basis L derived from Learnlets trained on
+ImageNet (see Sect. 2.2), while the other two use individually
+retrained bases Li tailored to specific components. We evaluate
+both approaches, on standard test photographic images and on
+astrophysical imagery.
+4.1. Experiments using a common basis L
+4.1.1. Experiments with standard test images
+In this experiment, the target source signal S consists of three
+components, represented by grayscale images of Barbara, an air-
+plane, and a boat, common reference points in signal processing
+for denoising tasks. Each image has a resolution of 256 × 256
+pixels and is normalized to a [0, 1] range. We perform multi-
+ple component separation runs using a randomly generated mix-
+ing matrix A, sampled from a uniform distribution in [0, 1] with
+6 channels, and constrained to have a condition number below
+5. The noise matrix N varies between realizations. Specifically,
+we repeat the experiment 10 times for each noise level, where
+the noise in the observations Y is scaled as knoise × σimages, with
+knoise taking values in 0.01, 0.02, 0.05, 0.1, 0.25, 0.5, 0.8, 1, and
+σimages being the standard deviation of the original sources S.
+For each realization, we estimate ˆS and ˆA using LCS, and com-
+pare the results against different variants of GMCA: i) standard
+GMCA using starlets, and ii) GMCA-biorthogonal, which uses
+bi-orthogonal wavelets. We also include comparisons with the
+FastICA algorithm.
+The results are presented in Fig. 3. The left panel displays the
+mean PSNR values for the source estimates S along with error
+bars, plotted against the input noise level knoise. The right panel
+shows the mean CA values for the mixing matrix estimates A.
+LCS results are shown in orange and compared against GMCA
+(blue), GMCA-biorthogonal (green), and FastICA (red).
+In the source reconstruction results shown on the left panel,
+LCS outperforms all GMCA variants by 3 to 5 dB in the low-
+noise regime (knoise < 0.1), while FastICA performs poorly given
+the specific image and channel configuration. As the noise level
+increases (knoise > 0.1), LCS delivers a substantial improvement,
+achieving gains of 10 to 15 dB over the other methods.
+In the mixing matrix reconstruction results shown in the right
+panel, LCS surpasses all other methods by 5 to 15 dB across
+most noise levels. The only exception is at the lowest noise level
+(knoise = 0.01), where GMCA-biorthogonal also performs excep-
+tionally well, slightly outperforming LCS by about 1 dB.
+Article number, page 5 of 11
+
+A&A proofs: manuscript no. aanda
+4.1.2. Experiments with astrophysical images
+In this experiment, we use X-ray astronomical images from Fa-
+hes et al. (2021), which are publicly available on their GitHub
+repository3. We include a comparison with their LPALM algo-
+rithm—a semi-supervised deep learning method for blind source
+separation that achieved state-of-the-art performance on this
+dataset. LPALM is a supervised approach in which the proxi-
+mal operator is learned from paired mixtures and corresponding
+ground-truth sources using an unrolled, end-to-end optimization
+framework. The model is trained specifically to recover both the
+source components and the mixing matrix from mixed observa-
+tions, assuming the mixing matrix is known during training. The
+dataset consists of four source components in S and 64 channels
+in the mixing matrix A. We train LPALM across various noise
+levels, with SNR values ranging from 30 down to 1, and evaluate
+both LCS and LPALM across all noise realizations and mixing
+matrices from their test set, which includes 150 instances.
+The results are presented in Fig. 4, with LCS shown in or-
+ange and LPALM in blue for comparison. PSNR and CA are
+plotted against the noise level, expressed as SNR. At a high SNR
+of 30, corresponding to very low noise, LPALM achieves slightly
+better performance, with about 0.5 dB higher PSNR—likely due
+to its image filtering strategy in the final iteration. However, as
+SNR decreases (i.e., noise increases), LPALM’s performance de-
+grades noticeably, while LCS remains largely unaffected by the
+noise level in this setting, likely thanks to the high number of
+channels (64) available for source separation.
+LCS consistently provides more accurate estimates of the
+mixing matrix A, which is particularly notable given that LCS
+operates in a fully blind manner—unlike LPALM, which is semi-
+blind and explicitly trained for this type of data. In this exper-
+iment, the Learnlets used by LCS were not retrained and re-
+mained those originally computed from ImageNet. This high-
+lights a key advantage of LCS: it performs well even with little
+or no task-specific training data. When training data are available
+for component-specific training with individual bases Li, the re-
+sults can be further enhanced, as demonstrated in the following
+experiments.
+In this experiment, we also introduce a small perturbation to
+the mixing matrix A during testing at SNR = 30 (correspond-
+ing to a low noise level in Y) to illustrate the limitations of
+LPALM as a semi-supervised method and compare its perfor-
+mance with LCS. Since LPALM is trained to recover mixing ma-
+trices similar to those in its training set, we perturb A as follows:
+eA = A+k×N(0, 1)×A, where k varies from 0.1 to 0.5 and N(0, 1)
+is a normal distribution with zero mean and unit variance. The
+resulting PSNR and CA values are shown in Fig. 5. As expected,
+LPALM’s performance begins to degrade significantly once the
+perturbation of A reaches about 20%, impacting both PSNR and
+CA. In contrast, LCS—being a fully blind method that does
+not depend on supervision—remains unaffected by these per-
+turbations. This test further underscores the robustness of LCS
+and highlights the advantage of a fully unsupervised approach:
+when the mixing matrix deviates even slightly from the train-
+ing data, an unsupervised algorithm like LCS maintains stable
+performance without degradation.
+4.2. Experiments using individually retrained bases Li
+In the following experiments, instead of using Learnlets trained
+on ImageNet, we perform individual training for each source
+3 https://github.com/mfahes/LPALM.git
+type in S to better optimize the induced sparsity according to
+the distinct morphologies and features of each component.
+4.2.1. Experiments with standard test images
+In this experiment, we train a separate Learnlet network for each
+source to be estimated, resulting in individual bases Li. For this
+toy model, we use the Describable Texture Dataset (DTD) from
+Cimpoi et al. (2014), which is publicly available on their web-
+site4. The dataset includes 47 texture categories (such as banded,
+dotted, spiralled, etc.), each containing 120 images. Here, we fo-
+cus specifically on the banded and dotted texture classes.
+Both networks, Lbanded and Ldotted, are initialized with the
+ImageNet-pretrained weights from the previous section and then
+fine-tuned independently. For each texture class, we use the first
+119 images, presenting each image ten times with different noise
+realizations each time.
+We define the target sources S as the two remaining (120th)
+images from the banded and dotted classes, which were not used
+during training. The subsequent steps follow the same procedure
+as in our experiments with the standard test images: for each
+noise level knoise, we generate 10 realizations of both the mix-
+ing matrix A and the noise N, and then benchmark LCS against
+GMCA, GMCA-biorthogonal, and FastICA.
+The resulting PSNR and CA are displayed in Fig.6, confirm-
+ing the same trend observed in Section 4.1.1: LCS consistently
+outperforms the other methods. The CA values are significantly
+higher across all noise levels, indicating improved source sep-
+aration. However, this improvement does not fully translate to
+better S estimates here, likely due to the denoising capability of
+the Learnlet network’s final step, which plateaus around 20 dB
+at high noise levels, as illustrated in Fig.2 showing the denoising
+performance.
+In summary, optimizing the sparsity basis and threshold pa-
+rameters individually for each source type—considering their
+specific morphologies, shapes, and features—further enhances
+the separation performance compared to using a common, global
+basis L.
+4.2.2. Experiments with CMB and SZ data
+In this fourth experiment, we apply LCS to extract the CMB and
+SZ components from CMB data. Here, the weights for the CMB
+and SZ are theoretically known: the CMB weights are set to one
+across all frequencies in units of µKCMB, while the SZ weights
+follow the frequency-dependent function in same units:
+f(x) = x · ex + 1
+ex −1 −4,
+(8)
+where x =
+hν
+kBTCMB . Specifically, we chose the weights pre-
+computed from Websky Simulation presented in Table 2 in Stein
+et al. (2020).
+The challenge in this case arises from the presence of nu-
+merous other components with unknown weights that can con-
+taminate the signal, the most significant being the Cosmic In-
+frared Background (CIB) (Dole et al. 2006), which is known to
+correlate with the SZ effect and contaminate SZ maps (Hurier
+et al. 2013b; Planck Collaboration et al. 2016). We then chose to
+include only the CMB, SZ, and CIB components in our exper-
+iments, using numerical simulations from WebSky (Stein et al.
+2020) available online5. Frequency maps were constructed from
+4 https://www.robots.ox.ac.uk/~vgg/data/dtd/index.html
+5 https://mocks.cita.utoronto.ca/data/websky/v0.0/
+Article number, page 6 of 11
+
+V. Bonjean et al.: LCS: A Learnlet-Based Sparse Framework for Blind Source Separation
+Fig. 4. Performance comparison of different BSS methods in the astrophysical case, evaluated as a function of input noise level expressed in terms
+of SNR: LCS is shown in orange, and LPALM in blue. Each data point represents the mean and standard error over 150 realizations from the test
+set of Fahes et al. (2021). Left panel: average PSNR for the source estimates S. Right panel: average CA for the mixing matrix estimates A.
+Fig. 5. Comparison of BSS method performance in the astrophysical case at a fixed SNR of 30, as a function of the percentage of perturbation
+applied to the mixing matrix A. LCS is shown in orange and LPALM in blue. Each point represents the mean and standard error across 150
+realizations from the test set of Fahes et al. (2021). Left panel: average PSNR for the source estimates S. Right panel: average CA for the mixing
+matrix estimates A.
+five relevant Planck HFI channels: 100, 143, 217, 353, and
+545 GHz. No beam effects or additional foreground contami-
+nants were included, and white Gaussian noise was added with
+standard deviations estimated from the corresponding observed
+Planck frequency maps.
+Before applying LCS, we trained individual Learnlet net-
+works—similar to the approach described in the previous sec-
+tion—specifically designed to promote the sparsity of each ex-
+pected component, denoted as LCMB, LSZ, and LCIB. To con-
+struct the training data, we divided the full-sky HEALPix maps
+of each component (at Nside = 2048) into 3,092 overlapping
+square patches of 256 × 256 pixels, corresponding to an angu-
+lar size of ∼7.2◦× 7.2◦per patch. These patches cover the en-
+tire sky. We identified the patch with the highest SZ signal as
+the “target patch” for evaluation by selecting the patch with the
+highest SZ amplitude. This patch was excluded from the train-
+ing process to avoid any overlap between training and testing
+data and the patch containing the highest SZ source signal is
+shown in Fig. 8. The Learnlet networks were then trained on
+the remaining 3,091 patches (hereafter referred to as the training
+set) for each component separately. The networks were trained
+in a supervised manner using the known clean component maps
+as ground truth. After training, we applied the LCS algorithm
+- using the trained LCMB, LSZ, and LCIB transforms - to the
+noisy frequency maps, restricted to the excluded target patch.
+This patch was used exclusively for evaluation and comparison
+with other methods (GMCA, ILC, and constrained ILC). The
+corresponding original CMB and SZ maps are shown in the left
+panels of Fig. 7 and Fig. 8.
+Table 1 reports the PSNR obtained for all methods; we high-
+light in bold the best PSNR among the different methods on this
+patch. The corresponding reconstructed maps are shown in Fig.7
+and Fig.8. From the PSNR values in the patch, for the CMB case,
+GMCA appears to underperform relative to both ILC and LCS,
+achieving a PSNR of 26.28 dB. LCS delivers the best results,
+outperforming ILC by approximately 2 dB (35.65 dB for LCS
+vs. 32.88 dB for ILC). Visually, the residual maps reveal that
+LCS effectively removes SZ contamination, visible as “holes”
+Article number, page 7 of 11
+
+A&A proofs: manuscript no. aanda
+Fig. 6. Same as Fig. 3, but for the multiple-source texture case: LCS is shown in orange, GMCA in blue, GMCA-biorthogonal in green, and
+FastICA in red.
+Fig. 7. Results of different methods applied to a patch of the CMB. Top panel: reconstructed CMB patches. Bottom panel: residuals between the
+methods and the ground truth.
+in the recovered CMB maps. Regarding SZ, from PSNR val-
+ues in the patch, ILC and GMCA yield comparable PSNR val-
+ues of 27.90 dB and 25.56 dB respectively, with ILC performing
+slightly better. In contrast, LCS achieves a substantially higher
+PSNR of 42.94 dB, primarily due to effective noise suppression
+by the Learnlet denoiser LSZ applied as a post-processing step
+of LCS, as illustrated in Fig. 8. Overall, visually and from the
+PSNR, both the CMB and SZ maps are very well reconstructed
+using LCS.
+Article number, page 8 of 11
+
+V. Bonjean et al.: LCS: A Learnlet-Based Sparse Framework for Blind Source Separation
+Fig. 8. Same as Fig. 7, but for the patch of SZ.
+Table 1. Results of component separation in CMB data, showing the
+PSNR values for CMB and SZ reconstruction using ILC, GMCA, and
+LCS. The highest PSNR for each component is highlighted in bold to
+indicate the best reconstruction.
+Method
+CMB
+SZ
+ILC
+32.88
+27.90
+GMCA
+26.28
+25.56
+LCS
+34.65
+42.94
+However, unlike ILC—which is constructed to ensure that
+the residual map is (ideally) uncorrelated with the true sig-
+nal—LCS does not impose such a constraint. As a consequence,
+some correlation between the residual and the true tSZ signal
+can remain, as visible in Fig. 8 (bottom right). Although LCS
+provides a visually and quantitatively accurate reconstruction on
+this patch, this implies that additional work would be required to
+guarantee unbiased residuals for applications relying on external
+cross-correlations. This is a natural consequence of the design of
+LCS, which relies on a sparsity-driven prior instead of enforcing
+the unbiasedness constraint built into ILC. For cross-correlation
+analyses, where preserving all of the signal in the cleaned map
+is essential, an explicit debiasing step or constraint would need
+to be incorporated; we leave this for future work.
+5. Discussion and conclusion
+In this study, we introduced the Learnlet Component Separator
+(LCS), a new blind source separation framework that effectively
+integrates traditional sparsity-enforcing methods with the adapt-
+ability and expressivity of deep learning architectures. Utilizing
+the Learnlet transform—a learned, wavelet-inspired multiscale
+representation—LCS incorporates a data-driven prior within an
+iterative source separation procedure, delivering enhanced per-
+formance in complex astrophysical applications.
+Our toy model numerical experiments show, quantified by
+PSNR values of extracted components compare to ground truth,
+that LCS generally outperforms traditional BSS methods like
+ICA, GMCA, and ILC, especially when dealing with non-
+Gaussian sources, complex spatial patterns, or varying noise lev-
+els, and especially at large noise - showing the robustness of
+learnlets to noise. The data-adaptive Learnlet transform allows
+the model to effectively capture the inherent structure of the
+sources, while its structured design provides both interpretabil-
+ity and computational efficiency—key advantages for handling
+large-scale datasets anticipated from future projects such as
+SKA. Although this proof-of-concept study has been made by
+quantifying the PSNR value only, we plan in future work to study
+in more detail contaminations and angular power spectra of the
+extracted components (Gkogkou et al., in prep.).
+Several promising directions remain for future work. First,
+expanding the LCS framework to address nonlinear or convolu-
+tive mixing models (Jiang et al. 2017) could extend its applica-
+Article number, page 9 of 11
+
+A&A proofs: manuscript no. aanda
+bility to more realistic physical scenarios. For instance, simul-
+taneously performing deconvolution and component separation
+will be essential to account for beam effects and evolving struc-
+tures in radio experiments like SKA or Meerkat, enabling accu-
+rate extraction of the HI signal (Gkogkou et al. 2025). Similarly,
+this will be critical for achieving the highest possible resolution
+in CMB or SZ maps in upcoming missions such as LiteBird
+or the Simons Observatory. Second, incorporating uncertainty
+quantification techniques could provide valuable measures of
+confidence in the separated components, which is vital for rigor-
+ous scientific interpretation. Finally, embedding domain-specific
+physical models or incorporating known spectral priors within
+the learning process may further improve both the robustness
+and interpretability of the results.
+Beyond astrophysics, the methods developed in LCS have
+wide applicability across various signal processing fields where
+blind source separation is essential. This includes areas like
+biomedical imaging, remote sensing, audio band unmixing, and
+any discipline that requires interpretable and adaptable source
+separation techniques.
+In conclusion, LCS paves the way for employing learnlets
+in blind source separation, providing a flexible, interpretable,
+and high-performing approach for complex signal decomposi-
+tion challenges. While its hybrid architecture is especially well-
+suited for astrophysical applications, the underlying concepts
+readily extend to a broad range of modern signal processing do-
+mains.
+Acknowledgements. The authors thank the anonymous referee for useful com-
+ments that contributed to a better version of this paper. The authors thank all
+members of the TITAN team for useful and fruitful discussions. This work was
+supported by the TITAN ERA Chair project (contract no. 101086741) within
+the Horizon Europe Framework Program of the European Commission, and the
+Agence Nationale de la Recherche (ANR22-CE31-0014-01 TOSCA). The sky
+simulations used in this paper were developed by the WebSky Extragalactic
+CMB Mocks team, with the continuous support of the Canadian Institute for The-
+oretical Astrophysics (CITA), the Canadian Institute for Advanced Research (CI-
+FAR), and the Natural Sciences and Engineering Council of Canada (NSERC),
+and were generated on the Niagara supercomputer at the SciNet HPC Consor-
+tium (cite https://arxiv.org/abs/1907.13600). SciNet is funded by: the Canada
+Foundation for Innovation under the auspices of Compute Canada; the Govern-
+ment of Ontario; Ontario Research Fund - Research Excellence; and the Univer-
+sity of Toronto.
+References
+Akhaury, U., Starck, J.-L., Jablonka, P., Courbin, F., & Michalewicz, K. 2022,
+Frontiers in Astronomy and Space Sciences, 9, 357
+Alonso, D., Bull, P., Ferreira, P. G., & Santos, M. G. 2015, MNRAS, 447, 400
+Beck, A. & Teboulle, M. 2009, SIAM Journal on Imaging Sciences, 2, 183
+Bobin, J., Moudden, Y., Starck, J. L., Fadili, J., & Aghanim, N. 2008, Statistical
+Methodology, 5, 307
+Bobin, J., Starck, J.-L., Fadili, J., & Moudden, Y. 2007, IEEE Transactions on
+Image Processing, 16, 2662
+Bobin, J., Sureau, F., Starck, J. L., Rassat, A., & Paykari, P. 2014, A&A, 563,
+A105
+Bonjean, V., Tanimura, H., Aghanim, N., Bonnaire, T., & Douspis, M. 2024,
+A&A, 686, A91
+Bull, P., Ferreira, P. G., Patel, P., & Santos, M. G. 2015, ApJ, 803, 21
+Carucci, I. P., Bernal, J. L., Cunnington, S., et al. 2024, arXiv e-prints,
+arXiv:2412.06750
+Carucci, I. P., Irfan, M. O., & Bobin, J. 2020, MNRAS, 499, 304
+Cimpoi, M., Maji, S., Kokkinos, I., et al. 2014, in Proceedings of the IEEE Conf.
+on Computer Vision and Pattern Recognition (CVPR)
+Delabrouille, J., Cardoso, J. F., Le Jeune, M., et al. 2009, A&A, 493, 835
+Delabrouille, J., Cardoso, J. F., & Patanchon, G. 2003, MNRAS, 346, 1089
+Dole, H., Lagache, G., Puget, J. L., et al. 2006, A&A, 451, 417
+Fahes, M., Kervazo, C., Bobin, J., & Tupin, F. 2021, arXiv e-prints,
+arXiv:2112.05694
+Gkogkou, A., Bonjean, V., Starck, J.-L., Spinelli, M., & Tsakalides, P. 2025,
+arXiv e-prints, arXiv:2511.13328
+Gregor, K. & LeCun, Y. 2010, in Proceedings of the 27th International Confer-
+ence on International Conference on Machine Learning, ICML’10 (Madison,
+WI, USA: Omnipress), 399–406
+Hurier, G., Macías-Pérez, J. F., & Hildebrandt, S. 2013a, A&A, 558, A118
+Hurier, G., Macías-Pérez, J. F., & Hildebrandt, S. 2013b, A&A, 558, A118
+Hyvärinen, A. & Oja, E. 2000, Neural Networks, 13, 411
+Jiang, M., Bobin, J., & Starck, J.-L. 2017, arXiv e-prints, arXiv:1703.02650
+Makinen, T. L., Lancaster, L., Villaescusa-Navarro, F., et al. 2021, J. Cosmology
+Astropart. Phys., 2021, 081
+Matshawule, S. D., Spinelli, M., Santos, M. G., & Ngobese, S. 2021, MNRAS,
+506, 5075
+Ma´ckiewicz, A. & Ratajczak, W. 1993, Computers & Geosciences, 19, 303
+Mertens, F. G., Bobin, J., & Carucci, I. P. 2024, MNRAS, 527, 3517
+Planck Collaboration, Ade, P. A. R., Aghanim, N., et al. 2016, A&A, 594, A23
+Planck HFI Core Team, Ade, P. A. R., Aghanim, N., et al. 2011, A&A, 536, A4
+Ramzi, Z., Starck, J.-L., Moreau, T., & Ciuciu, P. 2021, in EUSIPCO 2020 - 28th
+European Signal Processing Conference, Amsterdam, Netherlands
+Ronneberger, O., Fischer, P., & Brox, T. 2015, arXiv e-prints, arXiv:1505.04597
+Russakovsky, O., Deng, J., Su, H., et al. 2015, International Journal of Computer
+Vision (IJCV), 115, 211
+Santos, M., Bull, P., Alonso, D., et al. 2015, in Advancing Astrophysics with the
+Square Kilometre Array (AASKA14), 19
+Spinelli, M., Carucci, I. P., Cunnington, S., et al. 2022, MNRAS, 509, 2048
+Starck, J., Murtagh, F., & Fadili, J. 2015, Sparse Image and Signal Process-
+ing: Wavelets and Related Geometric Multiscale Analysis, 2nd edn. (United
+States: Cambridge University Press)
+Stein, G., Alvarez, M. A., Bond, J. R., van Engelen, A., & Battaglia, N. 2020, J.
+Cosmology Astropart. Phys., 2020, 012
+Weltman, A., Bull, P., Camera, S., et al. 2020, PASA, 37, e002
+Xu, X., Li, J., Li, S., & Plaza, A. 2020, IEEE Transactions on Geoscience and
+Remote Sensing, 58, 2817
+Yong, X., Ward, R. K., & Birch, G. E. 2009, in 2009 4th International
+IEEE/EMBS Conference on Neural Engineering, 343–346
+Article number, page 10 of 11
+
+V. Bonjean et al.: LCS: A Learnlet-Based Sparse Framework for Blind Source Separation
+Appendix A: Interpreting the learnlets
+The Learnlet network trained on the ImageNet dataset, as de-
+scribed in Sect.2.2, exhibits interpretability. By examining the
+shapes of the learned filters—referred to as learnlets—we can
+identify key features and patterns that contribute to the sparse
+representation of the images. FigureA.1 displays the learnlets at
+the first scale, revealing various structures captured during train-
+ing, such as horizontal, vertical, and diagonal orientations, along
+with cross-like and small circular patterns.
+The threshold parameters kj are also of particular interest.
+The values learned during training on the ImageNet dataset,
+as presented in Sect.2.2, are shown in Fig.A.2. Notably, these
+thresholds exhibit a decreasing trend, with higher values at finer
+scales and lower values at coarser scales. This pattern aligns with
+expectations, as Gaussian noise tends to be more prominent at
+fine scales and progressively diminishes at coarser levels, often
+becoming negligible at the coarsest scale. The network effec-
+tively captures this behavior during training through its learned
+thresholding mechanism.
+Fig. A.1. Example of learnlets from the first scale of the Learnlet net-
+work trained on ImageNet dataset in Sect. 2.2. Distinct horizontal, ver-
+tical, and diagonal structures are clearly identifiable.
+Fig. A.2. Threshold parameters k j learned during the training of the
+Learnlet network on the ImageNet dataset in Sect. 2.2.
+Article number, page 11 of 11

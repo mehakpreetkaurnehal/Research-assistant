@@ -1,0 +1,924 @@
+Learning from Mistakes: Loss-Aware Memory Enhanced Continual Learning
+for LiDAR Place Recognition
+Xufei Wang1, Junqiao Zhao∗,1,2,3, Siyue Tao2, Qiwen Gu2, Wonbong Kim2, Tiantian Feng4
+Abstract— LiDAR place recognition plays a crucial role in
+SLAM, robot navigation, and autonomous driving. However,
+existing LiDAR place recognition methods often struggle to
+adapt to new environments without forgetting previously learned
+knowledge, a challenge widely known as catastrophic forgetting.
+To address this issue, we propose KDF+, a novel continual
+learning framework for LiDAR place recognition that extends
+the KDF paradigm with a loss-aware sampling strategy and
+a rehearsal enhancement mechanism. The proposed sampling
+strategy estimates the learning difficulty of each sample via
+its loss value and selects samples for replay according to their
+estimated difficulty. Harder samples, which tend to encode more
+discriminative information, are sampled with higher probability
+while maintaining distributional coverage across the dataset.
+In addition, the rehearsal enhancement mechanism encourages
+memory samples to be further refined during new-task train-
+ing by slightly reducing their loss relative to previous tasks,
+thereby reinforcing long-term knowledge retention. Extensive
+experiments across multiple benchmarks demonstrate that KDF+
+consistently outperforms existing continual learning methods and
+can be seamlessly integrated into state-of-the-art continual learn-
+ing for LiDAR place recognition frameworks to yield significant
+and stable performance gains. The code will be available at
+https://github.com/repo/KDF-plus.
+Index Terms— SLAM, Localization, Continual Learning, Place
+Recognition
+I. INTRODUCTION
+LiDAR Place Recognition (LPR) [1], [2] aims to identify
+revisited locations by retrieving the most similar scan from a
+map database given the current LiDAR observation. It plays
+a crucial role in robotics and autonomous navigation, serving
+as the foundation for reliable localization and loop closure
+detection in large-scale and long-term mapping scenarios.
+Recently, a wide range of neural network-based LPR meth-
+ods [3]–[5] have achieved remarkable performance in static
+or closed-set environments. However, these methods tend to
+degrade significantly when exposed to continuously changing
+environments. In particular, sequential learning scenarios often
+induce catastrophic forgetting [6], where the model struggles
+to retain previously learned knowledge.
+To address this challenge, several studies [7]–[11] have
+incorporated continual learning techniques [6] into the LPR
+This work is supported by XXX. (Corresponding Author: Junqiao Zhao.)
+1Xufei Wang, Junqiao Zhao are with the Shanghai Research Institute
+for Intelligent Autonomous System, Tongji University, Shanghai, China
+(Corresponding Author: zhaojunqiao@tongji.edu.cn).
+2Siyue Tao, Qiwen Gu, Wonbong Kim, and Junqiao Zhao are with the
+Department of Computer Science and Technology, School of Electronics and
+Information Engineering, Tongji University, Shanghai, China, and the MOE
+Key Lab of Embedded System and Service Computing, Tongji University,
+Shanghai, China
+3Institute of Intelligent Vehicles, Tongji University, Shanghai, China
+4College of Surveying and Geo-Informatics, Tongji University, Shanghai,
+China
+Fig. 1.
+Comparison of different methods in mitigating catastrophic forgetting
+for LiDAR place recognition (LPR). At each step, the trained MinkLoc3D
+[4] model is evaluated on the Oxford [12] dataset, and both Recall@1 and
+Forgetting scores are reported. Solid lines represent Recall@1, while dashed
+lines indicate the Forgetting score. Higher Recall@1 values correspond to
+better place recognition performance, whereas lower Forgetting scores reflect
+stronger resistance to catastrophic forgetting.As shown in the figure, baseline
+methods such as InCloud [7], CCL [8], and MICL [10] experience substantial
+drops in Recall@1 and sharp increases in Forgetting as new tasks are
+learned. The previous method KDF [11] provides moderate improvements. In
+contrast, our proposed KDF+ consistently maintains the highest Recall@1 and
+achieves the lowest Forgetting score across all steps, demonstrating its superior
+capability in mitigating catastrophic forgetting while preserving recognition
+performance on previously learned tasks.
+domain, giving rise to the emerging research area of Continual
+Learning for LiDAR Place Recognition (CL-LPR). Represen-
+tative works such as InCloud [7], CCL [8], MICL [10], and
+KDF [11] explore various knowledge distillation strategies to
+mitigate forgetting while preserving model adaptability.
+Most existing methods [7]–[11] rely on maintaining a
+memory (replay) buffer to enhance knowledge retention and
+mitigate forgetting. As summarized in Table I, prior contin-
+ual learning approaches differ widely in how these replay
+buffers are constructed and utilized. While random sampling
+is commonly employed—likely due to its simplicity and
+ease of implementation—it often fails to preserve the most
+informative samples for long-term retention and ignores the
+model’s perception of sample difficulty. Furthermore, these
+approaches also vary in how replayed samples are incorporated
+during training. Several methods directly mix memory samples
+with new-task data for joint optimization and use them solely
+for knowledge distillation, a straightforward strategy but one
+arXiv:2511.15597v1  [cs.CV]  19 Nov 2025
+
+TABLE I
+COMPARISON OF EXISTING CL-LPR METHODS.
+Method
+Knowledge Distillation
+Data Sampling Replay Strategy Memory Update
+InCloud [7]
+Structure-aware
+Random
+Mix
+Max replacement
+CCL [8]
+Distribution-based
+Random
+Sample ER
+Max replacement
+MICL [10]
+Mutual Information-based
+Random
+Pairs ER+Mix
+Balanced
+KDF [11]
+Ranking-aware
+Random
+Mix
+Max replacement
+that lacks an optimized or principled replay mechanism. Dis-
+crepancies in memory management policies across different
+methods further contribute to inconsistent performance and
+inefficiencies in maintaining previously acquired knowledge.
+To address these limitations, we propose a new continual
+learning framework for LiDAR place recognition, termed
+KDF+, which extends the original KDF framework with a
+loss-aware sampling mechanism and a rehearsal enhancement
+mechanism. As illustrated in Fig. 1, the enhanced KDF+
+framework effectively mitigates forgetting in continual LPR
+settings. Unlike prior methods, our sampling strategy estimates
+the difficulty of each sample based on its training loss, follow-
+ing the intuition that harder samples contain richer supervisory
+signals. Consequently, samples are probabilistically selected
+for memory replay according to their estimated difficulty,
+yielding a more informative and representative buffer. In addi-
+tion, our rehearsal enhancement mechanism promotes further
+optimization of memory samples during new-task training
+by encouraging their loss to be slightly reduced relative to
+previous tasks. This design reinforces long-term knowledge
+retention and enables memory samples to be continually
+improved throughout sequential learning.
+In summary, this paper makes the following key contribu-
+tions:
+• We propose a loss-aware memory sampling strategy that
+adaptively selects informative and challenging samples
+for replay based on their estimated difficulty.
+• We introduce a rehearsal enhancement loss that facilitates
+more effective refinement of memory samples during con-
+tinual updates, thereby reinforcing long-term knowledge
+retention.
+• Extensive experiments demonstrate that the proposed
+KDF+ framework achieves superior performance com-
+pared with existing methods, and can be seamlessly com-
+bined with state-of-the-art continual learning baselines to
+yield consistent and significant improvements.
+II. RELATED WORKS
+A. LiDAR Place Recognition
+LiDAR
+Place
+Recognition
+has
+witnessed
+significant
+progress in recent years, largely driven by advancements
+in deep learning for point cloud processing. Early methods
+such as PointNetVLAD [3] combined PointNet [13] with
+NetVLAD [14] to learn global descriptors directly from raw
+point clouds. Subsequent studies [4], [5], [15]–[24] explored
+diverse architectures and loss functions to improve descriptor
+robustness. For example, MinkLoc3D [4] introduced sparse
+3D convolutions to efficiently handle large-scale point clouds,
+while CASSRP [5] employed cross-attention mechanisms to
+capture richer contextual relationships within the data.
+Despite these advancements, most existing LPR methods
+are developed under static or closed-set assumptions and thus
+struggle to cope with continuously evolving environments. In
+real-world deployments, models must adapt to new conditions
+while retaining previously acquired knowledge, yet standard
+LPR approaches often suffer from severe performance degra-
+dation due to forgetting. These practical challenges have
+motivated growing interest in incorporating continual learn-
+ing techniques into LPR systems, giving rise to Continual
+Learning for LiDAR Place Recognition as an emerging and
+important research direction.
+B. Continual Learning
+Continual Learning [6], also known as Lifelong Learning,
+aims to enable an intelligent agent to acquire new knowledge
+from a non-stationary data stream while retaining previously
+learned capabilities. To mitigate catastrophic forgetting, exist-
+ing continual learning approaches can be broadly categorized
+into three major families: replay-based, regularization-based,
+and architecture-based methods.
+Replay-based (or rehearsal-based) methods: These ap-
+proaches store a subset of samples from previous tasks and
+interleave them with new-task data during training. The sim-
+plest and most widely adopted strategy is Experience Replay
+(ER) [25], which maintains a memory buffer of past samples
+and replays them jointly with new data (e.g., ER [25], A-GEM
+[26]). An alternative direction is Generative Replay, where a
+generative model is trained to synthesize samples from old
+tasks, thereby reducing storage and privacy concerns (e.g.,
+DGR [27]).
+Regularization-based methods: These methods incorpo-
+rate additional regularization terms into the loss function
+to constrain updates to parameters that are important for
+previously learned tasks. Such methods are generally divided
+into: (1) Weight regularization, which estimates parameter im-
+portance and penalizes substantial changes to critical weights
+(e.g., EWC [28], SI [29]); and (2) Function regularization,
+which leverages techniques such as knowledge distillation to
+ensure the new model’s outputs or features remain consistent
+with those of the old model (e.g., LwF [30]).
+Architecture-based methods: These approaches [31], [32]
+mitigate forgetting by dynamically expanding or adapting the
+network architecture, often allocating task-specific parameters
+or modules to preserve prior knowledge.
+C. Continual Learning for LiDAR Place Recognition
+Although continual learning has been extensively studied
+in image classification, only a few studies [7]–[11] have
+explored its application to LPR. These methods primarily
+rely on two strategies: knowledge distillation and sample
+replay. Early attempts such as InCloud [7] propose a structure-
+aware distillation approach that preserves higher-order embed-
+ding relationships and achieves incremental adaptation across
+multiple large-scale LiDAR benchmarks. CCL [8] introduces
+a continual contrastive learning paradigm with distribution-
+based distillation to learn transferable place representations.
+MICL [10] presents a mutual-information guided continual
+learning framework that preserves domain-shared information
+
+through a mutual-information distillation loss. KDF [11] fur-
+ther advances this line of work by introducing a ranking-
+aware knowledge distillation and fusion framework, in which
+embedding ranking relations are explicitly maintained via a
+ranking-aware loss, and a knowledge fusion module integrates
+old and new model knowledge for improved LPR performance.
+All the above methods employ a random sampling strategy
+when constructing the memory buffer, without exploring more
+advanced or adaptive mechanisms for selecting informative
+samples. In addition, the stored memory samples are used
+solely for knowledge distillation to preserve past knowledge,
+with limited investigation into how these samples could be
+more effectively leveraged during continual updates.
+III. PRELIMINARIES
+Before introducing our method, we first define the LiDAR
+Place Recognition task and formulate the problem of continual
+learning for LPR.
+A. LiDAR Place Recognition
+LiDAR Place Recognition aims to identify previously vis-
+ited locations using 3D point cloud data captured by LiDAR
+sensors. Given a query point cloud Pq, the objective is to
+retrieve the most similar point cloud from a database D =
+{P1, P2, . . . , PN}, where N denotes the number of stored
+point clouds. To accomplish this, LPR methods typically
+extract global descriptors from point clouds using a feature
+extraction network Θ(·). The similarity between the query
+descriptor and each database descriptor is then computed
+using a distance metric, such as Euclidean distance or cosine
+similarity. The retrieved point clouds are subsequently ranked
+based on their similarity scores, and the top-ranked candidates
+are regarded as potential matches for place recognition.
+B. Continual Learning for LiDAR Place Recognition
+In this paper, we formulate the continual learning problem
+for LPR as CL-LPR. The objective is to enable the model to
+acquire strong LPR capabilities in newly encountered environ-
+ments while maintaining its performance on previously visited
+ones. Specifically, a pretrained LPR model is sequentially
+exposed to data from T distinct domains {D1, D2, . . . , DT },
+each characterized by variations in environment, sensor con-
+figuration, or temporal conditions.
+During each training step t, the model has access only to
+the data from the current domain Dt and a predefined replay
+buffer (memory) M. The memory M stores a limited num-
+ber S of representative samples from previously encountered
+domains and is incrementally updated as new domains are
+introduced. Consequently, the model parameters Θt and the
+replay memory Mt are updated according to:
+{Mt, Θt} ←{Dt, Mt−1, Θt−1}.
+(1)
+Existing CL-LPR methods typically optimize a weighted
+combination of the task loss and a distillation loss, formulated
+as:
+Ltotal = LPR + λ · LKD,
+(2)
+where LPR denotes the place recognition task loss, commonly
+implemented using a triplet margin loss or other contrastive
+loss. LKD represents the knowledge distillation loss proposed
+by different methods (summarized in Table I), and λ is a
+relaxation coefficient [7].
+IV. METHODOLOGY
+In this section, we present the proposed continual learning
+framework KDF+ for LiDAR Place Recognition. As illustrated
+in Figure 2, the framework consists of two key components:
+(1) a loss-aware sampling strategy that prioritizes the selection
+of informative samples for replay based on their estimated
+learning difficulty, and (2) a rehearsal enhancement mecha-
+nism that encourages the model to further optimize memory
+samples during new-task training, thereby reinforcing long-
+term knowledge retention.
+A. Loss-Aware Sampling
+The proposed loss-aware sampling strategy addresses the
+problem of selecting which samples from the current dataset
+should be added to the replay buffer as exemplars. After
+multiple rounds of training, the model naturally develops an
+internal notion of sample difficulty, which is reflected in the
+loss values produced during optimization. Motivated by this
+observation, we introduce a lightweight loss prediction module
+that operates alongside the main LPR model.
+As shown in Figure 2, the loss prediction layer is placed
+after the GEM [33] module of the backbone network and
+works jointly with the entire model. It consists of a simple
+MLP with a Linear–BN–ReLU–Linear architecture. Given the
+feature representation of each point cloud, the module predicts
+its corresponding loss value. During training, while the origi-
+nal LPR model is optimized using the place recognition loss,
+the loss prediction layer is trained jointly under the supervision
+of a mean squared error (MSE) objective:
+L = MSE(LPR, LPre),
+(3)
+where LPre denotes the predicted loss.
+The predicted loss values serve as an indicator of sample
+difficulty during the memory selection process. For each
+sample, a higher predicted loss typically corresponds to a more
+challenging case for the model, while lower predicted losses
+indicate easier samples that may contribute less to long-term
+retention. We therefore incorporate these predicted loss values
+as sampling weights to perform weighted random sampling.
+This maintains overall sampling diversity while biasing se-
+lection toward more informative (i.e., harder) samples. The
+sampling probability for each sample i is defined as:
+pi =
+Li
+Pre
+P
+j Lj
+Pre
+,
+(4)
+where Li
+Pre denotes the predicted loss for sample i.
+By assigning higher sampling probabilities to harder sam-
+ples, the model preferentially selects challenging point clouds
+to populate the replay buffer, enabling more effective knowl-
+edge retention during continual learning.
+
+Fig. 2.
+Overview of the proposed KDF+ CL-LPR framework. The framework incorporates two key components: (1) Loss-Aware Sampling: A loss prediction
+layer estimates the difficulty or importance of samples from the previous dataset and produces a non-uniform sampling weight distribution (illustrated by
+the histogram). This enables prioritized selection of informative samples (e.g., LiDAR submaps) to populate the replay buffer, as indicated by the weighted
+samples. (2) Rehearsal Enhancement Loss: Applied during rehearsal when learning a new task, this loss encourages memory samples to further improve. As
+shown by the loss curves, it helps maintain performance on the previous task (yellow line) while the backbone adapts to the new task (green line), effectively
+reducing forgetting. In addition, the framework leverages ranking-aware distillation [11] to transfer knowledge from the previous backbone to the newly updated
+backbone.
+B. Rehearsal Enhancement
+The motivation behind the rehearsal enhancement mech-
+anism is inspired by human learning, where recalling and
+revisiting previously encountered experiences helps reinforce
+old knowledge while acquiring new information. Following
+this intuition, we design a rehearsal enhancement mechanism
+that encourages memory samples to be further refined when
+the model is trained in new environments.
+Concretely, we expect the place recognition (PR) loss of
+each memory sample in a new domain to be slightly lower
+than its corresponding loss in the previous domain, indicating
+improved representation quality over time. To enforce this
+behavior, we introduce a rehearsal loss defined as:
+LRehearsal = max(0, m −(Lold
+PR −LPR)),
+(5)
+where m is a margin parameter, Lold
+PR denotes the PR loss of the
+memory sample in the previous domain, and LPR represents
+its PR loss in the current domain.
+This formulation encourages the model to continually im-
+prove its performance on previously learned samples as it
+adapts to new environments. By promoting progressive refine-
+ment of memory representations, the rehearsal enhancement
+mechanism helps reduce the impact of catastrophic forgetting
+and strengthens long-term knowledge retention.
+C. Memory Management
+1) Equal Domain Strategy:
+After training on the first
+domain, we initialize the replay memory by selecting a set of
+representative samples using the proposed loss-aware sampling
+strategy, subject to the predefined memory capacity S. After
+training on each subsequent domain, we follow the equal
+domain strategy adopted in MICL [10] to maintain balanced
+memory allocation, ensuring that each domain occupies an
+equal number of samples, i.e., S/T, where S is the total
+memory size and T is the number of domains currently stored
+in memory.
+This strategy determines how many samples should be
+retained or replaced for each domain. During memory updates,
+samples to be removed are selected via random sampling
+within each domain’s subset, whereas new samples from
+the latest domain are added using the proposed loss-aware
+sampling approach. This maintains diversity while ensuring
+that informative and challenging samples are preserved.
+2) Experience Replay: During training on a new domain,
+we employ experience replay [25] to interleave samples from
+the replay buffer with data from the current domain. Specif-
+ically, in each training iteration, we sample one mini-batch
+from the current domain and one mini-batch from the replay
+
+buffer. Each mini-batch consists of paired samples, where each
+pair includes an anchor and a positive example.
+These two mini-batches are then combined to form a
+mixed batch, which is used to compute the overall loss for
+backpropagation. This replay mechanism enables the model to
+simultaneously learn from new experiences while reinforcing
+previously acquired knowledge, thereby effectively mitigating
+catastrophic forgetting.
+D. Overall Objective
+Most existing CL-LPR approaches primarily focus on de-
+signing distillation-based losses. In our framework, we extend
+the conventional loss formulation—typically consisting of a
+task loss and a distillation loss—by incorporating the proposed
+rehearsal loss. The overall training objective is defined as:
+Ltotal = LPR + λ · LKD + ω · LRehearsal,
+(6)
+where ω is a weighting coefficient that controls the contribu-
+tion of the rehearsal loss.
+In this work, the place recognition task loss LPR is imple-
+mented using the triplet margin loss. The distillation loss LKD
+follows the ranking-aware knowledge distillation formulation
+proposed in KDF [11], which preserves the relative similar-
+ity ranking among embeddings from different tasks. In our
+training scheme, LPR is computed exclusively using current-
+domain samples within the mixed batch, whereas both LKD
+and LRehearsal are applied to the memory samples.
+Together with the loss-aware supervision introduced in
+Eq. (3), the proposed objective jointly enhances both the
+selection of informative samples and their effective utilization
+during continual learning.
+V. EXPERIMENT
+A. Datasets and Experimental Protocol
+To comprehensively evaluate the effectiveness of the pro-
+posed KDF+ framework, we conduct extensive experiments on
+three publicly available LPR datasets: Oxford RobotCar [12],
+MulRan [34], and the In-house dataset [3]. Detailed statistics
+for all datasets are provided in Table II. For the MulRan
+[34] dataset, we use two distinct environments—DCC (urban)
+and Riverside (river-side suburban)—captured under diverse
+environmental conditions.
+Following prior CL-LPR studies [7], [8], [10], [11], we ap-
+ply standard preprocessing to all point cloud frames, including
+ground removal and voxel downsampling. For fair comparison
+across methods, we adopt the widely used 4-step training
+protocol:
+Oxford →DCC →Riverside →In-house.
+These four steps differ significantly in terms of location,
+environment, sensor configuration, and collection period, and
+can therefore be regarded as four distinct domains.
+During training on Oxford [12] and In-house [3], the
+positive/negative distance thresholds are set to 10 m and 50 m,
+respectively, while a 25 m threshold is used during testing. For
+DCC [34] and Riverside [34], the positive/negative thresholds
+are set to 10 m and 20 m during training, with a 10 m threshold
+applied at test time.
+TABLE II
+STATISTICS OF THE EXPERIMENT DATASETS.
+Datasets
+Oxford [12]
+DCC [34]
+Riverside [34]
+In-house [3]
+Location
+Oxford
+Dajeon
+Sejong
+Singapore
+Sensor
+SICK
+Ouster
+Ouster
+Velodyne
+Collection Date
+2014-2015
+2019
+2019
+2017
+Training Scans
+22k
+5.5k
+5.5k
+6.7k
+Testing Scans
+3k
+15k
+18.6k
+1.8k
+Fig. 3.
+Detailed performance comparison under the 4-step protocol across
+three LPR backbones—PointNetVLAD [3], MinkLoc3D [4], and CASSPR
+[5]—and four continual learning methods: InCloud [7], CCL [8], MICL [10],
+and KDF [11]. The results are presented as Recall@1 matrices, where each
+row corresponds to a continual learning method and each column corresponds
+to a different backbone. Within each matrix, Steps 1 through 4 report the
+Recall@1 performance on the environments encountered up to that step.
+Darker colors indicate higher Recall@1 values.
+B. Backbones and Baselines
+To verify the generality and robustness of our approach,
+we evaluate KDF+ on three representative LPR backbones:
+PointNetVLAD [3], MinkLoc3D [4], and CASSPR [5]. We
+compare against seven baselines, including: (1) Fine-tuning,
+which serves as a lower bound without any continual learn-
+ing mechanism; (2) LwF [30] and EWC [28], two classical
+regularization-based continual learning methods that do not
+
+TABLE III
+CONTINUAL LEARNING RESULTS UNDER THE 4-STEP PROTOCOL. THE RESULTS ARE PRESENTED FOR THREE DIFFERENT BACKBONE ARCHITECTURES:
+POINTNETVLAD [3], MINKLOC3D [4], AND CASSPR [5].
+Methods
+PointNetVLAD [3]
+MinkLoc3D [4]
+CASSPR [5]
+Overall
+mR@1↑
+F↓
+mR@1↑
+F↓
+mR@1↑
+F↓
+mR@1↑
+F↓
+Fine-Tuning
+57.97
+21.28
+72.49
+22.40
+75.85
+18.88
+68.77
+20.85
+LwF [30]
+58.11
+20.49
+73.64
+19.82
+78.08
+15.58
+69.94
+18.63
+EWC [35]
+58.21
+23.27
+78.14
+14.15
+80.80
+13.35
+72.38
+16.92
+InCloud [7]
+63.03
+12.83
+83.66
+5.99
+83.61
+6.85
+76.77
+8.56
+CCL [8]
+60.59
+6.51
+81.47
+7.11
+78.4
+2.53
+73.49
+5.38
+MICL [10]
+62.06
+9.41
+83.49
+6.10
+85.20
+5.02
+76.92
+6.84
+KDF [11]
+66.63
+8.38
+86.40
+1.20
+85.67
+1.75
+79.57
+3.93
+KDF+
+69.53
+2.84
+86.56
+-0.01
+87.30
+-0.51
+81.13
+0.77
+The best results of the experiment are shown in bold.
+use memory replay; and (3) four CL-LPR methods—InCloud
+[7], CCL [8], MICL [10], and KDF [11]—which integrate
+memory replay and knowledge distillation. All replay-based
+baselines construct the memory buffer using random sampling.
+C. Training Details
+During the initial training stage on Oxford [12], the back-
+bone model and the loss-aware sampling layer are jointly
+optimized using the triplet margin loss and the loss-aware
+supervision loss. Subsequent domains are learned under the
+continual learning setting using the proposed sampling and
+rehearsal strategies.
+We adopt the Adam optimizer with a weight decay of 1 ×
+10−3. The memory buffer size is set to 512, following prior
+CL-LPR works [7], [8], [10], [11]. Each domain is trained for
+60 epochs with an initial learning rate of 1 × 10−4, which is
+reduced by a factor of 0.1 after 30 epochs. The learning rate of
+the loss-aware layer is set to half that of the backbone network
+to stabilize its training. The batch size increases progressively
+from 16 with a growth rate of 1.4, capped at a maximum
+of 256. All experiments are conducted on the same machine
+equipped with a single NVIDIA GeForce RTX 3090 GPU to
+ensure fair comparison across methods.
+D. Evaluation Metrics
+In CL-LPR, two standard metrics are commonly used to
+assess performance: the mean Recall@1 and the Forgetting
+Score. The mean Recall@1 measures the model’s overall
+retrieval performance across all environments after continual
+training, while the Forgetting Score quantifies the average
+performance degradation relative to the best performance pre-
+viously achieved in each environment. Formally, these metrics
+are defined as:
+mR@1 = 1
+T
+T
+X
+t=1
+RT,t,
+(7)
+F =
+1
+T −1
+T −1
+X
+t=1
+
+max
+l∈{1,...,t} Rl,t −RT,t
+
+,
+(8)
+where T is the total number of training environments, and t
+denotes the current task index. Rl,t represents the Recall@1 of
+task t evaluated after training step l. A higher mean Recall@1
+and a lower Forgetting Score indicate stronger resistance to
+catastrophic forgetting and better continual learning perfor-
+mance.
+E. Continual Learning Performance
+The main continual learning results under the 4-step pro-
+tocol are summarized in Table III. Our proposed KDF+
+framework consistently outperforms all baselines across all
+backbone architectures.
+Using the MinkLoc3D [4] backbone, KDF+ achieves a
+mean Recall@1 of 86.56% and a Forgetting Score of −0.01%,
+surpassing the previous best method, KDF [11], by 0.16%
+in mean Recall@1 and reducing the Forgetting Score from
+1.20% to −0.01%. Similar improvements are observed with
+the other two backbones, PointNetVLAD [3] and CASSPR
+[5], where KDF+ achieves gains of 2.90% and 1.63% in mean
+Recall@1, respectively. In addition, KDF+ consistently lowers
+the Forgetting Score, indicating not only strong retention but
+also enhanced performance on previously learned tasks.
+These results (see Fig. 3) demonstrate the effectiveness of
+the proposed loss-aware sampling and rehearsal enhancement
+mechanisms in mitigating catastrophic forgetting and improv-
+ing continual learning performance for LPR.
+F. Generalization to Other CL-LPR Methods
+We further evaluate the generalization ability of the pro-
+posed KDF+ components by integrating them into two rep-
+resentative CL-LPR methods: InCloud [7] and MICL [10].
+As shown in Fig. 4, incorporating the loss-aware sampling
+and rehearsal enhancement mechanisms into these baselines
+yields substantial improvements in both mean Recall@1 and
+Forgetting Score.
+For InCloud [7], the overall mean Recall@1 increases from
+76.77% to 79.24%, while the Forgetting Score decreases
+from 8.56% to 5.84%. Similarly, for MICL [10], the overall
+mean Recall@1 improves from 76.92% to 78.58%, and the
+Forgetting Score is reduced from 6.84% to 5.11%.
+
+Fig. 4.
+Generalization of the proposed KDF+ components to other CL-LPR
+methods, InCloud [7] and MICL [10]. Integrating the loss-aware sampling
+and rehearsal enhancement mechanisms into these baselines yields significant
+improvements in both mean Recall@1 and Forgetting Score.
+TABLE IV
+SENSITIVITY ANALYSIS OF ω ON THE MINKLOC3D [4] BACKBONE
+Rehearsal enhancement weight ω
+mR@1 ↑
+Forgetting ↓
+0.01
+85.55
+0.44
+0.05
+86.02
+-0.23
+0.08
+86.56
+-0.01
+0.1
+86.38
+0.21
+0.5
+85.79
+0.30
+The best results of the experiment are shown in bold.
+These results demonstrate that the proposed KDF+ compo-
+nents are not only effective within our own framework but also
+generalize well to enhance the performance of other state-of-
+the-art CL-LPR methods.
+G. Parameter Sensitivity Analysis
+We further analyze the sensitivity of the rehearsal enhance-
+ment weight ω in the overall loss function. As shown in
+Table IV, we vary ω from 0.01 to 0.5 and evaluate its impact
+on continual learning performance using the MinkLoc3D [4]
+backbone.
+When ω = 0.08, the model achieves the best performance,
+with a mean Recall@1 of 86.56% and a Forgetting Score of
+−0.01%. This indicates that an appropriate weighting of the
+rehearsal enhancement loss is crucial for balancing the reten-
+tion of old knowledge and the learning of new information.
+When ω is too small (e.g., 0.01), the rehearsal enhancement
+effect becomes insufficient, resulting in increased forgetting.
+Conversely, a large ω (e.g., 0.5) places excessive emphasis
+on preserving old knowledge, which can hinder adaptation to
+TABLE V
+ABLATION STUDY OF THE PROPOSED KDF+ FRAMEWORK ON THE
+MINKLOC3D [4] BACKBONE.
+Methods
+mR@1 ↑
+Forgetting ↓
+Full KDF+
+86.56
+-0.01
+w/o Loss-aware sampling
+86.01
+1.43
+w/o Rehearsal Enhancement
+86.24
+0.39
+w/o Experience Replay
+86.02
+2.02
+w/o Equal Domain
+86.18
+0.17
+The best results of the experiment are shown in bold.
+new tasks. These results highlight the importance of properly
+tuning ω to achieve optimal performance in continual learning.
+H. Ablation Study
+To evaluate the contribution of each component in the
+KDF+ framework, we conduct ablation experiments using
+the MinkLoc3D backbone. The results are summarized in
+Table V. Removing either the proposed loss-aware sampling
+strategy (i.e., replacing it with random sampling) or the
+rehearsal enhancement mechanism leads to a clear degradation
+in performance, demonstrating the necessity and effectiveness
+of both components.
+In addition, we analyze the impact of different replay strate-
+gies and memory balancing schemes on continual learning
+performance. When memory samples are directly mixed with
+new-task data for joint training—rather than being interleaved
+via experience replay—we observe a noticeable drop in accu-
+racy, indicating the importance of structured replay. Likewise,
+if the memory buffer is not balanced across domains (e.g.,
+when adopting the max replacement strategy from InCloud
+[7], which substitutes samples with those from overrepresented
+environments), the model exhibits further performance decline.
+Overall, these findings highlight the crucial role of each
+design choice within KDF+, collectively contributing to its
+superior performance in continual LiDAR place recognition.
+VI. CONCLUSION
+In this paper, we present KDF+, a novel continual learn-
+ing framework for LiDAR place recognition that integrates
+loss-aware sampling and rehearsal enhancement mechanisms.
+The loss-aware sampling strategy prioritizes the selection
+of informative samples based on their predicted loss val-
+ues, while the rehearsal enhancement mechanism encourages
+memory samples to further improve their performance as
+the model learns new tasks. Extensive experiments across
+multiple datasets demonstrate that KDF+ outperforms existing
+continual learning methods, achieving superior retention of
+previously acquired knowledge while effectively adapting to
+new environments. Moreover, the proposed components in
+KDF+ can be seamlessly incorporated into other CL-LPR
+frameworks, offering a promising direction for improving
+continual learning performance. In future research, we aim
+to investigate more advanced architectures as well as more
+expressive memory representations, with the goal of further
+
+enhancing knowledge retention in continual learning for Li-
+DAR place recognition.
+REFERENCES
+[1] P. Yin, J. Jiao, S. Zhao, L. Xu, G. Huang, H. Choset, S. Scherer,
+and J. Han, “General place recognition survey: Towards real-world
+autonomy,” arXiv preprint arXiv:2405.04812, 2024.
+[2] P. Shi, Y. Zhang, and J. Li, “Lidar-based place recognition for au-
+tonomous driving: A survey,” arXiv preprint arXiv:2306.10561, 2023.
+[3] M. A. Uy and G. H. Lee, “Pointnetvlad: Deep point cloud based retrieval
+for large-scale place recognition,” in Proceedings of the IEEE conference
+on computer vision and pattern recognition, 2018, pp. 4470–4479.
+[4] J. Komorowski, “Minkloc3d: Point cloud based large-scale place recog-
+nition,” in Proceedings of the IEEE/CVF Winter Conference on Appli-
+cations of Computer Vision, 2021, pp. 1790–1799.
+[5] Y. Xia, M. Gladkova, R. Wang, Q. Li, U. Stilla, J. F. Henriques, and
+D. Cremers, “Casspr: Cross attention single scan place recognition,”
+in Proceedings of the IEEE/CVF international conference on computer
+vision, 2023, pp. 8461–8472.
+[6] L. Wang, X. Zhang, H. Su, and J. Zhu, “A comprehensive survey of
+continual learning: Theory, method and application,” IEEE Transactions
+on Pattern Analysis and Machine Intelligence, 2024.
+[7] J. Knights, P. Moghadam, M. Ramezani, S. Sridharan, and C. Fookes,
+“Incloud: Incremental learning for point cloud place recognition,” in
+2022 IEEE/RSJ International Conference on Intelligent Robots and
+Systems (IROS).
+IEEE, 2022, pp. 8559–8566.
+[8] J. Cui and X. Chen, “Ccl: Continual contrastive learning for lidar place
+recognition,” IEEE Robotics and Automation Letters, vol. 8, no. 8, pp.
+4433–4440, 2023.
+[9] P. Yin, A. Abuduweili, S. Zhao, L. Xu, C. Liu, and S. Scherer, “Bioslam:
+A bioinspired lifelong memory system for general place recognition,”
+IEEE Transactions on Robotics, 2023.
+[10] B. Liu, T. Yang, Y. Fang, and Z. Yan, “Micl: Mutual information
+guided continual learning for lidar place recognition,” IEEE Robotics
+and Automation Letters, 2024.
+[11] X. Wang, G. Tian, J. Zhao, S. Tao, Q. Gu, Q. Yu, and T. Feng, “Ranking-
+aware continual learning for lidar place recognition,” arXiv preprint
+arXiv:2505.07198, 2025.
+[12] W. Maddern, G. Pascoe, C. Linegar, and P. Newman, “1 year, 1000
+km: The oxford robotcar dataset,” The International Journal of Robotics
+Research, vol. 36, no. 1, pp. 3–15, 2017.
+[13] C. R. Qi, H. Su, K. Mo, and L. J. Guibas, “Pointnet: Deep learning on
+point sets for 3d classification and segmentation,” in Proceedings of the
+IEEE conference on computer vision and pattern recognition, 2017, pp.
+652–660.
+[14] R. Arandjelovic, P. Gronat, A. Torii, T. Pajdla, and J. Sivic, “Netvlad:
+Cnn architecture for weakly supervised place recognition,” in Proceed-
+ings of the IEEE conference on computer vision and pattern recognition,
+2016, pp. 5297–5307.
+[15] J. Komorowski, “Improving point cloud based place recognition with
+ranking-based loss and large batch training,” in 2022 26th International
+Conference on Pattern Recognition (ICPR), 2022, pp. 3699–3705.
+[16] K. Vidanapathirana, M. Ramezani, P. Moghadam, S. Sridharan, and
+C. Fookes, “Logg3d-net: Locally guided global descriptor learning for
+3d place recognition,” in 2022 International Conference on Robotics and
+Automation (ICRA).
+IEEE, 2022, pp. 2215–2221.
+[17] T.-X. Xu, Y.-C. Guo, Z. Li, G. Yu, Y.-K. Lai, and S.-H. Zhang,
+“Transloc3d: point cloud based large-scale place recognition using
+adaptive receptive fields,” Communications in Information and Systems,
+vol. 23, no. 1, pp. 57–83, 2023.
+[18] X. Kong, X. Yang, G. Zhai, X. Zhao, X. Zeng, M. Wang, Y. Liu,
+W. Li, and F. Wen, “Semantic graph based place recognition for 3d
+point clouds,” in 2020 IEEE/RSJ International Conference on Intelligent
+Robots and Systems (IROS).
+IEEE, 2020, pp. 8216–8223.
+[19] K. Vidanapathirana, P. Moghadam, B. Harwood, M. Zhao, S. Sridharan,
+and C. Fookes, “Locus: Lidar-based place recognition using spatiotem-
+poral higher-order pooling,” in 2021 IEEE International Conference on
+Robotics and Automation (ICRA).
+IEEE, 2021, pp. 5075–5081.
+[20] Q. Li, Y. Zhuang, J. Huai, Y. Chen, and A. Yilmaz, “An efficient
+point cloud place recognition approach based on transformer in dynamic
+environment,” ISPRS Journal of Photogrammetry and Remote Sensing,
+vol. 207, pp. 14–26, 2024.
+[21] L. Li, X. Kong, X. Zhao, T. Huang, W. Li, F. Wen, H. Zhang, and Y. Liu,
+“Rinet: Efficient 3d lidar-based place recognition using rotation invariant
+neural network,” IEEE Robotics and Automation Letters, vol. 7, no. 2,
+pp. 4321–4328, 2022.
+[22] S. Zhao, P. Yin, G. Yi, and S. Scherer, “Spherevlad++: Attention-based
+and signal-enhanced viewpoint invariant descriptor,” IEEE Robotics and
+Automation Letters, vol. 8, no. 1, pp. 256–263, 2022.
+[23] Y. Xia, L. Shi, Z. Ding, J. F. Henriques, and D. Cremers, “Text2loc:
+3d point cloud localization from natural language,” in Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern Recognition,
+2024, pp. 14 958–14 967.
+[24] T. Shang, Z. Li, W. Pei, P. Xu, Z. Deng, and F. Kong, “Mambaplace:
+Text-to-point-cloud cross-modal place recognition with attention mamba
+mechanisms,” arXiv preprint arXiv:2408.15740, 2024.
+[25] D. Rolnick, A. Ahuja, J. Schwarz, T. Lillicrap, and G. Wayne, “Expe-
+rience replay for continual learning,” Advances in neural information
+processing systems, vol. 32, 2019.
+[26] A. Chaudhry, R. Marc’Aurelio, M. Rohrbach, and M. Elhoseiny, “Ef-
+ficient lifelong learning with a-gem,” in 7th International Conference
+on Learning Representations, ICLR 2019.
+International Conference on
+Learning Representations, ICLR, 2019.
+[27] H. Shin, J. K. Lee, J. Kim, and J. Kim, “Continual learning with deep
+generative replay,” Advances in neural information processing systems,
+vol. 30, 2017.
+[28] J. Serra, D. Suris, M. Miron, and A. Karatzoglou, “Overcoming catas-
+trophic forgetting with hard attention to the task,” in International
+conference on machine learning.
+PMLR, 2018, pp. 4548–4557.
+[29] F. Zenke, B. Poole, and S. Ganguli, “Continual learning through synaptic
+intelligence,” in International conference on machine learning. PMLR,
+2017, pp. 3987–3995.
+[30] Z. Li and D. Hoiem, “Learning without forgetting,” IEEE transactions
+on pattern analysis and machine intelligence, vol. 40, no. 12, pp. 2935–
+2947, 2017.
+[31] A. Mallya and S. Lazebnik, “Packnet: Adding multiple tasks to a single
+network by iterative pruning,” in Proceedings of the IEEE conference
+on Computer Vision and Pattern Recognition, 2018, pp. 7765–7773.
+[32] A. A. Rusu, N. C. Rabinowitz, G. Desjardins, H. Soyer, J. Kirkpatrick,
+K. Kavukcuoglu, R. Pascanu, and R. Hadsell, “Progressive neural
+networks,” arXiv preprint arXiv:1606.04671, 2016.
+[33] F. Radenovi´c, G. Tolias, and O. Chum, “Fine-tuning cnn image retrieval
+with no human annotation,” IEEE transactions on pattern analysis and
+machine intelligence, vol. 41, no. 7, pp. 1655–1668, 2018.
+[34] G. Kim, Y. S. Park, Y. Cho, J. Jeong, and A. Kim, “Mulran: Multimodal
+range dataset for urban place recognition,” in 2020 IEEE International
+Conference on Robotics and Automation (ICRA).
+IEEE, 2020, pp.
+6246–6253.
+[35] J. Kirkpatrick, R. Pascanu, N. Rabinowitz, J. Veness, G. Desjardins,
+A. A. Rusu, K. Milan, J. Quan, T. Ramalho, A. Grabska-Barwinska
+et al., “Overcoming catastrophic forgetting in neural networks,” Pro-
+ceedings of the national academy of sciences, vol. 114, no. 13, pp.
+3521–3526, 2017.

@@ -1,0 +1,2661 @@
+Convergence and Sketching-Based Efficient Computation of Neural
+Tangent Kernel Weights in Physics-Based Loss
+Max Hirsch
+Department of Mathematics
+University of California, Berkeley
+Berkeley, CA 94720, USA
+mhirsch@berkeley.edu
+Federico Pichi
+mathLab, Mathematics Area
+SISSA
+I-34136 Trieste, Italy
+fpichi@sissa.it
+November 20, 2025
+Abstract
+In multi-objective optimization, multiple loss terms are weighted and added together to form a single
+objective. These weights are chosen to properly balance the competing losses according to some meta-
+goal.
+For example, in physics-informed neural networks (PINNs), these weights are often adaptively
+chosen to improve the network’s generalization error. A popular choice of adaptive weights is based on
+the neural tangent kernel (NTK) of the PINN, which describes the evolution of the network in predictor
+space during training. The convergence of such an adaptive weighting algorithm is not clear a priori.
+Moreover, these NTK-based weights would be updated frequently during training, further increasing the
+computational burden of the learning process. In this paper, we prove that under appropriate conditions,
+gradient descent enhanced with adaptive NTK-based weights is convergent in a suitable sense. We then
+address the problem of computational efficiency by developing a randomized algorithm inspired by a
+predictor-corrector approach and matrix sketching, which produces unbiased estimates of the NTK up
+to an arbitrarily small discretization error. Finally, we provide numerical experiments to support our
+theoretical findings and to show the efficacy of our randomized algorithm.
+Code Availability: https://github.com/maxhirsch/Efficient-NTK
+1
+Introduction
+In multi-objective optimization, the goal is to simultaneously minimize multiple competing loss objectives
+{Li(θ)}n
+i=1 w.r.t. some parameter θ [2, 40]. The objectives Li(θ) may not be minimized at the same ¯θ, so it
+is often impossible to minimize each objective individually at the same time. In general, one can only find
+a solution in a set of Pareto solutions for which none of the objectives can be decreased without another
+objective increasing. One approach to finding such a solution to this problem is the so-called weighted sum
+method [19, 16].
+In the weighted sum method, one attempts to reach the goal by minimizing the weighted objective
+L(θ) =
+n
+X
+i=1
+wiLi(θ)
+for some weights wi ∈[0, ∞). Choosing a weight wi that is larger than some wj will encourage the objective
+Li(θ) to be minimized more than Lj(θ), and modifying the weights results in new minimizers being found.
+The weighted sum method is known to not be able to find all Pareto solutions in non-convex regions of
+the Pareto solution set, but the method is still widely used due to its simplicity [16]. In particular, in the
+scientific machine learning (SciML) context [29, 27, 28], it is a common task when training physics-informed
+neural networks (PINNs).
+A PINN is a method for solving partial differential equations (PDEs) using a neural network [30, 15, 22,
+10]. The neural network takes as input the spatial (and possibly temporal) coordinates at which the PDE
+1
+arXiv:2511.15530v1  [math.NA]  19 Nov 2025
+
+solution must be evaluated, and the output of the network is the PDE solution evaluated at that point. To
+train a PINN, there are typically a few separate objectives or loss terms depending on whether the PDE
+is time dependent. For steady problems, the loss objectives include the residual of the differential operator
+for the PDE (usually the strong form of the problem), and the residual of the boundary condition (when
+imposed via weak constraints). If the problem is time dependent, there is an additional term corresponding
+to the (weak) imposition of the initial condition. These losses are combined via the weighted sum method,
+giving a single loss function to train the PINN. However, choosing the weights for the loss function is known
+to be a difficult problem, so several methods have been developed to learn these weights adaptively during
+the training procedure [37, 5, 39, 35, 17].
+One such method of choosing adaptive weights is based on neural tangent kernel (NTK) theory [37]. In
+that paper, it was shown, and observed for the Poisson equation, that as the width of a physics-informed
+neural network increases to infinity, the dynamics of the residuals used to define the PINN loss becomes
+linear. The matrix in the resulting linear ordinary differential equation for the residuals is called the neural
+tangent kernel. The singular values of the NTK thus determine the rates at which the different residuals,
+corresponding to the objective terms, decrease to zero. This inspired the authors of [37] to devise a heuristic
+algorithm for choosing the weights in PINN loss based on the NTK of the PINN. The idea of the algorithm
+is to weight the losses roughly according to the inverses of the singular values of the NTK to make the rates
+at which the residuals decrease nearly the same. Furthermore, since in a practical setting the neural network
+is not infinitely wide, the computed NTK is not constant throughout epochs, requiring the NTK-based loss
+weights to be updated periodically during training.
+This adaptive choice of weights in the loss function raises two main questions. First, does the opti-
+mization algorithm used to minimize the aggregate loss function converge when adaptive weights are used?
+Indeed, multi-objective problems optimized using the weighted sum method result in different minimizers of
+the objective when different weights are used. If these weights change frequently, it is not clear that an opti-
+mization algorithm with adaptive loss weights will ever converge to a single minimizer. Second, can the NTK
+weight updates be made more efficiently? Computing the NTK is a very costly operation since the matrix
+multiplication needed to compute a single entry of the NTK matrix of a neural network with O outputs and
+P parameters has computational complexity O(O2P), and P is typically large for modern neural network
+models, with P ∼107 [25]. Thus, recomputing the exact weights can hinder the whole training phase by
+making it unbearable. However, based on the heuristics of the NTK-based weighting algorithm, it seems to
+be desirable to keep the weights updated. To do so, it is important to find faster ways of approximating the
+NTK-based weights.
+We address each of these two questions. For the first, we apply a well-known “descent lemma” for non-
+convex optimization [38, 24, 7] to a setting in which a squared error loss is computed with respect to an
+adaptive inner product. This allows us to show that the average squared norm of the loss gradients using
+the adaptive NTK weights converges to zero. Then, to address the second question, we develop a simple
+approach inspired from predictor-corrector methods to obtain fast matrix-vector products with the NTK.
+In particular, in a “predictor” step, we use an initial gradient descent step from θt to bθt+1 with a special
+choice of randomized weights, allowing us to approximate the product of the NTK with a Gaussian random
+vector. Combining this with ideas from matrix sketching, commonly used to approximate the range of a
+matrix with repeated randomized matrix-vector multiplications [20], we are able to obtain a fast randomized
+approximation of the NTK and its trace. We then use this approximation in a “corrector” step, which
+consists of returning to the original gradient descent iterate θt and computing the NTK-based weights from
+our NTK approximation to finally compute θt+1 via gradient descent.
+Outline. The remainder of the manuscript is organized as follows: in Section 1.1, we present a literature
+review of related works. Next in Section 2, we present the use of NTK-based weights in the loss function
+for training PINNs. In Section 3, we prove convergence results for optimization of the PINN loss function
+involving adaptive weights. Then in Section 4, we introduce a method for obtaining a fast approximation
+of the NTK and to allow frequent updates of the adaptive PINN loss weights. Finally, we present some
+numerical applications in Section 5 that verify our theoretical results and demonstrate the efficacy of our
+fast NTK approximation to compute the adaptive loss weights.
+2
+
+1.1
+Literature Review
+In the physics-informed machine learning community, there has been extensive work on the use of adaptive
+weights for PINN losses. In [37], the authors use weights for the loss based on the neural tangent kernel.
+The paper [5] develops a weighting algorithm that assigns larger loss weights to the largest objectives. The
+authors of [39] and [35] use maximum likelihood-based approaches to compute the loss weights. In [36],
+the authors connect the difficulty of training PINNs to an imbalance in the magnitudes of the gradients of
+the different constituent loss functions, and develop adaptive loss weights based on the relative sizes of the
+various loss gradients. The paper [17] also presents a variant of the gradient-based weights combined with
+the logarithmic mean. Despite the great body of literature in this important topic, up to our knowledge,
+there has not been any work showing convergence results for these types of loss weighting algorithms.
+Recently, following the work [37] in which the authors show convergence of the PINN NTK in the infinite-
+width limit, the neural tangent kernel has increasingly been used in the context of physics-informed neural
+networks, mainly for analyzing new algorithms and architectures. The paper [44] extends the analysis of
+the PINN NTK to more general PDEs, while [21] uses the NTK to analyze a new scheme for adaptive loss
+weights. In [12], the authors use the NTK to analyze a PINN trained with an additional loss for the gradient
+of the PDE residual. Finally, the authors of [4] use the NTK to analyze physics-informed Kolmogorov-Arnold
+Networks.
+Concerning the convergence of optimization algorithms for PINNs, so far there have been several dif-
+ferent results. In [41], the authors show for linear second-order elliptic and parabolic PDEs that, given a
+sequence of training sets for PINNs, the sequence of minimizers of the PINN loss converges to the PDE
+solution. In the setting of linear second-order PDEs, the paper [6] shows convergence of gradient descent for
+overparameterized two-layer PINNs to global minimizers of the loss, while [14] considers a similar problem
+focused on stochastic gradient descent and Poisson’s equation. In [34], the authors present a more applied
+study of optimization for PINNs. Finally, [32] considers the effect of PDE order on the PINN optimization.
+There are several works on the fast estimation of the neural tangent kernel in different contexts. In [25],
+the authors analyze the cost of exact computation of the NTK for finite-width neural networks. The authors
+in [23] approximate the full neural tangent kernel of a network using a smaller matrix independent of the
+dimension of the network output. Moreover, the authors of [26] propose a Monte Carlo estimator of the
+NTK, while in [42] the NTK is computed by combining sketching with random features. Finally, there are
+also works on faster computation of graph neural tangent kernels for graph neural networks [43, 31] using
+sketching techniques [13].
+2
+Neural Tangent Kernel
+We now describe the setting of physics-informed neural networks and their corresponding neural tangent
+kernels. In fact, the NTK of a PINN differs from that of a typical neural network because of the presence of
+a differential operator in the PINN loss function. Thus, we start by presenting the loss function of a general
+PINN before defining its NTK, along with the adaptive loss weighting algorithm from [37].
+2.1
+Physics-Informed Neural Network Loss
+We consider the problem of finding uθ : Ω⊆Rd →RO parametrized by the network parameters θ ∈P ⊆Rp
+which approximately solves the following general partial differential equation defined in the domain Ωw.r.t.
+the unknown u:
+(
+Du = f
+in Ω,
+Bu = g
+in ∂Ω,
+where D is a differential operator, B defines boundary (and possibly initial) conditions, f : Ω→RO is a
+forcing term, and g : ∂Ω→RO are boundary data. For simplicity of presentation, we assume O = 1, but
+everything extends in a straightforward manner to multi-dimensional output, i.e. O > 1 (e.g. the numerical
+example in Section 5.2.3 has O = 2).
+To be more precise in the formulation of the problem, we consider the collocation points XD = {xi
+D}nD
+i=1
+and XB = {xi
+B}nB
+i=1 in Ω, respectively for the interior and the boundary regions, with nD + nB = n and
+3
+
+X = XD ∪XB, and define the residual as R : P →Rn by
+R(θ)i =
+(
+Duθ(xi
+D) −f(xi
+D)
+if 1 ≤i ≤nD,
+Buθ(xi−nD
+B
+) −g(xi−nD
+B
+)
+if nD + 1 ≤i ≤n.
+Then, we want to minimize the physics-informed loss function defined as the weighted sum
+L(θ) = λD
+nD
+X
+i=1
+|Duθ(xi
+D) −f(xi
+D)|2 + λB
+nB
+X
+i=1
+|Buθ(xi
+B) −g(xi
+B)|2
+= λD
+nD
+X
+i=1
+|R(θ)i|2 + λB
+n
+X
+i=nD+1
+|R(θ)i|2,
+where we refer to λD, λB > 0 as our loss weights.
+Remark 1. It is common to refer to the network parameters θ as the weights of a neural network, and this
+should not be confused with the loss weights λD, λB defined above. The way in which we use “weights” and
+“parameters” should be clear from the context, but we will never refer to the loss weights as parameters.
+More generally, one could minimize the loss function L : Rp →[0, ∞) given by
+L(θ) = 1
+2R(θ)⊤ΛR(θ),
+(1)
+where Λ ∈Rn×n is a fixed symmetric and positive definite matrix.
+It follows that L is the squared norm of R with respect to some inner product determined by Λ (which
+is yet to be chosen), thus we will also use the notation L(θ) = 1
+2∥R(θ)∥2
+Λ to denote the same quantity. We
+remark that this generalization includes the case in which we give three separate weights for the interior
+PDE residual, the boundary conditions, and the initial condition for time dependent PDEs. In this case,
+we will denote the number of points used for different parts of the boundary of Ωas nB1, nB2, . . . , and the
+number of points used for the initial condition and initial time derivative as nBi and nDi, respectively. We
+will also differentiate between norms by using the notation ∥·∥to denote the spectral norm for matrices and
+the Euclidean norm for vectors, as well as ∥· ∥F for the Frobenius norm. Analogously, ⟨·, ·⟩will denote the
+Euclidean inner product and ⟨·, ·⟩F the Frobenius inner product.
+2.2
+Neural Tangent Kernel Weights for Loss
+Having defined the PINN loss, we now consider the gradient flow used to identify suitable parameters θ
+that make uθ a good approximation to the PDE solution u. We start by assuming that Λ is independent
+of θ, as is the typical context for training PINNs with non-adaptive weights. The reason for starting with
+non-adaptive weights is to motivate the adaptive weighting algorithm from [37], which is the object of our
+analysis. The learning process is thus governed by
+dθ
+dt = −∇L(θ(t)) = −∇R(θ)ΛR(θ),
+(2)
+where ∇R(θ) =
+
+∇R1(θ)
+. . .
+∇Rn(θ)
+
+∈Rp×n.
+In general, the variables with respect to which the
+gradient is taken will be clear from the context. When it requires specifying, we will denote it as, e.g., ∇θ.
+On the other hand, when computing the time derivative of the residual term, we have
+dR(θ(t))
+dt
+= ∇R(θ)⊤dθ
+dt = −∇R(θ)⊤∇R(θ)ΛR(θ) = −K(θ)ΛR(θ),
+where K(θ) = ∇R(θ)⊤∇R(θ) is defined as the neural tangent kernel of the PINN. To better understand
+the contribution of the interior and boundary components, we can partition K(θ) into four blocks KDD ∈
+RnD×nD, KBB ∈RnB×nB, KDB ∈RnD×nB, and KBD ∈RnB×nD given the original arrangement of the
+residual R(θ) so that
+K(θ) =
+KDD(θ)
+KDB(θ)
+KBD(θ)
+KBB(θ)
+
+.
+4
+
+Because K(θ) = ∇R(θ)⊤∇R(θ) is symmetric, we have that KDD and KBB are symmetric, and KDB = K⊤
+BD.
+If we consider the discrete approximation of (2), i.e., the gradient descent algorithm
+θt+1 = θt −η∇R(θt)ΛR(θt),
+θ0 = θ(0),
+(3)
+where η > 0 is the learning rate, then the loss weighting scheme proposed in [37] suggests modifying Λ at each
+iteration to obtain parameter-dependent weights Λ = Λ(θt) which balance the two components of the loss
+given by the PDE residuals (R(θ)i for 1 ≤i ≤nD) and the boundary residuals (R(θ)i for nD + 1 ≤i ≤n).
+This results in the following iteration scheme with parameter-dependent weights
+θt+1 = θt −η∇R(θt)Λ(θt)R(θt),
+θ0 = θ(0).
+(4)
+One particular choice of Λ(θ) proposed in [37] is to consider a term-wise rescaling
+Λ(θt) =
+λD(θt)InD
+0
+0
+λB(θt)InB
+
+,
+where
+λD(θt) =
+Tr(K(θt))
+Tr(KDD(θt)),
+λB(θt) =
+Tr(K(θt))
+Tr(KBB(θt)),
+(5)
+and Im denotes the m × m identity matrix. In practice, such a choice suggests a combination of the weight-
+independent scheme (3) and the weight-dependent one (4), mainly for efficiency reasons, since adaptive
+weights (5) are slow to compute. From a practical point of view, a way to overcome this issue is to perform
+many gradient descent steps with constant Λ before being updated with the current weights θt. The procedure
+is summarized in Algorithm 1.
+Algorithm 1 Gradient Descent with Adaptive Loss Weights
+Require: Update frequency n, number of training steps T
+1: Initialize θ0 ∈P
+2: for t = 0, 1, . . . , T do
+3:
+if t is divisible by n then
+4:
+Compute K(θt) and define Λ = Λ(θt) according to (5)
+5:
+end if
+6:
+θt+1 = θt −η∇R(θt)ΛR(θt)
+7: end for
+The heuristic motivation for the particular choice of Λ in (5) is that when we consider uθ to be in a
+class of feedforward neural networks of fixed depth, then in a suitable infinite-width limit of this network for
+particular PDEs, K(θt) = K(θ0) remains constant throughout training (see Theorems 4.3 and 4.4 in [37]),
+giving the continuous time dynamics
+dR(θ(t))
+dt
+= −KΛR(θ(t)).
+(6)
+Thus, the weighting parameters in Equation (5) can be thought of as a rough approximation to a scaled
+inverse of K (e.g., if K were approximately diagonal), trying to balance the rates at which the PDE residuals
+and the boundary residuals decrease. Indeed, if Λ = Tr(K)K−1 holds exactly, then Equation (6) yields the
+solutions R(θ(t))i = e−Tr(K)tR(θ(0))i for all i, which means that the rate e−Tr(K)t is the same for each
+residual R(θ)i.
+However, practically speaking, we cannot work with infinite-width neural networks, so the exact limit
+will not hold, and K(θt) will change with t. This means that Λ(θt) needs to be updated, possibly frequently,
+and without affecting the speed of training too much.
+In the following, we will not focus on the concerns of efficiently exploiting Equations (3) and (4), and
+instead assume that the loss weights can be updated at each iteration. Toward this goal, we present con-
+vergence results for the heuristically better weighting scheme (4) in which the weights Λ(θt) evolve over
+time rather than keeping them constant in certain intervals. As a corollary to our results, we do offer a
+convergence result with fewer assumptions which gives a rule for the frequency with which updates to the
+NTK-based weights should be made. We will then present a solution to the efficiency issue in Section 4.
+5
+
+3
+Convergence Analysis
+We first consider the convergence of Algorithm 1, keeping the weights Λ(θt) general, and not specifically
+defined by (5). The main difficulty in the analysis lies in the fact that Λ is not fixed and may depend on the
+neural tangent kernel ∇R(θt)⊤∇R(θt).
+As a corollary of our analysis, we are also able to obtain results for the more specific choice of the weights
+given by (5). To investigate the convergence properties, we will require a number of assumptions.
+Assumption 1 (Convergence Assumptions). In the following we will assume:
+1. The parameter domain P ⊆Rp is open and convex.
+2. For all t ∈N ∪{0}, Λ(θt) is symmetric positive definite with eigenvalues bounded as 0 < ℓmin ≤
+λmin(Λ(θt)) ≤λmax(Λ(θt)) ≤ℓmax < ∞.
+3. For all t ∈N ∪{0}, K(θt) is symmetric positive definite with eigenvalues bounded as 0 < kmin ≤
+λmin(K(θt)) ≤λmax(K(θt)) ≤kmax < ∞.
+4. Let G(θ; z) = 1
+2∥R(θ)∥2
+Λ(z), then ∇θG(θ; z) is uniformly L-Lipschitz for any z, i.e., there exists L > 0
+such that for any θ, θ′ ∈P and for all z ∈P,
+∥∇θG(θ; z) −∇θG(θ′; z)∥≤L∥θ −θ′∥.
+5. Let F(θ) = 1
+2∥R(θ)∥2, then ∇F(θ) = ∇R(θ)R(θ) is L-Lipschitz.
+Assumptions 1.1, 1.4, and 1.5 are technical assumptions required to apply the standard descent lemma
+below [38, 24, 7]. Moreover, Assumption 1.1 is not very restrictive, since, for example, we could take P = Rp
+for our convergence results. We also remark that if the weights Λ(θt) are taken as in [37], then Assumption
+1.2 is automatically satisfied by Assumption 1.3. Furthermore, in the regime in which the NTK converges
+in the infinite-width limit, the upper bound in Assumption 1.3 will be satisfied. The lower bound depend
+on the sample of training data. If, for instance, the gradients of the residuals for the training points have a
+strong linear correlation, then ∇R(θ)⊤∇R(θ) could be approximately low rank. Moreover, the lower bound
+cannot be satisfied if n > p since the rank of K(θ) = ∇R(θ)⊤∇R(θ) is bounded by rank ∇R(θ) ≤min{p, n},
+making K(θ) rank-deficient. In other words, there must be more parameters in the neural network than the
+amount of data used to train the model.
+Remark 2. For certain linear PDEs, if one considers the infinite-width NTK limit, it may be possible to
+derive even stronger convergence results. We instead focus on a more general and realistic setting without
+assuming that our differential operator is linear and the neural networks have finite width.
+Lemma 1 (Descent Lemma). If F ∈C1(P) with P ⊆Rp convex and ∇F is L-Lipschitz, then for all
+x, y ∈P,
+F(x) −F(y) ≤⟨∇F(y), x −y⟩+ L
+2 ∥x −y∥2.
+Proof. See Appendix A.
+Using this result, we can prove that the time average of the residual norms ∥R(θt)∥2 converges. This will
+be used later to prove that the loss gradients also converge in some sense.
+Theorem 1 (Convergence of Residual Averages). Let {θt}t be computed via the scheme (4). Then, under
+Assumptions 1.1, 1.2, 1.3, and 1.5, it holds
+1
+T
+T −1
+X
+t=0
+∥R(θt)∥2 ≤∥R(θ0)∥2 −∥R(θT )∥2
+Tη
+,
+for all
+η ≤2kminℓmin
+Lkmaxℓ2max
+,
+and
+T ≥1.
+In particular, the following limit holds
+lim
+T →∞
+1
+T
+T −1
+X
+t=0
+∥R(θt)∥2 = 0.
+6
+
+Proof. By defining F(θ) = 1
+2∥R(θ)∥2, we note that ∇F(θ) = ∇R(θ)R(θ) is L-Lipschitz by Assumption 1.5.
+Then by Lemma 1 combined with (4), we have
+F(θt+1) ≤F(θt) + ⟨∇F(θt), θt+1 −θt⟩+ L
+2 ∥θt+1 −θt∥2
+= F(θt) −ηR(θt)⊤∇R(θt)⊤∇R(θt)Λ(θt)R(θt) + Lη2
+2 ∥∇R(θt)Λ(θt)R(θt)∥2.
+(7)
+Now, note that for symmetric positive definite matrices A and B, the following bound holds
+1
+λmin(AB) = λmax((AB)−1) = ∥(AB)−1∥≤∥A−1∥∥B−1∥= λmax(A−1)λmax(B−1) =
+1
+λmin(A)λmin(B).
+Taking A = K(θt) and B = Λ(θt), we have that λmin(K(θt)Λ(θt)) ≥λmin(K(θt))λmin(Λ(θt)), since K(θt) =
+∇R(θt)⊤∇R(θt) and Λ(θt) are symmetric positive definite matrices by Assumptions 1.2 and 1.3. Combining
+this with the fact that tr(CD) ≥λmin(C) tr(D) for symmetric positive definite matrices C and D and with
+the cyclic property of the trace, it follows that
+R(θt)⊤∇R(θt)⊤∇R(θt)Λ(θt)R(θt) = tr(R(θt)⊤∇R(θt)⊤∇R(θt)Λ(θt)R(θt))
+= ∥R(θt)∥2 tr
+
+
+
+
+∇R(θt)⊤∇R(θt)Λ(θt)
+|
+{z
+}
+C
+R(θt)
+∥R(θt)∥
+R(θt)⊤
+∥R(θt)∥
+|
+{z
+}
+D
+
+
+
+
+
+≥∥R(θt)∥2λmin(∇R(θt)⊤∇R(θt)Λ(θt)) tr
+ R(θt)
+∥R(θt)∥
+R(θt)⊤
+∥R(θt)∥
+
+≥λmin(K(θt))λmin(Λ(θt))∥R(θt)∥2,
+where we used the fact that by the cyclic property of the trace, it holds tr
+
+R(θt)
+∥R(θt)∥
+R(θt)⊤
+∥R(θt)∥
+
+= 1. Additionally,
+we have the inequality
+∥∇R(θt)Λ(θt)R(θt)∥2 = R(θt)⊤Λ(θt)∇R(θt)⊤∇R(θt)Λ(θt)R(θt) ≤λmax(K(θt))λmax(Λ(θt))2∥R(θt)∥2.
+Using these bounds in Equation (7) together with Assumptions 1.2 and 1.3 yields
+F(θt+1) ≤F(θt) −ηλmin(K(θt))λmin(Λ(θt))∥R(θt)∥2 + Lη2
+2 λmax(K(θt))λmax(Λ(θt))2∥R(θt)∥2
+= F(θt) −
+
+ηλmin(K(θt))λmin(Λ(θt)) −Lη2
+2 λmax(K(θt))λmax(Λ(θt))2
+
+∥R(θt)∥2
+≤F(θt) −
+
+ηkminℓmin −Lη2
+2 kmaxℓ2
+max
+
+∥R(θt)∥2.
+Dividing by Tη and summing over t = 0, . . . , T −1 gives
+
+kminℓmin −Lη
+2 kmaxℓ2
+max
+ 1
+T
+T −1
+X
+t=0
+∥R(θt)∥2 ≤F(θ0) −F(θT )
+Tη
+.
+Since η ≤
+2kminℓmin
+Lkmaxℓ2max , the result follows by definition of F.
+Remark 3. Note that the admissible learning rate η ≤
+2kminℓmin
+Lkmaxℓ2max depends on the inverses of the worst
+possible condition numbers of K and Λ. This means that, practically speaking, while the average squared
+residuals will converge to zero by Theorem 1, the required learning rate may need to be very small.
+Using the previous result, we can show the convergence of the gradients of G as the inner product changes.
+7
+
+Theorem 2 (Convergence of Gradient Averages). Let {θt}t be computed via the scheme (4). Then under
+Assumptions 1.1–1.5, it holds that
+1
+T
+T −1
+X
+t=0
+∥∇θG(θt; θt)∥2 ≤G(θ0; θ0) −G(θT ; θT )
+Tη(1 −Lη/2)
++ 2ℓmax
+Tη2 ∥R(θ0)∥2,
+for any η < min
+n
+2kminℓmin
+Lkmaxℓ2max , 2
+L
+o
+and T ≥1. In particular,
+min
+t=0,1,...,T −1 ∥∇θG(θt; θt)∥2 ≤1
+T
+T −1
+X
+t=0
+∥∇θG(θt; θt)∥2 →0
+as
+T →∞.
+Proof. Having defined G(θ; z) = 1
+2∥R(θ)∥2
+Λ(z), we remark that Equation (4) can be rewritten as
+θt+1 = θt −η∇θG(θt; θt).
+(8)
+By Assumption 1.4 and Lemma 1, for all z ∈P, we have
+G(θt+1; z) −G(θt; z) ≤⟨∇θG(θt; z), θt+1 −θt⟩+ L
+2 ∥θt+1 −θt∥2,
+that for the specific choice of z = θt, and using Equation (8) gives
+G(θt+1; θt) −G(θt; θt) ≤−η∥∇θG(θt; θt)∥2 + Lη2
+2 ∥∇θG(θt; θt)∥2.
+(9)
+On the other side, we note that
+G(θt+1; θt+1) −G(θt+1; θt) = 1
+2∥R(θt+1)∥2
+Λ(θt+1) −1
+2∥R(θt+1)∥2
+Λ(θt)
+= 1
+2R(θt+1)⊤(Λ(θt+1) −Λ(θt))R(θt+1)
+≤1
+2λmax(Λ(θt+1) −Λ(θt))∥R(θt+1)∥2,
+so that, combining the former inequality with Equation (9), we have
+G(θt+1; θt+1) −G(θt; θt) ≤1
+2λmax(Λ(θt+1) −Λ(θt))∥R(θt+1)∥2 −η∥∇θG(θt; θt)∥2 + Lη2
+2 ∥∇θG(θt; θt)∥2.
+Similarly as before, dividing by Tη and summing over t = 0, 1, . . . , T −1 gives
+
+1 −Lη
+2
+ 1
+T
+T −1
+X
+t=0
+∥∇θG(θt; θt)∥2 ≤G(θ0; θ0) −G(θT ; θT )
+Tη
++ 1
+2Tη
+T −1
+X
+t=0
+λmax(Λ(θt+1)−Λ(θt))∥R(θt+1)∥2. (10)
+Now by Assumption 1.2 and Theorem 1, we have
+1
+2Tη
+T −1
+X
+t=0
+λmax(Λ(θt+1) −Λ(θt))∥R(θt+1)∥2
+≤ℓmax
+Tη
+T −1
+X
+t=0
+∥R(θt+1)∥2 ≤
+2ℓmax
+η(T + 1)
+T
+X
+t=0
+∥R(θt)∥2 ≤2ℓmax
+Tη2 ∥R(θ0)∥2,
+from which it follows that
+1
+T
+T −1
+X
+t=0
+∥∇θG(θt; θt)∥2 ≤G(θ0; θ0) −G(θT ; θT )
+Tη(1 −Lη/2)
++ 2ℓmax
+Tη2 ∥R(θ0)∥2,
+as desired.
+8
+
+Using this result, we can also show the convergence of the gradients of F if the weights Λ are chosen
+according to Equation (5), as done in [37].
+Corollary 1 (Convergence for NTK-Based Weights). Let {θt}t be computed via the scheme (4), and assume
+that Λ(θt) is computed according to (5). Then under Assumption 1, it holds that
+1
+T
+T −1
+X
+t=0
+∥∇F(θt)∥2 ≤kmax
+kmin
+G(θ0; θ0) −G(θT ; θT )
+Tη(1 −Lη/2)
++ 2ℓmax
+Tη2 ∥R(θ0)∥2
+
+,
+for any η < min
+n
+2kminℓmin
+Lkmaxℓ2max , 2
+L
+o
+and T ≥1. In particular,
+min
+t=0,1,...,T −1 ∥∇F(θt)∥2 ≤1
+T
+T −1
+X
+t=0
+∥∇F(θt)∥2 →0
+as
+T →∞.
+Proof. For all t, we have
+∥∇θG(θt; θt)∥2 = ∥∇R(θt)Λ(θt)R(θt)∥2 ≥λmin(K(θt))∥Λ(θt)R(θt)∥2 ≥kmin∥R(θt)∥2,
+and
+∥∇F(θt)∥2 = ∥∇R(θt)R(θt)∥2 ≤∥∇R(θt)∥2∥R(θt)∥2 ≤kmax∥R(θt)∥2
+by Assumption 1.3. Combining these gives ∥∇θG(θt; θt)∥2 ≥
+kmin
+kmax ∥∇F(θt)∥2 so that by Theorem 2, we
+obtain
+1
+T
+T −1
+X
+t=0
+∥∇F(θt)∥2 ≤kmax
+kmin
+G(θ0; θ0) −G(θT ; θT )
+Tη(1 −Lη/2)
++ 2ℓmax
+Tη2 ∥R(θ0)∥2
+
+,
+as desired.
+We now present a corollary that provides results analogous to the ones in Theorem 2 but under fewer
+assumptions. In particular, we do not require assumptions on Λ and K, as long as the inner product Λ
+is changed only periodically according to some prescribed rule. Intuitively, if Λ does not change between
+iterations, then the extra term in (10) depending on the largest eigenvalue of the difference between Λ at
+successive time steps is zero, in which case we would have the desired convergence. Thus, if the changes of
+Λ are sufficiently sparse in time, then we can still obtain the convergence of Theorem 2 without invoking
+Theorem 1 in the proof.
+Corollary 2 (Controlled Gradients via Spaced Updates). Let {θt}t be computed via the scheme (4), and let
+h : [0, ∞) →[0, ∞) be any non-decreasing function of T such that h = o(T) as T →∞. Letting eΛ(θt+1) be
+any predicted update to Λ(θt) and
+S(t) =
+(Pt−1
+r=0 λmax(Λ(θr+1) −Λ(θr))∥R(θr+1)∥2
+if t > 0,
+0
+otherwise,
+consider the rule
+Λ(θt+1) =
+(eΛ(θt+1)
+if S(t) + λmax(eΛ(θt+1) −Λ(θt))∥R(θt+1)∥2 ≤h(t),
+Λ(θt)
+otherwise.
+(11)
+Then, under Assumptions 1.1, 1.4 and assuming η < 2
+L, we have
+min
+t=0,1,...,T −1 ∥∇θG(θt; θt)∥2 ≤1
+T
+T −1
+X
+t=0
+∥∇θG(θt; θt)∥2 →0
+as
+T →∞.
+Proof. Starting from (10), applying the update rule (11), and dividing by 1 −Lη/2, we have
+1
+T
+T −1
+X
+t=0
+∥∇θG(θt; θt)∥2 ≤G(θ0; θ0) −G(θT ; θT )
+ηT(1 −Lη/2)
++
+h(T)
+2η(1 −Lη/2)T .
+Since h = o(T) by assumption, the result follows.
+9
+
+Remark 4. The update rule (11) is based on a technical condition chosen specifically to control the extra term
+1
+2T η
+PT −1
+t=0 λmax(Λ(θt+1)−Λ(θt))∥R(θt+1)∥2 in (10). If an additional term λmax(eΛ(θt+1)−Λ(θt))∥R(θt+1)∥2
+in the sum causes a growth rate h(t) = o(t) to be exceeded, then the loss weights Λ are not updated.
+4
+Fast Estimation of the Neural Tangent Kernel
+To address the computational bottleneck of computing NTK-based loss weights in (5), we now present a
+practical algorithm to obtain fast approximations of the Neural Tangent Kernel K(θt) based on matrix
+sketching techniques [20].
+We first describe the algorithm and then provide intuition for why it works,
+showing a result on the estimator’s unbiasedness (up to a discretization parameter).
+In particular, our
+objective is to find an approximation of K(θt) in expectation by means of bK(θt).
+To define a single sample approximation of K(θt), let us suppose that we have already computed θt, and
+set Λpred(θt) = diag(−gt) diag(R(θt))†, where gt ∼N(0, In), the notation diag(v) denotes the diagonal matrix
+with diagonal entries given by the entries of the vector v, and A† denotes the Moore-Penrose pseudoinverse
+of the matrix A. We remark that, if none of the residual entries R(θt)i is equal to 0, then diag(R(θt))† =
+diag(R(θt))−1. The approximation we present here follows without assumptions on the residuals, while in
+Theorem 3 we will later assume the residuals are nonzero to ensure that our approximation is indeed close
+to K(θt)gt. Thus, for now, let us define the following iteration scheme
+bθt+1 = θt −∆t∇R(θt)Λpred(θt)R(θt),
+for any
+∆t > 0.
+This step can be thought of as the “predictor” step of a predictor-corrector method to numerically solve an
+ordinary differential equation, except that bθt+1 is not related to θt+1 which will be computed later. Thus,
+the sole purpose of bθt+1 is to obtain approximations to the NTK as
+K(θt)gt ≈R(bθt+1) −R(θt)
+∆t
+.
+We will show in the proof of Theorem 3 that, through a Taylor expansion, this is indeed an approximation of
+K(θt)gt. Then, given this approximate matrix-vector product, we may form a single sample approximation
+of the NTK as
+bK(θt) =
+eK(θt) + eK(θt)⊤
+2
+,
+where
+eK(θt) =
+
+R(bθt+1)−R(θt)
+∆t
+(gt)1
+. . .
+R(bθt+1)−R(θt)
+∆t
+(gt)n
+
+∈Rn×n,
+and we can estimate the trace of the NTK as
+Tr( bK(θt)) = g⊤
+t
+ 
+R(bθt) −R(θt)
+∆t
+!
+.
+Note that if our approximation of K(θt)gt is correct, then (gt)iK(θt)gt in expectation equals the i-th column
+of K(θt), which shows that bK(θt) would indeed be an approximation of K(θt). Multiple samples constructed
+in this way may be averaged together to obtain a more accurate estimate. The steps for the single sample
+approximation are summarized in Algorithm 2. Note that the only step with significant computational cost
+is the computation of bθt+1, which is simply the cost of a single extra forward and backward pass through
+the neural network with the data batch without significant extra memory costs. Now we can use the result
+of this “predictor” step to define bΛ(θt) analogously to (5):
+bΛ(θt) =
+ 
+bλD(θt)InD
+0
+0
+bλB(θt)InB
+!
+,
+where
+bλD(θt) =
+Tr( bK(θt))
+Tr( bKDD(θt))
+,
+bλB(θt) =
+Tr( bK(θt))
+Tr( bKBB(θt))
+,
+(12)
+Having defined bΛ(θt), we can perform the “corrector” step given by the typical gradient descent step (4).
+10
+
+Algorithm 2 Single sample approximation of K(θt)
+Require: Assumption 2, θt is given.
+Ensure: bK(θt) ≈K(θt) in expectation
+Sample gt ∼N(0, In)
+Λpred(θt) ←diag(−gt) diag(R(θt))−1
+bθt+1 ←θt −∆t∇R(θt)Λpred(θt)R(θt)
+eK(θt) ←
+
+R(bθt+1)−R(θt)
+∆t
+(gt)1
+. . .
+R(bθt+1)−R(θt)
+∆t
+(gt)n
+
+bK(θt) ←
+e
+K(θt)+ e
+K(θt)⊤
+2
+4.1
+Error Analysis of Fast NTK Approximation
+We begin the analysis of the proposed Algorithm 2 by introducing the assumptions that we will require for
+this purpose.
+Assumption 2 (Fast NTK Approximation Assumptions). Assume the following hold:
+1. For all t = 0, 1, . . . , T, the residual R(θt)i ̸= 0 for i = 1, 2, . . . , n.
+2. The parameter domain P ⊆Rp is open, convex, and bounded.
+3. The residual R is smooth and has bounded derivatives in P.
+Note that Assumption 2.3 will be guaranteed by using a smooth activation function for our PINN (which
+will also be required in general for allowing higher order differential operators in the loss) and by Assumption
+2.2. The Assumption 2.1 is reasonable since we expect that the residuals are never exactly minimized in
+a typical PINN optimization. The second Assumption 2.2 then is the most restrictive but is reasonable if
+the gradient descent iterates are converging. Now under this assumption, we will show that Algorithm 2
+provides an accurate approximation of the NTK.
+Theorem 3 (Unbiased Estimates of NTK up to Discretization). Under Assumption 2, there exists a constant
+C > 0 such that for any ∆t > 0 it holds
+E
+"
+R(bθt+1) −R(θt)
+∆t
+−K(θt)gt
+
+#
+≤Cn∆t,
+and
+E
+
+
+
+R(bθt+1) −R(θt)
+∆t
+−K(θt)gt
+
+2
+≤C2n(n + 2)∆t2.
+In particular, the following are satisfied
+E
+h
+bK(θt)
+i
+−K(θt)
+
+F ≤Cn(n + 1)∆t,
+and
+E
+h
+Tr( bK(θt))
+i
+−Tr(K(θt))
+ ≤Cn(n + 1)∆t.
+Proof. Thanks to the fact that derivatives of R are smooth in θ and bounded by Assumption 2.3, by definition
+of bΛ(θt) we can use bθt+1 = θt −∆t∇R(θt)Λpred(θt)R(θt) = θt + ∆t∇R(θt)gt, and then perform a Taylor
+expansion to obtain
+
+R(bθt+1) −R(θt)
+∆t
+−K(θt)gt
+ =
+
+R(θt + ∆t∇R(θt)gt) −R(θt)
+∆t
+−K(θt)gt
+
+≤
+
+R(θt) + ∆t∇R(θt)⊤∇R(θt)gt −R(θt)
+∆t
+−K(θt)gt
+ + C1∆t2∥∇R(θt)gt∥2
+∆t
+= C1∆t∥∇R(θt)gt∥2 ≤C2∆t∥gt∥2.
+(13)
+Taking the expectation of this yields the first part of the theorem since E[∥gt∥2] = n and E[∥gt∥4] = n(n+2),
+for the first and second inequality, respectively.
+11
+
+Now defining
+K = 1
+2
+h (gt)1K(θt)gt
+. . .
+(gt)nK(θt)gt
+
++
+ (gt)1K(θt)gt
+. . .
+(gt)nK(θt)gt
+⊤i
+,
+and using the fact that E[K] = K(θt) since E[(gt)iK(θt)gt] = K(θt)ei with ei the i-th standard basis vector
+of Rn, we then have
+E
+h
+bK(θt)
+i
+−K(θt)
+
+F =
+E
+h
+bK(θt)
+i
+−E[K]
+
+F
+≤E
+h bK(θt) −K
+
+F
+i
+≤
+n
+X
+i=1
+E
+"
+|(gt)i| ·
+
+R(bθt) −R(θt)
+∆t
+−K(θt)gt
+
+#
+≤
+n
+X
+i=1
+q
+E[(gt)2
+i ]
+v
+u
+u
+u
+tE
+
+
+
+R(bθt) −R(θt)
+∆t
+−K(θt)gt
+
+2
+
+≤n
+p
+C2n(n + 2)∆t2 ≤Cn(n + 1)∆t,
+where in the second to last line, we used the Cauchy-Schwarz inequality, while in the last line we used
+n(n + 2) < (n + 1)2, the fact that E[(gt)2
+i ] = 1, and our previously derived bound on the mean squared error
+of the difference quotient.
+Lastly, following a similar sequence of inequalities, we have
+E
+h
+Tr( bK(θt))
+i
+−Tr(K(θt))
+ =
+E
+h
+Tr( bK(θt))
+i
+−E [Tr(K)]
+
+≤E
+hTr( bK(θt) −K)
+
+i
+≤
+n
+X
+i=1
+E
+h bK(θt)ii −Kii
+
+i
+=
+n
+X
+i=1
+E
+"
+R(bθt)i −R(θt)i
+∆t
+(gt)i −(K(θt)gt)i(gt)i
+
+#
+≤
+n
+X
+i=1
+q
+E[(gt)2
+i ]
+v
+u
+u
+u
+tE
+
+
+
+R(bθt)i −R(θt)i
+∆t
+−(K(θt)gt)i
+
+2
+
+≤
+n
+X
+i=1
+v
+u
+u
+u
+tE
+
+
+
+R(bθt) −R(θt)
+∆t
+−K(θt)gt
+
+2
+
+≤Cn(n + 1)∆t,
+as desired.
+Remark 5. In place of Gaussian random vectors, there are other choices of vectors that could be used in
+Algorithm 2. For example, one could choose Rademacher random vectors with i.i.d. entries taking the values
+±1, each with probability 1/2. The main trick of the algorithm is that we can obtain a matrix-vector product
+of K with any vector v up to a discretization error of O(∆t) by Taylor’s theorem.
+Remark 6. By definition of the construction of bK(θt), some of the entries of the estimator may be negative.
+It follows that bK(θt) is dominated by an estimator obtained by taking the maximum of the entries of bK(θt)
+and 0. In other words, one could define the estimator ˇK(θt) given by
+ˇK(θt)ij = max( bK(θt)ij, 0),
+for i, j = 1, . . . , n,
+12
+
+which has a better mean absolute (and mean squared) error:
+E
+
+∥ˇK(θt) −K(θt)∥F
+
+≤E
+h
+∥bK(θt) −K(θt)∥F
+i
+.
+We now present a result which provides a Monte Carlo error rate, up to a discretization error, for an
+approximation of the NTK obtained by averaging samples from Algorithm 2.
+Theorem 4 (Error Rates of NTK Approximation). Assume that Assumption 2 holds, and let { bK(j)(θt)}N
+j=1
+be the N results of Algorithm 2 with N i.i.d. copies g(j)
+t
+∼N(0, In). Then for any ∆t > 0 it holds
+E
+
+
+
+1
+N
+N
+X
+j=1
+Tr( bK(j)(θt)) −Tr(K(θt))
+
+2
+≤Cn(n + 2)(n + 4)∆t2 + 4
+N ∥K(θt)∥2
+F ,
+and
+E
+
+
+
+1
+N
+N
+X
+j=1
+bK(j)(θt) −K(θt)
+
+2
+F
+
+≤Cn2(n + 2)(n + 4)∆t2 + 2n(n + 2)
+N
+∥K(θt)∥2
+F ,
+where C > 0 is a constant.
+Proof. First, by the triangle inequality and Young’s inequality we have
+E
+
+
+
+1
+N
+N
+X
+j=1
+Tr( bK(j)(θt)) −Tr(K(θt))
+
+2
+
+≤E
+
+
+2
+
+1
+N
+N
+X
+j=1
+Tr( bK(j)(θt)) −1
+N
+N
+X
+j=1
+(g(j)
+t )⊤K(θt)g(j)
+t
+
+2
+|
+{z
+}
+(a)
++ 2
+
+1
+N
+N
+X
+j=1
+(g(j)
+t )⊤K(θt)g(j)
+t
+−Tr(K(θt))
+
+2
+|
+{z
+}
+(b)
+
+
+.
+For (a), first note that for all j = 1, 2, . . . , N, by Taylor expansion as in the proof of Theorem 3 we have,
+Tr( bK(j)(θt)) = (g(j)
+t )⊤R(bθ(j)
+t ) −R(θt)
+∆t
+= (g(j)
+t )⊤(K(θt)g(j)
+t
++ E(j)
+t
+),
+where ∥E(j)
+t
+∥≤C∆t∥g(j)
+t ∥2. It follows that
+(a) = 2E
+
+
+
+1
+N
+N
+X
+i=1
+
+Tr( bK(i)(θt)) −(g(i)
+t )⊤K(θt)g(i)
+t
+
+2
+= 2E
+
+
+
+1
+N
+N
+X
+j=1
+(g(j)
+t )⊤E(j)
+t
+
+2
+
+≤2E
+
+
+
+1
+N
+N
+X
+j=1
+C∆t∥g(j)
+t ∥3
+
+
+2
+≤
+2
+N 2 E
+
+N
+N
+X
+j=1
+C2∆t2∥g(j)
+t ∥6
+
+= 2C2∆t2E[∥g(1)
+t
+∥6],
+where the last inequality comes from the fact that (a1 + · · · + aN)2 ≤N(a2
+1 + · · · + a2
+N). Using E[∥g(1)
+t
+∥6] =
+n(n + 2)(n + 4), we obtain (a) ≤2C2n(n + 2)(n + 4)∆t2.
+Now (b) is the standard error for the Hutchinson estimator exploited in randomized numerical linear
+algebra to estimate the trace of a matrix using random matrix-vector products. By Theorem 2.1 in [8], we
+have that
+(b) = 2E
+
+
+
+1
+N
+N
+X
+j=1
+(g(j)
+t )⊤K(θt)g(j)
+t
+−Tr(K(θt))
+
+2
+= 4
+N ∥K(θt)∥2
+F .
+13
+
+Combining the estimates for (a) and (b) yields the result.
+For the second result, we have
+E
+
+
+
+1
+N
+N
+X
+j=1
+bK(j)(θt) −K(θt)
+
+2
+F
+
+
+≤2E
+
+
+
+1
+N
+N
+X
+j=1
+bK(j)(θt) −1
+N
+N
+X
+j=1
+K(j)(θt)
+
+2
+F
++
+
+1
+N
+N
+X
+j=1
+K(j)(θt) −K(θt)
+
+2
+F
+
+=: (c) + (d).
+Considering (c), we have
+(c) = 2E
+
+
+
+1
+N
+N
+X
+j=1
+bK(j)(θt) −1
+N
+N
+X
+j=1
+K(j)(θt)
+
+2
+F
+
+
+≤
+2
+N 2 E
+"
+N
+X
+j=1
+
+(g(j)
+t )1
+R(bθ(j)
+t
+)−R(θt)
+∆t
+. . .
+(g(j)
+t )n
+R(bθ(j)
+t
+)−R(θt)
+∆t
+
+−
+
+(g(j)
+t )1K(θt)g(j)
+t
+. . .
+(g(j)
+t )nK(θt)g(j)
+t
+ 
+2
+F
+#
+=
+2
+N 2 E
+
+
+N
+X
+i=1
+
+N
+X
+j=1
+(g(j)
+t )i
+ 
+R(bθ(j)
+t ) −R(θt)
+∆t
+−K(θt)g(j)
+t
+!
+2
+F
+
+
+= 2n
+N 2 E
+
+
+
+N
+X
+j=1
+(g(j)
+t )1
+ 
+R(bθ(j)
+t ) −R(θt)
+∆t
+−K(θt)g(j)
+t
+!
+2
+F
+
+
+≤2n
+N E
+
+
+N
+X
+j=1
+(g(j)
+t )1
+ 
+R(bθ(j)
+t ) −R(θt)
+∆t
+−K(θt)g(j)
+t
+!
+2
+F
+
+
+≤Cn∆t2E[∥g(1)
+t
+∥6] = Cn2(n + 2)(n + 4)∆t2,
+where in the last line, we applied Equation 13.
+Now considering (d), repeatedly using the fact that K(j)(θt) are i.i.d. with mean K(θt), we have
+(d) = 2E
+
+
+
+1
+N
+N
+X
+j=1
+K(j)(θt) −K(θt)
+
+2
+F
+
+
+= 2E
+
+
+
+1
+N
+N
+X
+j=1
+K(j)(θt)
+
+2
+F
+−2
+*
+1
+N
+N
+X
+j=1
+K(j)(θt), K(θt)
++
+F
++ ∥K(θt)∥2
+F
+
+
+= −2∥K(θt)∥2
+F + 2E
+
+
+
+1
+N
+N
+X
+j=1
+K(j)(θt)
+
+2
+F
+
+
+= −2∥K(θt)∥2
+F + 2
+N 2
+N
+X
+j=1
+E
+K(j)(θt)
+
+2
+F
+
++ 2
+N 2
+X
+i̸=j
+D
+E
+h
+K(i)(θt)
+i
+, E
+h
+K(j)(θt)
+iE
+F
+= −2∥K(θt)∥2
+F + 2
+N 2
+N
+X
+j=1
+E
+h
+∥K(θt) + E(j)
+t
+∥2
+F
+i
++ 2(N −1)
+N
+∥K(θt)∥2
+F ,
+14
+
+where we redefine E(j)
+t
+= K(j)(θt) −K(θt). Now note that
+2
+N 2
+N
+X
+j=1
+E
+h
+∥K(θt) + E(j)
+t
+∥2
+F
+i
+= 2
+N
+
+∥K(θt)∥2
+F +
+D
+K(θt), E
+h
+E(1)
+t
+iE
+F + E
+h
+∥E(1)
+t
+∥2
+F
+i
+= 2
+N
+
+∥K(θt)∥2
+F + E
+h
+∥E(1)
+t
+∥2
+F
+i
+,
+where we used the fact that E[E(1)
+t
+] = 0. Now using that E[∥gt∥4] = n(n + 2), we have
+E
+h
+∥E(1)
+t
+∥2
+F
+i
+= E[∥K(1)(θt)∥2
+F ] −∥K(θt)∥2
+F
+≤E[
+ (gt)1K(θt)gt
+. . .
+(gt)nK(θt)gt
+2
+F ] −∥K(θt)∥2
+F
+= E
+" n
+X
+i=1
+|(gt)i|2∥K(θt)gt∥2
+F
+#
+−∥K(θt)∥2
+F
+≤E[∥gt∥4] · ∥K(θt)∥2
+F −∥K(θt)∥2
+F
+≤n(n + 2)∥K(θt)∥2
+F .
+It follows that
+(d) = 2
+N E
+h
+∥E(1)
+t
+∥2
+F
+i
+≤2n(n + 2)
+N
+∥K(θt)∥2
+F .
+Combining this with the bound for (c) gives the desired result.
+We now report another result on approximating the trace of the neural tangent kernel based on Theorem
+4.1 in [33] to compare it with our own strategy.
+Theorem 5 (Alternative Approximation of the NTK Trace). Let gt ∼N(0, ε2In) and let θt be given. Under
+Assumption 2, there is C > 0 such that
+−C(n + 1)2ε ≤E
+"
+R(θt + gt) −R(θt)
+ε
+
+2
+F
+#
+−Tr(K(θt)) ≤C(n + 1)2(ε + ε2).
+Proof. See Appendix B.
+From Theorem 5 we can see that
+R(θt + gt) −R(θt)
+ε
+,
+with gt ∼N(0, ε2In)
+(14)
+also provides an estimate of the trace of K(θt), but since it does not allow arbitrary matrix-vector products
+with the NTK one cannot recover a full approximation of K(θt). Indeed, it may be seen from the proof of
+Theorem 5 given in Appendix B that one can use the standard basis vectors of Rn to obtain approximations
+to the diagonal entries of K(θt), but not other entries of the NTK. Thus, the main difference between our
+estimator bK(θt) and (14) is that our approach gives additional information about off-diagonal entries of
+K(θt). In terms of computational cost, the proposed estimator requires a single extra backpropagation to
+compute bθt compared to this alternative estimator.
+4.2
+Practical Algorithm with Moving Average
+We conclude this section by presenting a practical algorithm for computing an adaptive approximation of
+the NTK (or its trace). We begin by noting that an accurate computation of the NTK would take many
+samples due to the Monte Carlo error rate noted in Theorem 4. However, doing this every iteration would
+result in a high computational cost, which is exactly what we wish to avoid. Instead, we propose using a
+moving average over training steps of our single sample NTK estimates to obtain adaptive NTK estimates.
+15
+
+This allows for an adaptive estimate of the NTK which costs just two extra forward passes and one extra
+backward pass in the neural network optimization per iteration, effectively only multiplying the training
+time by a factor of 2.5. Indeed, computing the weights bθt+1 is the same cost of a typical gradient descent
+step of a single forward and backward pass, and computing R(bθt+1) for the finite difference approximation is
+an extra forward pass (R(θt) need not be recomputed). These are the main costs since they depend on the
+number of network parameters which is thought to be large. Now, we can first obtain a good approximation
+of the NTK at the initialization:
+bK0(θ0) = 1
+N
+N
+X
+j=1
+bK(j)(θ0),
+where we denote our moving average NTK approximation at time t and parameter θt by bKt(θt) to differentiate
+it from the N i.i.d. samples bK(j)(θt) taken according to Algorithm 2. Then, for a fixed parameter α ∈(0, 1]
+and t > 0, we compute
+bKt(θt) = (1 −α) bKt−1(θt−1) + α bK(1)(θt),
+that is, for each new training step, we compute a single new sample from Algorithm 2 and average it with the
+NTK approximation from the previous time step. If the NTK were constant between iterations, the moving
+average would effectively become a sort of Monte Carlo estimator of the NTK, approximating the NTK
+better as t →∞. Thus, if the NTK changes smoothly between iterations, one would expect that the moving
+average will adapt to well-approximate the NTK over time. The full training procedure is summarized in
+Algorithm 3, and an analogous procedure may be done for the trace of the NTK.
+Lastly, note that as the learning rate η →0, the gradient descent updates change less and less between
+iterations due to the fact that the loss is smooth, so the moving average should become closer to the actual
+NTK.
+Algorithm 3 Moving average approximation of K(θt)
+Require: Assumption 2, α ∈(0, 1] and N are given.
+Ensure: bKt(θt) ≈K(θt) in expectation for all t.
+Initialize θ0
+bK0(θ0) ←1
+N
+PN
+j=1 bK(j)(θ0),
+▷{ bK(j)(θ0)}j are sampled i.i.d. according to Algorithm 2
+bΛ(θ0) =
+h
+Tr( b
+K(θ0))
+Tr( b
+KDD(θ0))InD, 0; 0,
+Tr( b
+K(θ0))
+Tr( b
+KBB(θ0))InB
+i
+▷As in Eq. (5) with bK0(θ0) in place of K(θ0)
+θ1 ←θ0 −η∇R(θ0)bΛ(θ0)R(θ0)
+for t = 1, 2, . . . , T do
+bKt(θt) ←(1 −α) bKt−1(θt−1) + α bK(1)(θt),
+▷bK(1)(θt) is sampled according to Algorithm 2
+bΛ(θt) =
+h
+Tr( b
+K(θt))
+Tr( b
+KDD(θt))InD, 0; 0,
+Tr( b
+K(θt))
+Tr( b
+KBB(θt))InB
+i
+▷As in Eq. (5) with bKt(θt) in place of K(θt)
+θt+1 ←θt −η∇R(θt)bΛ(θt)R(θt)
+end for
+5
+Numerical Results
+We now present numerical results to verify our theoretical findings and demonstrate the efficacy of the
+proposed method for fast NTK estimation.
+First, in Section 5.1 we present a one-dimensional example
+exhibiting the optimization convergence rates given in Theorems 1 and 2. Then, we present the results
+for fast NTK estimation in Section 5.2, including: (i) a quadratically parameterized predictor (Section
+5.2.1), comparing the results to the exact NTK and verifying the Monte Carlo error rates in Theorem 4,
+(ii) a PINN problem to solve a wave equation (Section 5.2.2), and (iii) a multidimensional nonlinear PDE
+modeling liquid crystals (Section 5.2.3) [9, 18]. Numerical examples involving PINNs have been developed
+within the framework of the open source software PINA [3].
+16
+
+5.1
+Convergence Test
+In this experiment, we consider the second-order and one-dimensional equation
+(
+uxx(x) = −16π2 sin(4πx),
+x ∈[0, 1],
+u(0) = u(1) = 0,
+and we seek a PINN uθ, parameterized by θ, to approximate the solution to the equation, which is exactly
+given by u(x) = sin(4πx).
+For this task, we use a neural network with one hidden layer and 100 neurons, hyperbolic tangent as the
+activation function, initialized with Xavier strategy, and with normalized input to have zero mean and unit
+standard deviation. To verify the theoretical results from Theorems 1 and 2, we will use the exact NTK in
+the weights given by (5), following Algorithm 1 with n = 1. Because computing the exact NTK is costly, we
+use a minimal number of collocation points to verify these results, taking nB1 = nB2 = 1 collocation points
+at the boundary points x = 0 and x = 1, as well as nD = 2 collocation points in (0, 1). With this number of
+points, we see that n = nD +nB1 +nB2 ≤p, which we recall was required for the lower bound in Assumption
+1.3 to hold. The loss from the training is shown in Figure 1.
+100
+101
+102
+103
+Epoch
+10
+11
+10
+9
+10
+7
+10
+5
+10
+3
+10
+1
+101
+103
+105
+Loss
+Total Loss
+PDE Residual
+Boundary 1
+Boundary 2
+Figure 1: Convergence behavior for the total training loss, composed by equal contribution from the mean
+PDE residual, and the mean boundary terms.
+The plot in Figure 1 shows that the optimization task quickly minimized the loss up to machine precision.
+Because we take so few collocation points, we cannot expect the resulting PINN uθ to approximate well the
+exact solution u, but this setting is already sufficient to see the optimization behavior described by our
+theory. Indeed, we start by verifying Assumptions 1.2 and 1.3 with the results in Figure 2. In particular,
+the loss weights λD and λB remain bounded over the epochs as required by Assumption 1.2, and they
+remain stable at the end of training. Additionally, we observe that the NTK eigenvalues always increase
+during training, while they are no longer changing towards the end of optimization. The plot also shows a
+seemingly continuous evolution of the eigenvalues themselves. This is expected since the NTK is a continuous
+function of the neural network parameters which should also change continuously. We depicted the sorted
+eigenvalues of the NTK, so the colors of the eigenvalue trajectories had to be inferred by minimizing measures
+of distance between values and derivatives of the trajectories which we parameterized to produce what looked
+qualitatively correct. For example, the smallest eigenvalue at the initial time appears to evolve smoothly to
+become the largest eigenvalue at the final time, as shown in the blue curve.
+To verify the predicted behavior obtained from Theorems 1 and 2, we depict in Figure 3 the time averaged
+loss and time averaged squared norm of the gradient if the residuals, respectively. We can see that soon after
+the initialization the rates given by the theorems are empirically recovered during training. However, it is
+interesting to note that this rate is only observed after the losses appear to begin to decrease significantly
+(see Figure 1). Indeed, the loss components appear to be more effectively minimized around epoch 100, when
+at the same time the NTK eigenvalues stabilize, eventually reaching machine precision at about epoch 200.
+17
+
+100
+101
+102
+103
+Epoch
+100
+101
+Loss Weight
+D
+B
+(a) Loss Weights
+100
+101
+102
+103
+Epoch
+100
+101
+102
+103
+104
+NTK Eigenvalues
+Mode 1
+Mode 2
+Mode 3
+Mode 4
+(b) NTK Eigenvalues
+Figure 2: Loss weights and NTK eigenvalues which verify Assumptions 1.2 and 1.3.
+These results correspond to the expected decay in Figure 3, where around epoch 100 we begin to observe the
+O(T −1) rate for the time averaged quantities obtained from our theoretical results. In summary, it seems
+that the NTK eigenvalues were increasing without bound until epoch 100, at which point the eigenvalues
+and gradient directions could stabilize. Then, the eigenvalues remained bounded, and our theory could be
+applied. However, the loss also exhibited a decay faster than O(T −1), so this may indicate that the loss
+landscape was approximately convex, allowing faster convergence.
+100
+101
+102
+103
+Epoch
+101
+102
+103
+104
+Time Averaged Loss
+Average Loss
+O(T
+1)
+(a) Average Loss
+100
+101
+102
+103
+Epoch
+104
+105
+106
+107
+Time Averaged Squared Gradient Norm
+Gradient Norm
+O(T
+1)
+(b) Average Gradient of Residuals
+Figure 3: Convergence rates of the time averaged loss and the time averaged norm of gradient of the residuals.
+5.2
+Fast NTK Estimation
+Here, we aim to demonstrate the behavior of the proposed algorithm for estimating the NTK and its trace,
+as well as our approximation of the NTK-based PINN weights.
+5.2.1
+Quadratically parameterized predictor
+In this example, we verify the theoretical error rate that we obtained for the NTK approximation with respect
+to the number of samples taken. This example is a simple regression problem, i.e. not in the physics-informed
+18
+
+setting, with a quadratically parameterized predictor. The setup is as follows: we take 50 equispaced values
+in [−1, 1] denoted by {xi}50
+i=1 and sample the data as
+yi = πx2
+i + exi +
+√
+2 + ξi,
+where
+ξi
+iid
+∼N(0, 1/
+√
+2),
+where the “true” output is thus given by
+y = f(x) .= πx2 + ex +
+√
+2.
+We aim to learn an approximation bf of f from the pairs {(xi, yi)}50
+i=1.
+By defining the feature map as
+u(x) = (1, x, x2), we can write f(x) = (θ∗⊙θ∗) · u(x), where θ∗= (π1/2, e1/2, 21/4) and ⊙denotes element-
+wise multiplication. Our goal is to learn bθ ∈R3 such that bf(x) = (bθ ⊙bθ) · u(x) ≈f(x).
+Let us define the residual R(θ) ∈R50 so that
+R(θ)i = (θ ⊙θ) · u(xi) −yi,
+for
+i = 1, 2, . . . , 50,
+so that can then compute ∇R(θ) ∈R3×50 exactly as
+∇R(θ)ji = 2θju(xi)j.
+We note that we parameterized our predictor in this precise way so that ∇R(θ) would depend on θ. Indeed,
+an even simpler linearly parameterized predictor would result in a neural tangent kernel that is independent
+of θ. The data, exact function f, and predictor bf found via Algorithm 3 can be seen in Figure 4. As expected,
+obtaining a reasonable estimator through gradient descent in this example is easy.
+1.0
+0.5
+0.0
+0.5
+1.0
+x
+0
+1
+2
+3
+4
+5
+6
+7
+y
+y data
+True y
+Estimated y
+Figure 4: Quadratically parameterized predictor, sampled data, and true output.
+The main goal of this section is to verify the theoretical results obtained in Theorems 3 and 4. To verify
+Theorem 3, we note that, by the law of large numbers, a Monte Carlo approximation of the expected value
+of our estimator at time 0 will be approximately the expected value of the estimator at that time:
+E
+h
+bK(θ0)
+i
+≈1
+N
+N
+X
+j=1
+bK(j)(θ0).
+In Figure 5, we show a sequence of such estimators, where the final estimate with N = 2×104 samples exhibits
+an approximate NTK that pretty well matches the exact one at time 0. We note, however, that to obtain
+an accurate estimate of the NTK, we require a large number of samples. Despite the fact that, exploiting
+only one sample, the NTK estimate does not look like the exact one, we observe that the estimate with 2000
+samples already provides a good qualitative approximation, even though it still contains some artifacts. To
+quantitatively explore this phenomenon, we now consider our theoretical results for the sequence of estimates.
+19
+
+0
+10
+20
+30
+40
+0
+10
+20
+30
+40
+0.5
+1.0
+1.5
+2.0
+2.5
+(a) Exact NTK at time 0
+0
+10
+20
+30
+40
+0
+10
+20
+30
+40
+2
+0
+2
+4
+6
+(b) Estimate of NTK at time 0 (1 Sample)
+0
+10
+20
+30
+40
+0
+10
+20
+30
+40
+0.5
+1.0
+1.5
+2.0
+2.5
+(c) Estimate of NTK at time 0 (2000 Samples)
+0
+10
+20
+30
+40
+0
+10
+20
+30
+40
+0.5
+1.0
+1.5
+2.0
+2.5
+(d) Estimate of NTK at time 0 (20000 Samples)
+Figure 5: Approximation of NTK at a fixed time for differing numbers of samples.
+20
+
+To verify the Monte Carlo error rate in Theorem 4, we compute empirical averages of errors for M = 100
+independent Monte Carlo estimates of the NTK with varying N:
+E
+
+
+
+1
+N
+N
+X
+j=1
+bK(j,N)(θ0) −K(θ0)
+
+2
+F
+
+≈1
+M
+M
+X
+i=1
+
+1
+N
+N
+X
+j=1
+bK(j,N)(θ0) −K(θ0)
+
+2
+F
+,
+where the superscript (j, N) denotes the fact that each bK(j,N) is an i.i.d. sample from Algorithm 2 for each
+j and N. An analogous approximation is done for the Monte Carlo trace estimator of the NTK. The results
+are shown in Figure 6, and, as expected, we observe a rate of the order O(N −1) for the error, according to
+Theorem 4. We note that while the error may seem large, this is because the error is computed for the entire
+matrix with 2500 entries, resulting in a small average error per entry.
+101
+102
+103
+Number of Samples in Estimator N
+101
+102
+103
+104
+Mean Squared Error of Estimator
+Error
+O(N
+1) reference
+(a) NTK Monte Carlo error
+101
+102
+103
+Number of Samples in Estimator N
+101
+102
+103
+Mean Squared Error of Estimator
+Error
+O(N
+1) reference
+(b) Trace NTK Monte Carlo error
+Figure 6: Monte Carlo error rates of efficient NTK and NTK trace estimators.
+Finally, in Figure 7 we provide a comparison between the exact and estimated NTKs at the initial and
+final time T = 105 after applying Algorithm 3 with α = 10−4. We see that at the initial time, the upper right
+and lower left corners of the exact NTK have larger values than at the final time. The NTK approximation
+reflects this, showing that the moving average approximation of the NTK is able to adapt to a changing
+NTK over time. We will further demonstrate this adaptivity via the loss weights in the next experiments.
+5.2.2
+Wave Equation with PINNs
+Here, we aim to show the comparison between the efficient computation of the weights with respect to the
+exact NTK ones (5). We consider the following problem: find a neural network uθ(t, x) with parameters θ
+that approximately solves the wave equation
+
+
+
+
+
+
+
+
+
+utt(x, t) −4uxx(x, t) = 0,
+(x, t) ∈(0, 1) × (0, 1),
+u(x, 0) = sin(πx) + 1
+2 sin(4πx),
+x ∈[0, 1],
+u(0, t) = u(1, t) = 0,
+t ∈[0, 1],
+ut(x, 0) = 0,
+x ∈[0, 1].
+(15)
+To obtain an accurate approximation of the physical phenomenon, within this benchmark, we further re-
+sample training points at each training iteration, using nD = 300 collocation points for the PDE residual,
+nDi = 300 points in space for the initial time derivative, nBi = 100 points in space for the initial condition,
+and nB1 = nB2 = 100 points in space for each of the boundaries. Resampling is a common technique that
+was also used for the original presentation of the NTK-PINN loss weighting algorithm [37], considering a
+21
+
+0
+10
+20
+30
+40
+0
+10
+20
+30
+40
+0.5
+1.0
+1.5
+2.0
+2.5
+(a) Exact NTK at time 0
+0
+10
+20
+30
+40
+0
+10
+20
+30
+40
+0.5
+1.0
+1.5
+2.0
+2.5
+3.0
+(b) Estimate of NTK at time 0
+0
+10
+20
+30
+40
+0
+10
+20
+30
+40
+5
+10
+15
+20
+25
+(c) Exact NTK at final time
+0
+10
+20
+30
+40
+0
+10
+20
+30
+40
+5
+10
+15
+20
+25
+(d) Estimate of NTK at final time
+Figure 7: Approximation of NTK with evolution in time.
+22
+
+fixed training batch size sampled from the infinitely many points in the space-time domain. This leads to
+a smaller generalization error compared to using a fixed training set of the same size. So instead of fixing
+the points at which we compute the residuals to form the vector R, we now sample new points at each
+training step t, resulting in a newly defined residual denoted as Rt(θ). Thus, we now effectively approximate
+E[∇Rt(θt)⊤∇Rt(θt)], instead of ∇Rt(θt)⊤∇Rt(θt), and we use it in place of K(θt) in (5). By applying Al-
+gorithm 3 with α = 10−3, we obtain the resulting loss weights depicted in Figure 8. In general, we observed
+that the performance of the estimator is fairly robust to the choice of α, and smaller α lead to smoother loss
+weight trajectories. In particular, α = 10−4 is small enough to see the loss weight trajectories without being
+obscured by noise in the random estimates of the NTK.
+0
+20000
+40000
+60000
+80000
+Epoch
+100
+101
+102
+103
+D Exact
+B Exact
+Bt Exact
+D Estimate
+B Estimate
+Bt Estimate
+Figure 8: Exact NTK-based loss weights (shown with dashed lines) given by (5), and the loss weights based
+on the approximated NTK (shown with solid lines) given by Algorithm 3 combined with resampled data.
+We see that the exact and approximated loss weights exhibit a very similar behavior, though the largest
+loss weight is under-approximated, while the smallest is over-approximated.
+Note that because the loss
+weights involve the quotient of random variables, even though our trace estimator is unbiased up to a
+negligible discretization error, the results obtained by replacing K in (5) with its randomized approximations
+are not unbiased. Despite this discrepancy, the resulting PINN approximation to the wave equation, as shown
+in Figure 9, has a low error compared to the exact solution given by
+u(x, t) = sin(πx) cos(2πt) + 1
+2 sin(4πx) cos(8πt).
+To obtain these results, we used a feedforward neural network with three hidden layers and 500 neurons
+each, Xavier initialization, and the hyperbolic tangent as the activation function.
+5.2.3
+Liquid Crystal Q-Tensor PINN
+In this final example, we show the efficacy of our weighting algorithm for a nonlinear PDE which describes
+the evolution of liquid crystal molecule orientations. The model in two spatial dimensions is given by
+
+
+
+
+
+Qt = L∆Q −aQ −c Tr(Q2)Q,
+(x, t) ∈Ω× [0, T],
+Q(x, 0) = Q0(x),
+x ∈Ω,
+Q(x, t) = 0,
+(t, x) ∈∂Ω× [0, T],
+where Ω⊆R2 and Q : Ω× [0, T] →R2×2 is a trace-free and symmetric matrix-valued function referred to
+as the Q-tensor [9, 18]. Additionally, a ∈R and L, c > 0 are parameters that characterize the behavior of
+the solution, and because Q is trace-free and symmetric, there are only two independent variables in this
+equation. The initial condition is given by
+Q0(x, y) = dd⊤−∥d∥2
+2
+I,
+d =
+
+(2 −x)(2 + x)(2 −y)(2 + y)
+sin(πx) sin(πy)
+⊤
+p
+1 + [(2 −x)(2 + x)(2 −y)(2 + y)]2 + sin(πx)2 sin(πy)2 .
+23
+
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Neural Network prediction
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+True solution
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Residual
+1.6
+1.2
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+1.6
+1.6
+1.2
+0.8
+0.4
+0.0
+0.4
+0.8
+1.2
+1.6
+0.04
+0.03
+0.02
+0.01
+0.00
+0.01
+0.02
+0.03
+0.04
+Figure 9: Wave equation solution obtained using the loss weighting Algorithm 3 combined with resampled
+data.
+The eigenvectors of the function Q encode the average direction of the liquid crystal molecules at a point
+in space, and depending on the direction of the molecules, light may or may not pass through the liquid
+crystal. The light passing through the liquid crystal can be seen by a contour plot of |λ1(x, t)(v1(x, t)·(1, 0))|,
+where v1(x, t) is the eigenvector corresponding to the positive eigenvalue of Q(x, t).
+As in the previous example, we train a PINN model Qθ with our adaptive weighting algorithm to
+approximate the solution to the Q-tensor PDE, using the same feedforward neural network with three
+hidden layers and 500 neurons each. We sample nD = nBi = 300 data points each for the interior residual
+and for the initial condition, while for each portion of the boundaries we use nBk = 10 data samples for
+k = 1, 2, 3, 4, still resampling the points at each iteration of training.
+In Figure 10, we plot the resulting PINN (denoted NTK-PINN) compared to a reference Finite Element
+solution computed with the invariant quadratization method [18], as well as compared to a PINN trained
+without the adaptive weighting algorithm (denoted PINN). The contours show the aforementioned visualiza-
+tion of light passing through the liquid crystal, while the blue vectors represent the eigenvectors v1(x, t). We
+see that all three solutions are qualitatively very similar, providing an accurate reconstruction of the contour
+plots and of the eigenvectors reaching the horizontal equilibrium state at time t = 2. We note that the
+artifacts around the boundary for the NTK-PINN and PINN solutions are due to the fact that Q = 0 on the
+boundary, so computing the eigenvectors will be sensitive to any error, while for the Finite Element solution,
+Q is constrained to equal 0 exactly on the boundary. Thus, even though the use of the adaptive loss weights
+makes little difference in the quality of solution for this example, we emphasize that the Algorithm 3 can
+offer enough improvement in computational efficiency to make such an adaptive NTK-based loss weighting
+feasible.
+6
+Conclusion
+In this paper, we presented a convergence analysis for a neural tangent kernel-based loss weighting scheme
+in multi-objective optimization with a physics-informed loss. We showed that, under certain assumptions,
+the average squared norms of the residuals and of the loss gradients converge to zero. To address concerns
+with computational complexity, we further proposed a randomized algorithm which allowed us to obtain
+sketches of the NTK. This way, we demonstrated that, using a moving average, computing adaptive NTK
+approximations only costs one additional evaluation and backpropagation of our physics-informed neural
+network per iteration. We provided error estimates to justify the proposed randomized algorithm, and we
+verified our theoretical results numerically. We performed further numerical tests demonstrating the efficacy
+of our methodology for the wave equation and a nonlinear model of liquid crystal dynamics. In the future, we
+would also like to study the convergence of PINN training in the infinite width limit, particularly for nonlinear
+PDEs. Another interesting open question is related to the discovery of the optimal weights used to balance
+24
+
+FEM
+NTK-PINN
+PINN
+0.000
+0.075
+0.150
+0.225
+0.300
+0.375
+0.450
+0.525
+0.600
+Solutions at t = 0
+0.000
+0.075
+0.150
+0.225
+0.300
+0.375
+0.450
+0.525
+0.600
+Solutions at t = 0.5
+0.000
+0.075
+0.150
+0.225
+0.300
+0.375
+0.450
+0.525
+0.600
+Solutions at t = 2
+Figure 10: Finite Element solution (FEM) compared to a PINN solution trained with the approximate NTK
+weight algorithm (NTK-PINN) and a PINN solution trained without adaptive weighting (PINN).
+25
+
+the loss functions. Lastly, an important application of our work will be to physics-informed machine learning
+for reduced order modeling. In this context, the neural networks used are vector-valued, and computing the
+loss weights based on the NTK is particularly expensive, so we envision our NTK approximation algorithm
+having great benefits in that context [1, 11].
+Acknowledgments
+This material is based upon work supported by the National Science Foundation Graduate Research Fellow-
+ship Program under Grant No. DGE 2146752. Any opinions, findings, and conclusions or recommendations
+expressed in this material are those of the authors and do not necessarily reflect the views of the National
+Science Foundation. FP acknowledges the support provided by the European Union - NextGenerationEU, in
+the framework of the iNEST - Interconnected Nord-Est Innovation Ecosystem (iNEST ECS00000043 - CUP
+G93C22000610007) consortium and its CC5 Young Researchers initiative. FP also acknowledges INdAM-
+GNSC and the project “Sviluppo e analisi di modelli di ordine ridotto basati su tecniche di deep learning”
+(CUP E53C24001950001) for its support.
+A
+Proof of Descent Lemma 1
+Proof. Let g(t) = F(y+t(x−y)), which is well-defined since P is convex. Then g′(t) = ⟨∇F(y+t(x−y)), x−y⟩.
+By the fundamental theorem of calculus, we have
+F(x) −F(y) = g(1) −g(0) =
+Z 1
+0
+g′(t) dt =
+Z 1
+0
+⟨∇F(y + t(x −y)), x −y⟩dt.
+Subtract ⟨∇F(y), x −y⟩from both sides of this equation and take absolute values to obtain
+|F(x) −F(y) −⟨∇F(y), x −y⟩| ≤
+Z 1
+0
+|⟨∇F(y + t(x −y)) −∇F(y), x −y⟩| dt
+≤
+Z 1
+0
+∥∇F(y + t(x −y)) −∇F(y)∥· ∥x −y∥dt
+≤
+Z 1
+0
+Lt∥x −y∥2 dt
+= L
+2 ∥x −y∥2,
+which completes the proof.
+B
+Proof of Theorem 5
+Proof. Performing a Taylor expansion, we have
+E
+
+∥R(θt + gt) −R(θt)∥2
+F
+
+= E
+
+∥R(θt) + ∇R(θt)⊤gt + E(θt, gt) −R(θt)∥2
+F
+
+= E
+
+∥∇R(θt)⊤gt + E(θt, gt)∥2
+F
+
+,
+where we define E(θt, gt) to be the Taylor remainder, which by Assumption 2.3 satisfies
+∥E(θt, gt)∥F ≤Cε2∥gt/ε∥2.
+Combining this with the fact that E[∥gt/ε∥3] ≤E[∥gt/ε∥4] = n(n + 2), since gt/ε is a standard Gaussian
+vector, gives
+E [∥gt∥∥E(θt, gt)∥F ] = εE [∥gt/ε∥∥E(θt, gt)∥F ] ≤Cε3n(n + 2),
+and
+E
+
+∥E(θt, gt)∥2
+F
+
+≤C2ε4n(n + 2).
+26
+
+Again, by Assumption 2.3, it follows that
+E
+
+∥R(θt + gt) −R(θt)∥2
+F
+
+= E
+
+∥∇R(θt)⊤gt∥2
+F + 2⟨∇R(θt)⊤gt, E(θt, gt)⟩+ ∥E(θt, gt)∥2
+F
+
+≤E
+
+∥∇R(θt)⊤gt∥2
+F + 2C∥gt∥∥E(θt, gt)∥F + ∥E(θt, gt)∥2
+F
+
+≤E
+
+∥∇R(θt)⊤gt∥2
+F
+
++ 2Cε3n(n + 2) + C2ε4n(n + 2),
+and similarly,
+E
+
+∥R(θt + gt) −R(θt)∥2
+F
+
+≥E
+
+∥∇R(θt)⊤gt∥2
+F
+
+−2Cε3n(n + 2).
+Now, using the cyclic property of the trace, we have that
+E
+
+∥∇R(θt)⊤gt∥2
+F
+
+= E
+
+Tr
+ g⊤
+t ∇R(θt)∇R(θt)⊤gt
+
+= Tr(∇R(θt)⊤E[gtg⊤
+t ]∇R(θt)) = ε2 Tr(K(θt)).
+Thus, we obtain
+−2Cεn(n + 2) ≤E
+"
+R(θt + gt) −R(θt)
+ε
+
+2
+F
+#
+−Tr(K(θt)) ≤2Cεn(n + 2) + C2ε2n(n + 2),
+and the result follows from n(n+2) < (n+1)2 and by bounding from above with a larger suitable constant.
+References
+[1] W. Chen, Q. Wang, J. S. Hesthaven, and C. Zhang. Physics-informed machine learning for reduced-order
+modeling of nonlinear problems. Journal of Computational Physics, 446:110666, 2021.
+[2] Y. Collette and P. Siarry. Multiobjective Optimization. Decision Engineering. Springer Berlin, Heidel-
+berg, 1 edition, 2004. Original French edition published by Groupe Eyrolles, 2002. Part of the Springer
+Book Archive. Copyright © Springer-Verlag Berlin Heidelberg 2004.
+[3] D. Coscia, A. Ivagnes, N. Demo, and G. Rozza.
+Physics-Informed Neural networks for Advanced
+modeling. Journal of Open Source Software, 8(87):5352, 2023.
+[4] S. A. Faroughi and F. Mostajeran. Neural Tangent Kernel Analysis to Probe Convergence in Physics-
+informed Neural Solvers: PIKANs vs. PINNs, 2025.
+[5] B. Gao, R. Yao, and Y. Li. Physics-informed neural networks with adaptive loss weighting algorithm
+for solving partial differential equations. Computers & Mathematics with Applications, 181:216–227,
+2025.
+[6] Y. Gao, Y. Gu, and M. Ng. Gradient Descent Finds the Global Optima of Two-Layer Physics-Informed
+Neural Networks. In A. Krause, E. Brunskill, K. Cho, B. Engelhardt, S. Sabato, and J. Scarlett, editors,
+Proceedings of the 40th International Conference on Machine Learning, volume 202 of Proceedings of
+Machine Learning Research, pages 10676–10707. PMLR, 2023.
+[7] S. Ghadimi and G. Lan. Stochastic First- and Zeroth-Order Methods for Nonconvex Stochastic Pro-
+gramming. SIAM Journal on Optimization, 23(4):2341–2368, 2013.
+[8] A. Girard. A fast ‘Monte-Carlo cross-validation’ procedure for large least squares problems with noisy
+data. Numerische Mathematik, 56(1):1–23, 1989.
+[9] V. M. Gudibanda, F. Weber, and Y. Yue. Convergence Analysis of a Fully Discrete Energy-Stable
+Numerical Scheme for the Q-Tensor Flow of Liquid Crystals. SIAM Journal on Numerical Analysis,
+60(4):2150–2181, 2022.
+[10] Z. Hao, S. Liu, Y. Zhang, C. Ying, Y. Feng, H. Su, and J. Zhu. Physics-Informed Machine Learning: A
+Survey on Problems, Methods and Applications, 2023.
+27
+
+[11] M. Hirsch, F. Pichi, and J. S. Hesthaven. Neural Empirical Interpolation Method for Nonlinear Model
+Reduction. SIAM Journal on Scientific Computing, pages C1264–C1293, 2025.
+[12] N. Jha and E. Mallik. GPINN with Neural Tangent Kernel Technique for Nonlinear Two Point Boundary
+Value Problems. Neural Processing Letters, 56(3):192, 2024.
+[13] S. Jiang, Y. Man, Z. Song, Z. Yu, and D. Zhuo. Fast Graph Neural Tangent Kernel via Kronecker
+Sketching. Proceedings of the AAAI Conference on Artificial Intelligence, 36(6):7033–7041, 2022.
+[14] B. Jin and L. Wu. Convergence of Stochastic Gradient Methods for Wide Two-Layer Physics-Informed
+Neural Networks, 2025.
+[15] G. E. Karniadakis, I. G. Kevrekidis, L. Lu, P. Perdikaris, S. Wang, and L. Yang. Physics-informed
+machine learning. Nature Reviews Physics, 3(6):422–440, 2021.
+[16] I. Y. Kim and O. L. de Weck. Adaptive weighted-sum method for bi-objective optimization: Pareto
+front generation. Structural and Multidisciplinary Optimization, 29(2):149–158, 2005.
+[17] Y. Liu, L. Cai, Y. Chen, and B. Wang. Physics-informed neural networks based on adaptive weighted
+loss functions for Hamilton-Jacobi equations. Mathematical Biosciences and Engineering, 19(12):12866–
+12896, 2022.
+[18] M. Hirsch, F. Weber, and Y. Yue. The zero inertia limit for the Q-tensor model of liquid crystals:
+analysis and numerics. ESAIM: M2AN, 59(5):2515–2556, 2025.
+[19] R. T. Marler and J. S. Arora. The weighted sum method for multi-objective optimization: new insights.
+Structural and Multidisciplinary Optimization, 41(6):853–862, 2010.
+[20] P.-G. Martinsson and J. A. Tropp. Randomized numerical linear algebra: Foundations and algorithms.
+Acta Numerica, 29:403–572, 2020.
+[21] L. D. McClenny and U. M. Braga-Neto. Self-adaptive physics-informed neural networks. Journal of
+Computational Physics, 474:111722, 2023.
+[22] C. Meng, S. Griesemer, D. Cao, S. Seo, and Y. Liu. When physics meets machine learning: a survey
+of physics-informed machine learning. Machine Learning for Computational Science and Engineering,
+1(1):20, 2025.
+[23] M. A. Mohamadi, W. Bae, and D. J. Sutherland. A fast, well-founded approximation to the empirical
+neural tangent kernel.
+In Proceedings of the 40th International Conference on Machine Learning,
+ICML’23. JMLR.org, 2023.
+[24] Y. Nesterov.
+Introductory Lectures on Convex Optimization, volume 87 of Applied Optimization.
+Springer US, Boston, MA, 2004.
+[25] R. Novak, J. Sohl-Dickstein, and S. S. Schoenholz.
+Fast Finite Width Neural Tangent Kernel.
+In
+K. Chaudhuri, S. Jegelka, L. Song, C. Szepesvari, G. Niu, and S. Sabato, editors, Proceedings of the
+39th International Conference on Machine Learning, volume 162 of Proceedings of Machine Learning
+Research, pages 17018–17044. PMLR, 2022.
+[26] R. Novak, L. Xiao, Y. Bahri, J. Lee, G. Yang, J. Hron, D. A. Abolafia, J. Pennington, and J. Sohl-
+Dickstein. Bayesian Deep Convolutional Networks with Many Channels are Gaussian Processes. In
+ICLR (Poster). OpenReview.net, 2019.
+[27] S. J. Prince. Understanding Deep Learning. The MIT Press, 2023.
+[28] A. Quarteroni, P. Gervasio, and F. Regazzoni. Combining Physics-Based and Data-Driven Models:
+Advancing the Frontiers of Research with Scientific Machine Learning.
+Mathematical Models and
+Methods in Applied Sciences, 35(04):905–1071, 2025.
+28
+
+[29] C. Rackauckas. Parallel Computing and Scientific Machine Learning (SciML): Methods and Applica-
+tions, 2022.
+[30] M. Raissi, P. Perdikaris, and G. Karniadakis.
+Physics-informed neural networks: A deep learning
+framework for solving forward and inverse problems involving nonlinear partial differential equations.
+Journal of Computational Physics, 378:686–707, 2019.
+[31] B. Sanchez-Lengeling, E. Reif, A. Pearce, and A. B. Wiltschko. A Gentle Introduction to Graph Neural
+Networks. Distill, 2021. https://distill.pub/2021/gnn-intro.
+[32] C. Song, Y. Park, and M. Kang. How does PDE order affect the convergence of PINNs? In Proceedings
+of the 38th International Conference on Neural Information Processing Systems, NIPS ’24, Red Hook,
+NY, USA, 2025. Curran Associates Inc.
+[33] Z. Tan, T. Liu, and W. Huang. Understanding Neural Tangent Kernel Dynamics Through Its Trace
+Evolution, 2025.
+[34] J. F. Urb´an, P. Stefanou, and J. A. Pons.
+Unveiling the optimization process of physics informed
+neural networks: How accurate and competitive can PINNs be?
+Journal of Computational Physics,
+523:113656, 2025.
+[35] J. Wang, X. Xiao, X. Feng, and H. Xu. An improved physics-informed neural network with adaptive
+weighting and mixed differentiation for solving the incompressible Navier–Stokes equations. Nonlinear
+Dynamics, 112(18):16113–16134, 2024.
+[36] S. Wang, Y. Teng, and P. Perdikaris.
+Understanding and Mitigating Gradient Flow Pathologies in
+Physics-Informed Neural Networks. SIAM Journal on Scientific Computing, 43(5):A3055–A3081, 2021.
+[37] S. Wang, X. Yu, and P. Perdikaris.
+When and why PINNs fail to train: A neural tangent kernel
+perspective. Journal of Computational Physics, 449:110768, 2022.
+[38] R. Ward, X. Wu, and L. Bottou. AdaGrad stepsizes: sharp convergence over nonconvex landscapes. J.
+Mach. Learn. Res., 21(1), 2020.
+[39] Z. Xiang, W. Peng, X. Liu, and W. Yao. Self-adaptive loss balanced physics-informed neural networks.
+Neurocomputing, 496:11–34, 2022.
+[40] X.-S. Yang.
+Chapter 14 - Multi-Objective Optimization.
+In X.-S. Yang, editor, Nature-Inspired
+Optimization Algorithms, pages 197–211. Elsevier, Oxford, 2014.
+[41] S. Yeonjong, D. J´erˆome, and E. Karniadakis, George.
+On the Convergence of Physics Informed
+Neural Networks for Linear Second-Order Elliptic and Parabolic Type PDEs.
+Communications in
+Computational Physics, 28(5):2042–2074, 2020.
+[42] A. Zandieh, I. Han, H. Avron, N. Shoham, C. Kim, and J. Shin. Scaling Neural Tangent Kernels via
+Sketching and Random Features. In M. Ranzato, A. Beygelzimer, Y. Dauphin, P. Liang, and J. W.
+Vaughan, editors, Advances in Neural Information Processing Systems, volume 34, pages 1062–1073.
+Curran Associates, Inc., 2021.
+[43] J. Zhou, G. Cui, S. Hu, Z. Zhang, C. Yang, Z. Liu, L. Wang, C. Li, and M. Sun. Graph neural networks:
+A review of methods and applications. AI Open, 1:57–81, 2020.
+[44] Z. Zhou and Z. Yan. Is the neural tangent kernel of PINNs deep learning general partial differential
+equations always convergent? Physica D: Nonlinear Phenomena, 457:133987, 2024.
+29
