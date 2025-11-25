@@ -1,0 +1,2965 @@
+InTAct: Interval-based Task Activation Consolidation for Continual Learning
+Patryk Krukowski
+Jagiellonian University
+IDEAS NCBR
+patryk.krukowski@doctoral.uj.edu.pl
+Jan Miksa
+Jagiellonian University
+Piotr Helm
+Jagiellonian University
+Jacek Tabor
+Jagiellonian University
+Paweł Wawrzy´nski
+IDEAS Research Institute
+Przemysław Spurek
+Jagiellonian University
+IDEAS Research Institute
+Abstract
+Continual learning aims to enable neural networks to acqu-
+ire new knowledge without forgetting previously learned
+information. While recent prompt-based methods perform
+strongly in class-incremental settings, they remain vulnera-
+ble under domain shifts, where the input distribution chan-
+ges but the label space remains fixed. This exposes a per-
+sistent problem known as representation drift. Shared re-
+presentations evolve in ways that overwrite previously use-
+ful features and cause forgetting even when prompts iso-
+late task-specific parameters. To address this issue, we in-
+troduce InTAct, a method that preserves functional beha-
+vior in shared layers without freezing parameters or storing
+past data. InTAct captures the characteristic activation ran-
+ges associated with previously learned tasks and constra-
+ins updates to ensure the network remains consistent within
+these regions, while still allowing for flexible adaptation el-
+sewhere. In doing so, InTAct stabilizes the functional role of
+important neurons rather than directly restricting parame-
+ter values. The approach is architecture-agnostic and inte-
+grates seamlessly into existing prompt-based continual le-
+arning frameworks. By regulating representation changes
+where past knowledge is encoded, InTAct achieves a prin-
+cipled balance between stability and plasticity. Across di-
+verse domain-incremental benchmarks, including Domain-
+Net and ImageNet-R, InTAct consistently reduces represen-
+tation drift and improves performance, increasing Average
+Accuracy by up to 8 percentage points over state-of-the-art
+baselines.
+1. Introduction
+Continual learning enables neural networks to acquire new
+knowledge over time while retaining previously learned in-
+formation. Human beings achieve this naturally by balan-
+cing stability, the preservation of past knowledge, and pla-
+sticity, the ability to learn new tasks. Deep neural networks,
+however, struggle to maintain this balance [21]. When ad-
+apting to new data, their internal representations often drift,
+altering the learned features that were important for earlier
+tasks and ultimately leading to catastrophic forgetting [34].
+Many existing approaches mitigate forgetting by constra-
+ining parameter updates, yet few explicitly control how the
+network’s function itself evolves across tasks. Uncontrolled
+changes in these representations remain a key source of in-
+stability.
+This challenge of internal representation drift is espe-
+cially evident in prompt-based continual learning [11,
+47, 53, 54]. These methods currently achieve state-of-the-
+art performance in both class-incremental and domain-
+incremental settings, but their reliance on shared compo-
+nents makes them vulnerable to representational drift. In
+class-incremental learning (CIL), where tasks introduce
+new classes, prompt-based models approach optimal per-
+formance. Contrary, in domain-incremental learning (DIL),
+where the label space is fixed but input distributions shift,
+these models often degrade as internal features drift. Altho-
+ugh prompting reduces interference at the embedding level,
+it does not explicitly regulate how shared representations
+evolve within trainable modules, leaving the model’s inter-
+nal function unconstrained.
+Recent work such as the Kolmogorov–Arnold Classi-
+fier (KAC) [17] introduces the notion of functional locality,
+constraining how output heads change across tasks. Yet, this
+principle has not been extended to deeper representations,
+leaving open the fundamental question: how can we con-
+trol where and how much a network’s internal function
+should adapt during continual learning?
+We address this challenge with Interval-based Task Ac-
+tivation Consolidation (InTAct), a framework that enfor-
+ces functional stability across all layers of the model (see
+arXiv:2511.17439v1  [cs.LG]  21 Nov 2025
+
+Tasks
+Task N
+Task N+1
+Task N+2
+class: goldfish
+class: bird
+class: rooster
+Model
+Layers
+In-Layer Transformation
+Rysunek 1. During training on task (N+1), InTAct preserves the functional region established by task N (pink) while allowing the model
+to learn new knowledge in a distinct region (orange). After training, these regions merge into an expanded protected region (yellow),
+defining where the layer’s transformation should remain stable in future updates. The dashed curves illustrate transformations from earlier
+tasks, highlighting that their behaviors remain preserved within their respective regions, while adaptation is freely allowed outside them.
+Fig. 1). Rather than typical approaches, which operate in
+the parameters’ space, InTAct regularizes activations direc-
+tly, which preserves network behaviour. After learning each
+task, it summarizes the stable activation patterns as boun-
+ded regions, activation intervals, and aggregates them into
+multidimensional activation hypercubes. An interval here
+is a one-dimensional range capturing the lower and upper
+bounds of a neuron’s typical activation values, representing
+the region within which its response remains functionally
+consistent. A hypercube generalizes this concept to multiple
+neurons within a layer, jointly describing where the layer’s
+transformation is expected to be stable.
+When learning new tasks, these hypercubes act as soft
+functional constraints: the model is encouraged to keep acti-
+vations within established stable regions when appropriate,
+yet retains flexibility to explore new regions for adaptation.
+This mechanism enables continual learning that is both ro-
+bust and adaptive, preserving prior functionality while sup-
+porting new knowledge acquisition. By operating at the re-
+presentation level, InTAct directly controls how the model’s
+function evolves, instead of only constraining parameters.
+When integrated into state-of-the-art prompt-based fra-
+meworks, InTAct improves Average Accuracy (AA) by
+up to 8 percentage points (p.p.) on challenging domain-
+incremental benchmarks such as DomainNet [37] and
+ImageNet-R [15]. Moreover, InTAct remains effective even
+in settings without pretrained backbones, demonstrating its
+versatility as a general continual learning regularization
+strategy. These results show that activation-level consolida-
+tion provides a general and effective approach for robust
+and adaptive continual learning systems.
+The main contributions of this work are:
+1. We propose InTAct1, a continual learning method that
+preserves stable functional behavior through a novel re-
+gularization guided by activation hypercubes.
+2. InTAct achieves a principled balance between stability
+and plasticity, maintaining the model’s functionality on
+past tasks while enabling flexible adaptation to new ones.
+3. We demonstrate that InTAct consistently improves state-
+of-the-art prompt-based methods by up to 8 p.p. in AA
+on challenging continual learning benchmarks.
+2. Related Works
+For an extended literature overview, see Supplementary Ma-
+terials (SM) 6.
+Continual Learning
+Continual learning methods [8,
+33, 36] fall into replay-based, regularization-based, and
+parameter-isolation-based categories. Replay-based appro-
+aches store exemplars [2–4, 27, 29, 39, 50] or generate
+synthetic data [46, 57] to revisit past tasks. Regularization-
+based methods add loss terms to constrain parameter chan-
+ges, leveraging current [20, 26] or prior data [1, 5, 21,
+60], or null-space projections [22, 48, 51, 52]. Parameter-
+isolation techniques allocate task-specific subnetworks,
+e.g., Progressive Neural Networks [42, 43], Piggyback [32],
+PackNet [31], HAT [44], and SupSup [56], but require task
+IDs at inference.
+1Code available at: https://github.com/pkrukowski1/
+InTAct
+
+class: goldfish
+class: bird
+class: rooster
+Task N
+Task N+1
+Task N+2
+Prompt Pool
+Pretrained
+Feature
+Extractor
+Query
+Function
+Classifier
+InTAct
+Softmax
+Embedding Layer
+Rysunek 2. Integration of InTAct with prompt-based methods. In-
+TAct stabilizes features within the pretrained extractor and con-
+strains activation changes in the classifier, mitigating representa-
+tion drift across tasks.
+Prompt-Based Continual Learning
+Prompt-based me-
+thods leverage pretrained models for rehearsal-free conti-
+nual learning. L2P [11] and DualPrompt [47] optimize ad-
+aptive prompts to guide frozen backbones. CoDA-Prompt
+[53] decomposes attention for modularity, and C-Prompt
+[54] ensures prompt stability across tasks. While prompt-
+based approaches reduce forgetting, they still suffer from
+drift in shared parameters, such as classifiers or learna-
+ble prompts, especially in DIL scenarios. InTAct addres-
+ses this by regularizing these shared parameters to prevent
+drift of important features, maintaining stable representa-
+tions across tasks. Figure 2 illustrates how InTAct integra-
+tes with these prompt-based methods, stabilizing shared pa-
+rameters and reducing representation drift across multiple
+tasks in continual learning.
+Interval Arithmetic in Continual Learning
+Interval ari-
+thmetic [6, 35] has been applied in continual learning, for
+example, in InterContiNet [55], which constrains weights
+using intervals to ensure multi-task performance, and HINT
+[24], which maps intervals in the embedding space to the
+network via hypernetworks. In contrast, we use interval ari-
+thmetic to define activation hypercubes that capture prior
+task data, without propagating intervals and avoiding the
+wrapping effect. Each layer is then regularized to keep its
+transformations within these hypercubes, ensuring stable
+representations across tasks.
+3. Method
+At its core, continual learning should allow a network to
+evolve gradually, adjusting its learned representations lo-
+cally to accommodate new knowledge while leaving its
+functional structure intact. In practice, however, most ap-
+proaches either constrain parameters globally or rely on re-
+playing past data, both of which limit scalability and effi-
+ciency. What is missing is a mechanism that can selectively
+stabilize regions of the network’s function that matter, wi-
+thout halting its capacity to adapt elsewhere.
+Goal.
+Our method addresses this gap by preserving pre-
+viously learned internal representations without freezing
+parameters or using data replay. We summarize the activa-
+tion distribution of each layer l from past tasks and define a
+protected region, a hypercube Hl capturing the central p%
+of neuron activations. This region represents the critical ac-
+tivation manifold to preserve. During new task learning, all
+parameters remain fully trainable, but the transformation of
+layer l+1 is regularized to stay stable for any input within
+Hl, while regions outside it remain free to adapt. This tar-
+geted constraint maintains prior functionality and enables
+new knowledge acquisition, achieving a principled balance
+between stability and plasticity.
+Idea Visualization.
+To illustrate the concept, Fig. 3
+shows how InTAct incrementally learns three segments of a
+Gaussian function. In the first task, the network learns to ap-
+proximate the first segment and identifies the corresponding
+activation hypercubes. During the second task, the model le-
+arns the next segment while InTAct actively protects the ac-
+tivations established in the first task (Fig. 3a) from drifting.
+This exact process continues for subsequent tasks, demon-
+strating how InTAct successfully balances stability (prese-
+rving old segments) and plasticity (learning new ones).
+The following sections describe how these activation hy-
+percubes are computed and updated throughout the conti-
+nual learning process.
+3.1. Activation Interval Representation
+We aim to summarize activation distributions from past ta-
+sks without storing all raw activations. Let SH be the set
+of layer indices for which a hypercube from the preceding
+layer is available. For each task t and each layer l ∈SH, we
+build a hypercube Hl,t that captures the stable activation re-
+gion at that layer. Importantly, InTAct need not be applied
+to every layer.
+Let xl,t denote the activation vector of the l-th layer in-
+dex in SH after learning task t. To define the hypercube
+boundaries, we capture the central p% of the activation di-
+stribution by excluding the extreme α = 100−p
+2
+% tails, for
+example, α = 5 for p = 90.
+For each neuron j in the selected layer, we determine the
+per-task activation range by computing its lower and upper
+
+(a) Task 1: learning the first segment of the Gaus-
+sian.
+(b) Task 2: adapting to the second segment while
+preserving the first.
+(c) Task 3: completing the Gaussian while reta-
+ining prior mappings.
+Rysunek 3. The model learns a Gaussian function in three sequential tasks. At each stage, InTAct constrains activations within previously
+established hypercubes, allowing new segments to be learned without overwriting prior knowledge.
+bounds, which together define the characteristic hypercube:
+Hl,t =
+
+xl,t, xl,t
+
+,
+(1)
+where
+xl,t[j] = percentileα%(xl,t[j]) ,
+(2)
+xl,t[j] = percentile(100−α)%(xl,t[j]) .
+(3)
+Importantly, these hypercubes are computed only after a
+task has been fully learned, ensuring they reflect stable ac-
+tivation patterns rather than transient learning dynamics.
+Cumulative Hypercube Update.
+As the model learns se-
+quentially, we must preserve the functional regions from
+all previous tasks. We define a cumulative hypercube, H(t)
+l ,
+which represents the total protected region for layer index
+l ∈SH after learning t tasks.
+After the new task t is learned and its hypercube Hl,t
+is computed, we merge it with the previous cumulative hy-
+percube H(t−1)
+l
+. The update rule is a simple elementwise
+expansion:
+H(t)
+l
+=
+h
+min
+ x(t−1)
+l
+, xl,t
+
+, max
+ x(t−1)
+l
+, xl,t
+i
+,
+(4)
+where x(t−1)
+l
+and x(t−1)
+l
+are the bounds of the cumula-
+tive hypercube from the previous step, and the min(·) and
+max(·) operations are applied elementwise.
+As new tasks arrive, these cumulative hypercubes gra-
+dually expand to cover the full range of activations obse-
+rved across all tasks. This compact representation ensures
+that each layer retains the functional regions essential for
+solving past tasks while leaving room for adaptation.
+3.2. Functional Preservation via Regularization
+In this subsection, we describe our regularization method.
+The central idea is to permit parameter updates (∆θ) only
+if they do not alter the network’s output function for inputs
+corresponding to previous tasks. Our approach targets this
+goal directly in the activation space.
+Internal Representation Drift Loss.
+When training on
+a new task t, parameter updates ∆θ can alter the output
+of each layer. This representation drift changes the overall
+function and degrades performance on past tasks.
+Our method constrains the transformation f(·; θl) of
+each layer index l ∈SH. We require that for any input x
+drawn from the protected cumulative hypercube of the pre-
+vious layer index, H(t−1)
+l−1 , the layer’s output remains inva-
+riant to the parameter update ∆θl. This condition is forma-
+lized as:
+f(x; θl + ∆θl) = f(x; θl),
+∀x ∈H(t−1)
+l−1 .
+(5)
+Consider an affine layer followed by an activation:
+f(x; θl) = σ(Wlx + bl), where θl = {Wl, bl}, and Wl
+and bl are learnable parameters. A direct and robust way to
+satisfy Eq. (5) is to enforce invariance at the pre-activation
+level. If the pre-activation remains constant, the output of
+standard activation functions (e.g., ReLU) will also be inva-
+riant. This yields a simpler, stricter constraint:
+(Wl + ∆Wl)x + (bl + ∆bl) = Wlx + bl,
+∀x ∈H(t−1)
+l−1 ,
+which simplifies to:
+∆Wlx + ∆bl = 0,
+∀x ∈H(t−1)
+l−1 .
+(6)
+While formulated for affine layers, this principle is readily
+extended to other types, such as convolutional layers (see
+SM 13).
+Enforcing this pointwise constraint over all x ∈H(t−1)
+l−1
+is intractable. Our key insight is to leverage interval ari-
+thmetic to enforce the constraint over the entire hyper-
+cube H(t−1)
+l−1
+simultaneously. We represent the hypercube
+as
+
+x(t−1)
+l−1 , x(t−1)
+l−1
+
+and reformulate the constraint (Eq. (6))
+as:
+∆Wl
+
+x(t−1)
+l−1 , x(t−1)
+l−1
+
++ ∆bl = [0, 0].
+(7)
+To translate this constraint into a differentiable loss, we
+compute the bounds of the resulting hypercube. Using stan-
+dard interval arithmetic (detailed in SM 12), the output in-
+
+terval for the i-th neuron is
+
+˜xi + ∆bl,i, ˜xi + ∆bl,i
+
+, where:
+˜xi =
+ ∆w⊤
+l,i
++ x(t−1)
+l−1
+−
+ ∆w⊤
+l,i
+−x(t−1)
+l−1 ,
+(8)
+˜xi =
+ ∆w⊤
+l,i
++ x(t−1)
+l−1
+−
+ ∆w⊤
+l,i
+−x(t−1)
+l−1 .
+(9)
+Here, (∆w⊤
+l,i)+ and (∆w⊤
+l,i)−denote the element-wise po-
+sitive and negative parts of the i-th row of ∆Wl. The loss
+is applied only to layers for which an input hypercube is
+available. Let l1 denote the first such layer. Earlier layers
+cannot be regularized because no input hypercube exists for
+them. For each l ∈SH \ l1, we use the following penalty:
+LIntDrift = λIntDrift
+X
+l∈SH\l1
+nl
+X
+i=1
+
+(˜xi+∆bl,i)2+(˜xi+∆bl,i)2
+.
+(10)
+This constrains the network within preserved activation re-
+gions while allowing updates outside them.
+Remaining Challenges.
+The proposed LIntDrift loss effec-
+tively stabilizes internal representations operating within
+the protected activation hypercubes of preceding layers. Ho-
+wever, two key challenges remain. First, early feature lay-
+ers, those before the first defined hypercube Hl1, are not
+constrained by this mechanism. To ensure full feature stabi-
+lity, a complementary regularization strategy is required, as
+introduced in the next section. Second, as tasks accumulate,
+cumulative hypercubes (Eq. (4)) may expand into empty re-
+gions between disjoint activation spaces, potentially over-
+constraining the model and reducing plasticity.
+How
+InTAct
+Differs
+from
+Existing
+Regularizers.
+Unlike parameter-based regularizers (e.g., EWC, SI) that
+penalize weight changes, LIntDrift directly constrains func-
+tional change in activation space, ensuring that the ne-
+twork’s behavior, not just its parameters, remains consi-
+stent. In contrast to output-level methods like LwF or those
+relying on discrete point sampling [7], our interval-based
+formulation enforces stability across continuous activation
+regions, offering a principled and tractable guarantee of
+functional preservation. Hypercubes act as compact, data-
+free summaries of past tasks, avoiding replay or architec-
+tural overhead and making InTAct lightweight, privacy-
+preserving, and easily integrable into existing continual le-
+arning frameworks.
+Activation Compactness Regularization.
+To prevent the
+excessive growth of activation hypercubes and improve re-
+presentational efficiency, we introduce a compactness regu-
+larization term. This loss, LVar, encourages activations from
+the current task to remain concentrated in a smaller, denser
+region of the feature space.
+For a layer index l ∈SH and the Nt samples of the
+current task t, let xi,l−1 be the input to the layer with index
+l for sample i (i.e., the activation from the layer with index
+l−1). We compute the empirical mean activation ¯f (t)
+l
+using
+the current model f(·; θ(t)
+l ):
+¯f (t)
+l
+= 1
+Nt
+Nt
+X
+i=1
+f(xi,l−1; θ(t)
+l ).
+(11)
+The activation dispersion V(t)
+l
+is the mean squared deviation
+from this mean:
+V(t)
+l
+= 1
+Nt
+Nt
+X
+i=1
+f(xi,l−1; θ(t)
+l ) −¯f (t)
+l
+
+2
+2 .
+(12)
+The compactness regularization is the sum of these disper-
+sions over the relevant layer indices:
+LVar = λVar
+X
+l∈SH
+V(t)
+l
+,
+(13)
+where λVar > 0 controls the strength of the penalty. Minimi-
+zing LVar forces tighter clustering of activations, resulting in
+more compact hypercubes. This ensures our functional re-
+gularization (LIntDrift) operates over smaller, more meaning-
+ful regions, mitigating hypercube over-expansion and pre-
+serving model plasticity for future tasks.
+Inter-Task Alignment Regularization.
+The cumulative
+hypercube update rule (Eq. (4)) is prone to over-regularizing
+inactive space, particularly when activation regions from se-
+quential tasks are disjoint. If a new task’s hypercube is far
+from the previous cumulative region, the rule expands to co-
+ver the wide gap between them, unnecessarily constraining
+a "free"region that contains no meaningful activations. This
+severely restricts plasticity, especially in deeper layers.
+To prevent this and promote smoother transitions, we in-
+troduce an inter-task alignment regularization term, LAlign.
+This loss encourages the centers of the newly learned acti-
+vation hypercubes (Hl,t) to remain close to the centers of
+the hypercubes calculated from preceding tasks (Hl,t−1).
+We define the center of a hypercube Hl as cl = (xl +
+xl)/2, and the radius as rl = (xl −xl)/2. The alignment
+loss penalizes the squared distance between the new center
+cl,t and the previous center cl,t−1:
+LAlign = λAlign
+X
+l∈SH
+∥cl,t −cl,t−1∥2
+2
+rmean
+l,t−1 + ε
+.
+(14)
+Here, ε is a small constant for numerical stability, and the
+denominator provides an adaptive scaling mechanism. We
+use the mean radius of the previous task’s hypercube across
+its dl dimensions, rmean
+l,t−1 = 1
+dl
+Pdl
+j=1 r(j)
+l,t−1.
+
+Intuitively, the radius rmean
+l,t−1 reflects the spread of past
+representations. A small radius indicates that past tasks oc-
+cupied a narrow, critical region, thus scaling the penalty up
+and enforcing stricter alignment. Conversely, a large radius
+implies widely spread representations, weakening the con-
+straint and granting the model more freedom to adapt. This
+adaptive scaling efficiently stabilizes the model’s represen-
+tational space while preserving flexibility.
+Feature Distillation Loss.
+To stabilize the early feature
+layers (those with indices l < l1), we introduce a feature
+distillation loss, LFeat. This loss is applied at the layer with
+index lstart, where the first hypercube Hlstart is defined.
+For each input sample xi, we compare its feature represen-
+tation from the current model f (t)
+Feat(xi) against the frozen re-
+presentation from the previous model f (t−1)
+Feat
+(xi). Crucially,
+we do this only on a subset of feature dimensions indicated
+by a binary mask M:
+LFeat = λFeat
+Nt
+Nt
+X
+i=1
+
+ f (t)
+Feat(xi) −f (t−1)
+Feat
+(xi)
+
+⊙M
+
+2
+2
+s + ε
+,
+(15)
+where s is the number of active entries (1s) in M, and s + ε
+normalizes the loss magnitude.
+Unlike standard knowledge distillation, which often
+over-restricts the model by constraining the entire feature
+vector, LFeat implements a selective stabilization. It prese-
+rves only a controlled subset of features deemed important
+from past tasks, leaving the remaining dimensions free to
+adapt to the new task. This targeted approach preserves le-
+arned structure while maintaining the flexibility required to
+acquire new information.
+Final Regularization Objective.
+Our full training objec-
+tive combines the base continual learning loss LTask with the
+proposed regularization terms:
+LTotal = LTask + LIntDrift + LVar + LAlign + LFeat.
+(16)
+Each component targets a different aspect of the stabi-
+lity–plasticity trade-off: LIntDrift constrains changes in the
+model’s internal function across tasks, LVar keeps activa-
+tion distributions compact to prevent representational over-
+expansion, LAlign regulates the growth of protected hypercu-
+bes over time, and LFeat stabilizes early feature layers while
+allowing adaptation in later ones. Their effects are illustra-
+ted in Fig. 4.
+Because these regularizers act directly on activations, In-
+TAct can be seamlessly integrated into diverse continual le-
+arning methods. An algorithm of the training procedure ap-
+pears in SM 14, and ablations isolating each term are repor-
+ted in Section 4.
+4. Experiments
+We evaluate the effectiveness of InTAct across multi-
+ple benchmarks under both CIL and DIL scenarios. Our
+experiments compare InTAct with regularization-based and
+prompt-based continual learning methods, demonstrating
+consistent performance gains across different architectures
+and learning paradigms. Additional results showing the ef-
+fectiveness of InTAct without pretrained backbones are pro-
+vided in SM 15. Moreover, SM 16 presents a comparison
+with a broader range of methods for the CIL scenario.
+4.1. Experimental Setup
+Datasets.
+We evaluate the effectiveness of InTAct on
+several datasets. (1) For regularization-based approaches:
+Split MNIST, Split FMNIST, and Split CIFAR-10; (2) For
+prompt-based approaches: Split CIFAR-100, DomainNet,
+and ImageNet-R. Except for Split CIFAR-100, we evalu-
+ate performance under both CIL and DIL scenarios. Full
+dataset and task details are provided in SM 8.
+Architectures.
+For the Split MNIST and Split FMNIST
+datasets, we use a multilayer perceptron (MLP) with three
+hidden layers of 400 neurons each. For Split CIFAR-10, we
+employ a pretrained ResNet-18 [14] as the feature extrac-
+tor, where the last residual block is unfrozen and adapted
+during continual learning. For Split CIFAR-100, ImageNet-
+R, and DomainNet, we follow the CODA-Prompt, using a
+ViT-B/16 encoder [9] pretrained on ImageNet-1K [41]. We
+apply our method to activations of the last layer before Soft-
+max as presented on Figure 2. Additional architectural and
+implementation details are provided in SM 8.
+Metrics.
+We evaluate the performance of our method
+using two standard continual learning metrics: Average Ac-
+curacy (AA) and Average Forgetting (AF). Formal defini-
+tions of these metrics are provided in SM 11.
+4.2. Results
+This subsection discusses evaluation results of InTAct
+across diverse continual learning benchmarks. Overall, the
+results highlight InTAct’s ability to enhance stability while
+preserving plasticity across varied scenarios.
+Results for Prompt-based Methods (DIL).
+Overall, In-
+TAct consistently delivers the strongest performance across
+all prompt-based methods in the DIL setting, substantially
+improving both AA and reducing AF. The detailed results
+are reported in Tab. 1 for the 6-task DomainNet benchmark,
+where tasks share labels but differ in visual domains. Inte-
+grating InTAct yields gains of 4–6 percentage points in AA
+and decreases AF by up to 60%, with the largest impro-
+vements observed when combined with DualPrompt (AA:
+
+InTAct
+InTAct
+InTAct
+Task N
+Task N+1
+Rysunek 4. Illustration of how the InTAct loss components (Eq. 23) regulate representation updates between consecutive tasks. LIntDrift and
+LFeat preserve previously learned in-layer transformations within protected activation hypercubes (pink), maintaining consistency of past
+feature space while allowing adaptation in new regions. LVar constrains the expansion of activation hypercubes so that new regions (orange)
+remain compact and balanced across tasks, preventing uncontrolled growth. LAlign enforces smooth transitions by aligning consecutive
+hypercubes and avoiding fragmentation of functional regions. Purple outlines denote the InTAct-regularized case, where the representation
+remains stable and well-aligned across tasks.
+50.87% →56.83%, AF: 12.13 →4.66). Similar trends
+for L2P and CODA-Prompt confirm that InTAct stabilizes
+shared prompt representations effectively across different
+prompting strategies without additional replay mechanisms
+or architectural overhead.
+Tabela 1. Results on the 6-task (345 classes each) DomainNet
+benchmark (DIL setting). We report the mean and standard de-
+viation of AA and AF averaged over 3 random seeds.
+Method
+AA (↑)
+AF (↓)
+Upper-Bound
+79.65
+–
+L2P
+48.44 ± 0.09
+14.56 ± 0.05
+w/ InTAct
+53.44 ± 0.02
+6.95 ± 0.99
+DualPrompt
+50.87 ± 0.31
+12.13 ± 0.2
+w/ InTAct
+56.83 ± 0.28
+4.66 ± 0.11
+CODA-P
+52.52 ± 0.22
+11.54 ± 0.16
+w/ InTAct
+57.36 ± 0.25
+6.49 ± 0.11
+Tab. 2 further shows consistent benefits on the 15-task
+ImageNet-R benchmark, a more challenging scenario with
+greater domain diversity and more incremental steps. Note
+that integrating InTAct not only preserves prior knowledge
+but can also enhance performance on earlier tasks (e.g., AF
+drops from 1.01 to −0.36 with DualPrompt), highlighting
+the method’s ability to stabilize representations in prompt-
+based architectures. Across both benchmarks, InTAct im-
+proves stability while maintaining plasticity, all without re-
+play buffers, replay, or architectural changes.
+Across both DomainNet and ImageNet-R in the DIL set-
+ting, InTAct consistently enhances stability without hinde-
+ring plasticity. These gains are achieved without additional
+replay mechanisms or architectural modifications.
+Tabela 2. Results on the 15-task (200 classes each) ImageNet-R
+benchmark (DIL setting). We report the mean and standard devia-
+tion of AA and AF averaged over 5 random seeds.
+Method
+AA (↑)
+AF (↓)
+Upper-Bound
+77.13
+−
+L2P
+50.34 ± 0.26
+1.46 ± 0.19
+w/ InTAct
+58.34 ± 0.24
+0.02 ± 0.1
+DualPrompt
+53.31 ± 0.36
+1.01 ± 0.17
+w/ InTAct
+61.85 ± 0.45
+−0.36 ± 0.17
+CODA-P
+61.21 ± 0.49
+0.68 ± 0.11
+w/ InTAct
+66.11 ± 0.24
+0.35 ± 0.07
+Results for Prompt-based Methods (CIL).
+Tab. 3 re-
+ports AA and AF on ImageNet-R for 10- and 20-step CIL
+scenarios. Across all baselines, integrating InTAct consi-
+stently improves or matches performance, confirming its
+robustness and plug-and-play compatibility with diverse
+prompt-based continual learning frameworks. For L2P, In-
+TAct delivers clear AA gains and lower standard devia-
+tions, indicating that our regularization stabilizes optimiza-
+tion and promotes smoother learning. DualPrompt also be-
+nefits, maintaining high accuracy with reduced forgetting
+and improved consistency. The largest improvements ap-
+pear for CODA-Prompt, where InTAct boosts AA by nearly
+one point in both settings, showing that functional preserva-
+tion effectively complements prompt-based methods.
+This improvement is most pronounced in CODA-Prompt
+due to its shared, trainable prompt pool, composed of
+prompt tokens (Pm), keys (Km), and attention vectors
+(Am), which are jointly updated across tasks. During con-
+tinual learning, this shared structure can easily drift, cau-
+sing instability in both the generated prompts and the clas-
+
+Tabela 3. Results on the ImageNet-R dataset (CIL setting). We
+report the mean and standard deviation of AA and AF averaged
+over 5 random seeds.
+Method
+10 steps
+20 steps
+AA (↑)
+AF (↓)
+AA (↑)
+AF (↓)
+Upper-Bound
+77.13
+–
+77.13
+–
+L2P
+69.29 ± 0.73 2.03 ± 0.19
+65.89 ± 1.30 1.24 ± 0.14
+w/ InTAct
+69.44 ± 0.45 2.89 ± 0.46
+66.18 ± 0.36 1.30 ± 0.13
+DualPrompt
+71.32 ± 0.62 1.71 ± 0.24
+67.87 ± 1.39 1.07 ± 0.14
+w/ InTAct
+70.98 ± 0.60 1.68 ± 0.07 67.89 ± 0.66 1.19 ± 0.18
+CODA-P
+75.45 ± 0.56 1.60 ± 0.20
+72.37 ± 1.19 1.00 ± 0.15
+w/ InTAct
+76.40 ± 0.16 2.07 ± 0.16
+73.30 ± 0.41 1.56 ± 0.26
+sifier head. InTAct counteracts this by jointly stabilizing the
+prompt-generation process and the classifier’s decision bo-
+undaries through its regularization losses (LIntDrift, LFeat,
+LAlign). This coordinated stabilization reduces internal re-
+presentation drift and prevents interference between evo-
+lving prompts and classification layers.
+Overall, InTAct enhances the stability and consistency of
+CODA-Prompt, demonstrating that even advanced prompt-
+based approaches remain vulnerable to internal functional
+drift. By precisely regulating how and where a model’s re-
+presentations evolve during continual learning, InTAct pro-
+vides a principled and broadly applicable solution. Consi-
+stent findings are observed on the CIFAR-100 dataset, with
+additional results reported in SM 15.
+4.3. Ablations
+In Tab. 4, we report an ablation study analyzing the con-
+tribution of each component of InTAct. The experiment is
+conducted on the Split CIFAR-10 benchmark under the DIL
+setting. We report the AA averaged over five seeds for the
+full model and three seeds for each ablated variant, where
+a single component is removed at a time. The results show
+that excluding any term consistently degrades performance,
+demonstrating that all components of InTAct contribute in
+a complementary manner. The most significant drop oc-
+curs when LVar is removed, highlighting its importance in
+controlling the compactness of activation intervals. Without
+this term, the network’s representations are regularized over
+excessively large hypercubes, as described in Eq. (5), which
+weakens the effectiveness of our regularization. Moreover,
+we also investigate how different values of λVar affect AA,
+and present these results in SM 15.
+We also observe that removing LAlign slightly decreases
+AA. This component prevents distant activation regions
+from merging into excessively large hypercubes when tasks
+are related (see Eq. (4)). Without it, two small but separate
+regions can combine into a much larger one, causing the
+model to regularize a substantial amount of irrelevant space
+Tabela 4. Ablation study of different components in InTAct. The
+results are averaged over 3 random seeds for ablations.
+Method
+AA
+InTAct
+75.84 ± 0.63
+Ablate LIntDrift
+71.63 ± 1.34
+Ablate LVar
+67.43 ± 1.32
+Ablate LAlign
+74.37 ± 0.46
+Ablate LFeat
+71.04 ± 0.54
+and limiting its ability to adapt effectively to new tasks.
+4.4. Additional Experiments
+Impact of λIntDrift on AA in DIL setting.
+Fig. 5 il-
+lustrates how different values of λIntDrift affect the sta-
+bility–plasticity trade-off when InTAct is integrated into
+CODA-Prompt under the DIL scenario on the Domain-
+Net dataset. While accuracy naturally decreases as new ta-
+sks are introduced, the strength of the regularization plays
+a key role in controlling this decline. A significant value
+(λIntDrift = 0.1) overconstrains the model, hindering adap-
+tation to new tasks, whereas a very small value (λIntDrift =
+0.0001) provides insufficient functional stability. The best
+performance is obtained for λIntDrift = 0.001, which yields
+the highest AA across tasks by achieving a balanced trade-
+off.
+Rysunek 5. Impact of the λIntDrift hyperparameter on AA for the
+CODA-Prompt method. Results are averaged over 2 random seeds.
+These results confirm that our regularization does not
+overconstrain the model and effectively mediates the sta-
+bility–plasticity balance. All other hyperparameters are fi-
+xed to the optimal configuration previously determined for
+CODA-Prompt on DomainNet under the DIL setting to iso-
+late the effect of λIntDrift. For clarity, the reported values cor-
+respond to the scaled coefficient λ′
+IntDrift =
+λIntDrift
+C
+where
+C is the total number of classes in the benchmark (here,
+C = 345).
+
+5. Conclusions
+We introduced InTAct, a continual learning method that
+preserves knowledge at the activation level. Rather than
+constraining parameters or replaying data, InTAct protects
+key activation ranges that encode past knowledge, keeping
+transformations consistent within these regions while al-
+lowing flexibility elsewhere. This prevents representation
+drift without reducing adaptability. InTAct is lightweight,
+model-agnostic, and integrates easily with existing architec-
+tures, improving stability and accuracy across benchmarks
+such as DomainNet and ImageNet-R, and narrowing the gap
+to the multi-task upper bound.
+Limitations.
+Current activation regions are represented as
+hypercubes, which may not capture the full complexity of
+activation geometries. Future work will explore more fle-
+xible region representations and improved mechanisms for
+consolidating knowledge across tasks.
+Literatura
+[1] Rahaf Aljundi, Francesca Babiloni, Mohamed Elhoseiny,
+Marcus Rohrbach, and Tinne Tuytelaars. Memory aware sy-
+napses: Learning what (not) to forget, 2018. 2, 1
+[2] Pietro Buzzega, Matteo Boschini, Angelo Porrello, Davide
+Abati, and Simone Calderara. Dark experience for general
+continual learning: a strong, simple baseline. In Advances in
+neural information processing systems, pages 15920–15930,
+2020. 2, 1
+[3] Arslan Chaudhry, Marc’Aurelio Ranzato, Marcus Rohrbach,
+and Mohamed Elhoseiny. Efficient lifelong learning with a-
+gem. In International Conference on Learning Representa-
+tions, 2018. 7
+[4] Arslan Chaudhry, Marcus Rohrbach, Mohamed Elhose-
+iny, Thalaiyasingam Ajanthan, Puneet K. Dokania, Philip
+H. S. Torr, and Marc’Aurelio Ranzato.
+On tiny episo-
+dic memories in continual learning, 2019.
+arXiv preprint
+arXiv:1902.10486. 2, 1
+[5] Zhikang Chen, Abudukelimu Wuerkaixi, Sen Cui, Haoxuan
+Li, Ding Li, Jingfeng Zhang, Bo Han, Gang Niu, Houfang
+Liu, Yi Yang, Sifan Yang, Changshui Zhang, and Tianling
+Ren. Learning without isolation: Pathway protection for con-
+tinual learning. In International Conference on Machine Le-
+arning, 2025. 2, 1
+[6] Germund Dahlquist and Åke Björck. Numerical methods in
+scientific computing, volume I. SIAM, 2008. 3, 2
+[7] MohammadReza Davari, Nader Asadi, Sudhir Mudur, Rahaf
+Aljundi, and Eugene Belilovsky. Probing representation for-
+getting in supervised and unsupervised continual learning,
+2022. 5
+[8] Matthias De Lange, Rahaf Aljundi, Marc Masana, Sarah Pa-
+risot, Xu Jia, Ales Leonardis, Gregory Slabaugh, and Tinne
+Tuytelaars. A continual learning survey: Defying forgetting
+in classification tasks. IEEE transactions on pattern analysis
+and machine intelligence, 44(7):3366–3385, 2021. 2, 1
+[9] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,
+Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner, Mo-
+stafa Dehghani, Matthias Minderer, Georg Heigold, Sylvain
+Gelly, Jakob Uszkoreit, and Neil Houlsby. An image is worth
+16x16 words: Transformers for image recognition at scale,
+2021. 6, 2, 4
+[10] Arthur Douillard and Timothée Lesort. Continuum: Simple
+management of complex continual learning scenarios, 2021.
+4
+[11] Zhanxin Gao, Jun Cen, and Xiaobin Chang.
+Consistent
+prompting for rehearsal-free continual learning. In Proce-
+edings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 28463–28473, 2024. 1, 3
+[12] Dipam Goswami, Yuyang Liu, Bartłomiej Twardowski, and
+Joost van de Weijer. Fecam: Exploiting the heterogeneity of
+class distributions in exemplar-free continual learning, 2024.
+1
+[13] Dipam Goswami, Albin Soutif-Cormerais, Yuyang Liu, San-
+desh Kamath, Bart Twardowski, and Joost van de Weijer. Re-
+surrecting old classes with new data for exemplar-free conti-
+nual learning. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages 28525–
+28534, 2024. 2
+[14] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun.
+Deep residual learning for image recognition, 2015. 6, 4
+[15] Dan Hendrycks, Steven Basart, Norman Mu, Saurav Kada-
+vath, Frank Wang, Evan Dorundo, Rahul Desai, Tyler Zhu,
+Samyak Parajuli, Mike Guo, Dawn Song, Jacob Steinhardt,
+and Justin Gilmer. The many faces of robustness: A critical
+analysis of out-of-distribution generalization. ICCV, 2021.
+2, 4
+[16] Yen-Chang Hsu, Yen-Cheng Liu, Anita Ramasamy, and
+Zsolt Kira.
+Re-evaluating continual learning scenarios: A
+categorization and case for strong baselines, 2019. 4
+[17] Yusong Hu, Zichen Liang, Fei Yang, Qibin Hou, Xialei Liu,
+and Ming-Ming Cheng. Kac: Kolmogorov-arnold classifier
+for continual learning, 2025. 1
+[18] Paul Janson, Wenxuan Zhang, Rahaf Aljundi, and Moha-
+med Elhoseiny. A simple baseline that questions the use of
+pretrained-models in continual learning. In NeurIPS 2022
+Workshop on Distribution Shifts: Connecting Methods and
+Applications, 2022. 1
+[19] Luc Jaulin, Michel Kieffer, Olivier Didrit, and Eric Walter.
+Applied Interval Analysis: With Examples in Parameter and
+State Estimation, Robust and Control.
+Springer, London,
+2001. 6, 7
+[20] Sanghwan Kim, Lorenzo Noci, Antonio Orvieto, and Tho-
+mas Hofmann. Achieving a better stability-plasticity trade-
+off via auxiliary networks in continual learning. In Proce-
+edings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 11930–11939, 2023. 2, 1
+[21] James Kirkpatrick, Razvan Pascanu, Neil Rabinowitz, Joel
+Veness, Guillaume Desjardins, Andrei A. Rusu, Kieran
+Milan, John Quan, Tiago Ramalho, Agnieszka Grabska-
+Barwinska, Demis Hassabis, Claudia Clopath, Dharshan Ku-
+maran, and Raia Hadsell. Overcoming catastrophic forget-
+ting in neural networks. Proceedings of the National Aca-
+demy of Sciences, 114(13):3521–3526, 2017. 1, 2
+
+[22] Yajing Kong, Liu Liu, Zhen Wang, and Dacheng Tao. Ba-
+lancing stability and plasticity through advanced null space
+in continual learning. In European Conference on Computer
+Vision, pages 219–236, 2022. 2, 1
+[23] Alex Krizhevsky. Learning multiple layers of features from
+tiny images. University of Toronto, 2012. 4
+[24] Patryk Krukowski, Anna Bielawska, Kamil Ksi ˛a˙zek, Paweł
+Wawrzy´nski, Paweł Batorski, and Przemysław Spurek. Hint:
+Hypernetwork approach to training weight interval regions in
+continual learning. Information Sciences, 717:122261, 2025.
+3, 2
+[25] Xiang Lisa Li and Percy Liang. Prefix-tuning: Optimizing
+continuous prompts for generation, 2021. 2
+[26] Zhizhong Li and Derek Hoiem. Learning without forgetting.
+IEEE transactions on pattern analysis and machine intelli-
+gence, 40(12):2935–2947, 2017. 2, 1, 11
+[27] Yan-Shuo Liang and Wu-Jun Li. Inflora: Interference-free
+low-rank adaptation for continual learning. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 23638–23647, 2024. 2, 1
+[28] Xuan Liu and Xiaobin Chang. Lora subtraction for drift-
+resistant space in exemplar-free continual learning. In Pro-
+ceedings of the IEEE/CVF conference on Computer Vision
+and Pattern Recognition, pages 15308–15318, 2025. 2
+[29] David Lopez-Paz and Marc’Aurelio Ranzato. Gradient epi-
+sodic memory for continual learning, 2022. 2, 1
+[30] Tamasha Malepathirana, Damith Senanayake, and Saman
+Halgamuge.
+Napa-vq: Neighborhood-aware prototype au-
+gmentation with vector quantization for continual learning.
+In Proceedings of the IEEE/CVF International Conference
+on Computer Vision, pages 11674–11684, 2023. 1
+[31] Arun Mallya and Svetlana Lazebnik. Packnet: Adding mul-
+tiple tasks to a single network by iterative pruning. In Pro-
+ceedings of the IEEE conference on Computer Vision and
+Pattern Recognition, pages 7765–7773, 2018. 2, 1
+[32] Arun Mallya, Dillon Davis, and Svetlana Lazebnik. Piggy-
+back: Adapting a single network to multiple tasks by learning
+to mask weights. In Proceedings of the European Conference
+on Computer Vision (ECCV), pages 67–82, 2018. 2, 1
+[33] Marc Masana, Xialei Liu, Bartlomiej Twardowski, Mikel
+Menta, Andrew D. Bagdanov, and Joost van de Weijer.
+Class-incremental learning: survey and performance evalu-
+ation on image classification. IEEE Transactions on Pattern
+Analysis and Machine Intelligence, 45(5):5513–5533, 2022.
+2, 1
+[34] Michael McCloskey and Neal J. Cohen. Catastrophic inter-
+ference in connectionist networks: The sequential learning
+problem. pages 109–165. Academic Press, 1989. 1
+[35] Ramon E. Moore, R. Baker Kearfott, and Michael J. Cloud.
+Introduction to interval analysis. SIAM, 2009. 3, 2, 5, 7, 8
+[36] German I. Parisi, Ronald Kemker, Jose L. Part, Christopher
+Kanan, and Stefan Wermter. Continual lifelong learning with
+neural networks: A review. Neural Networks, 113:475–480,
+2019. 2, 1
+[37] Xingchao Peng, Qinxun Bai, Xide Xia, Zijun Huang, Kate
+Saenko, and Bo Wang. Moment matching for multi-source
+domain adaptation. In Proceedings of the IEEE International
+Conference on Computer Vision, pages 1406–1415, 2019. 2,
+4
+[38] Grégoire Petit, Adrian Popescu, Hugo Schindler, David Pi-
+card, and Bertrand Delezoide. Fetril: Feature translation for
+exemplar-free class-incremental learning. In Proceedings of
+the IEEE/CVF winter conference on applications of compu-
+ter vision, pages 3911–3920, 2023. 2
+[39] Matthew Riemer, Ignacio Cases, Robert Ajemian, Miao Liu,
+Irina Rish, Yuhai Tu, and Gerald Tesauro. Learning to learn
+without forgetting by maximizing transfer and minimizing
+interference. In International Conference on Learning Re-
+presentations, 2018. 2, 1
+[40] David Rolnick, Arun Ahuja, Jonathan Schwarz, Timothy P.
+Lillicrap, and Greg Wayne. Experience replay for continual
+learning, 2019. 11
+[41] Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, San-
+jeev Satheesh, Sean Ma, Zhiheng Huang, Andrej Karpathy,
+Aditya Khosla, Michael Bernstein, Alexander C. Berg, and
+Li Fei-Fei. Imagenet large scale visual recognition challenge,
+2015. 6
+[42] Andrei A. Rusu, Neil C. Rabinowitz, Guillaume Desjardins,
+Hubert Soyer, James Kirkpatrick, Koray Kavukcuoglu, Ra-
+zvan Pascanu, and Raia Hadsell.
+Progressive neural ne-
+tworks, 2016. arXiv preprint arXiv:1606.04671. 2, 1
+[43] Andrei A. Rusu, Neil C. Rabinowitz, Guillaume Desjardins,
+Hubert Soyer, James Kirkpatrick, Koray Kavukcuoglu, Ra-
+zvan Pascanu, and Raia Hadsell.
+Progressive neural ne-
+tworks, 2022. 2, 1
+[44] Joan Serrà, Dídac Surís, Marius Miron, and Alexandros Ka-
+ratzoglou. Overcoming catastrophic forgetting with hard at-
+tention to the task. In International Conference on Machine
+Learning, pages 4548–4557, 2018. 2, 1
+[45] Wuxuan Shi and Mang Ye.
+Prototype reminiscence and
+augmented asymmetric knowledge aggregation for non-
+exemplar class-incremental learning. In Proceedings of the
+IEEE/CVF International Conference on Computer Vision,
+pages 1772–1781, 2023. 1
+[46] Hanul Shin, Jung Kwon Lee, Jaehong Kim, and Jiwon Kim.
+Continual learning with deep generative replay. In Advances
+in neural information processing systems, 2017. 2, 1
+[47] James Seale Smith, Leonid Karlinsky, Vyshnavi Gutta, Paola
+Cascante-Bonilla, Donghyun Kim, Assaf Arbelle, Rameswar
+Panda, Rogerio Feris, and Zsolt Kira. Coda-prompt: Con-
+tinual decomposed attention-based prompting for rehearsal-
+free continual learning, 2023. 1, 3, 7, 10, 11, 12
+[48] Shixiang Tang, Dapeng Chen, Jinguo Zhu, Shijie Yu, and
+Wanli Ouyang.
+Layerwise optimization by gradient de-
+composition for continual learning. In Proceedings of the
+IEEE/CVF conference on Computer Vision and Pattern Re-
+cognition, pages 9634–9643, 2021. 2, 1
+[49] Marco Toldo and Mete Ozay. Bring evanescent representa-
+tions to life in lifelong class incremental learning. In Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision
+and Pattern Recognition, pages 16732–16741, 2022. 1
+[50] Edoardo Urettini and Antonio Carta. Online curvature-aware
+replay: Leveraging 2nd order information for online conti-
+nual learning. In International Conference on Machine Le-
+arning, 2025. 2, 1
+
+[51] Shipeng Wang, Xiaorong Li, Jian Sun, and Zongben Xu. Tra-
+ining networks in null space of feature covariance for conti-
+nual learning. In Proceedings of the IEEE/CVF conference
+on Computer Vision and Pattern Recognition, pages 184–
+193, 2021. 2, 1
+[52] Zhen Wang, Liu Liu, Yiqun Duan, Yajing Kong, and Da-
+cheng Tao. Continual learning with lifelong vision transfor-
+mer. In Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition, pages 171–181, 2022.
+2, 1
+[53] Zifeng Wang, Zizhao Zhang, Sayna Ebrahimi, Ruoxi Sun,
+Han Zhang, Chen-Yu Lee, Xiaoqi Ren, Guolong Su, Vincent
+Perot, Jennifer Dy, and Tomas Pfister. Dualprompt: Com-
+plementary prompting for rehearsal-free continual learning,
+2022. 1, 3
+[54] Zifeng Wang, Zizhao Zhang, Chen-Yu Lee, Han Zhang, Ru-
+oxi Sun, Xiaoqi Ren, Guolong Su, Vincent Perot, Jennifer
+Dy, and Tomas Pfister. Learning to prompt for continual le-
+arning, 2022. 1, 3
+[55] Maciej Wołczyk, Karol Piczak, Bartosz Wójcik, Lukasz Pu-
+stelnik, Paweł Morawiecki, Jacek Tabor, Tomasz Trzcinski,
+and Przemysław Spurek. Continual learning with guarantees
+via weight interval constraints. In International Conference
+on Machine Learning, pages 23897–23911. PMLR, 2022. 3,
+2
+[56] Mitchell Wortsman, Vivek Ramanujan, Rosanne Liu, Ani-
+ruddha Kembhavi, Mohammad Rastegari, Jason Yosinski,
+and Ali Farhadi. Supermasks in superposition. In Advan-
+ces in Neural Information Processing Systems, pages 15173–
+15184, 2020. 2, 1
+[57] Chenshen Wu, Luis Herranz, Xialei Liu, Yaxing Wang, Joost
+van de Weijer, and Bogdan Raducanu. Memory replay gans:
+Learning to generate new categories without forgetting. In
+Advances in Neural Information Processing Systems, 2018.
+2, 1
+[58] Han Xiao, Kashif Rasul, and Roland Vollgraf.
+Fashion-
+mnist: a novel image dataset for benchmarking machine le-
+arning algorithms, 2017. 4
+[59] Lu Yu, Bartlomiej Twardowski, Xialei Liu, Luis Herranz,
+Kai Wang, Yongmei Cheng, Shangling Jui, and Joost van de
+Weijer. Semantic drift compensation for class-incremental
+learning.
+In Proceedings of the IEEE/CVF conference on
+computer vision and pattern recognition, pages 6982–6991,
+2020. 1
+[60] Friedemann Zenke, Ben Poole, and Surya Ganguli. Conti-
+nual learning through synaptic intelligence, 2017. 2, 1
+[61] Da-Wei Zhou, Hai-Long Sun, Han-Jia Ye, and De-Chuan
+Zhan. Expandable subspace ensemble for pre-trained model-
+based class-incremental learning.
+In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern Re-
+cognition, pages 23554–23564, 2024. 2
+
+InTAct: Interval-based Task Activation Consolidation for Continual Learning
+Supplementary Material
+6. Extended Overview of Related Works
+This section provides an extended literature review of
+continual learning methods. It first categorizes classical
+approaches into replay-based, regularization-based, and
+parameter-isolation techniques. Subsequently, the focus shi-
+fts to modern parameter-efficient methods like prompt-
+based continual learning (e.g., L2P, DualPrompt, CODA-
+Prompt) and contemporary strategies for managing feature
+drift in the representation space. Finally, we review recent
+applications of interval arithmetic in continual learning,
+contrasting these ideas with our proposed approach of re-
+gularizing functional transformations across model layers.
+Continual Learning.
+Continual learning methods [8, 33,
+36] can generally be divided into three categories: replay-
+based, regularization-based, and parameter-isolation-based.
+Replay-based methods employ memory or rehearsal me-
+chanisms to recall past tasks during training, thereby ma-
+intaining low loss on those tasks. Two primary strategies
+are exemplar replay, which stores selected training samples
+[2–4, 27, 29, 39, 50], and generative replay, where models
+synthesize previous data using generative models [46, 57].
+Regularization-based methods typically introduce a regu-
+larization term into the loss function to constrain parame-
+ter changes for previously learned tasks. This regulariza-
+tion may be defined by the current task data [20, 26] or
+previous tasks data [1, 5, 21, 60] variants. Recent methods
+limit weight updates to null space of previous data feature
+covariance [22, 48, 51, 52]. Liang and Li [27] leverage gra-
+dient information from old tasks to construct a subspace
+for LoRA’s dimensionality reduction matrix, thereby redu-
+cing interference between the current task and the previous
+ones. Parameter-isolation methods learn task-specific sub-
+networks within the model. Techniques such as Progressive
+Neural Networks [42, 43], Piggyback [32], PackNet [31],
+HAT [44] and SupSup [56] allocate and combine parame-
+ters for individual tasks. While effective in task-aware set-
+tings, these methods are based on assigning test samples to
+tasks, which may be problematic in some continual learning
+scenarios.
+Prompt-Based Continual Learning.
+These methods are
+philosophically rooted in parameter-efficient learning,
+where the vast majority of the model (the backbone) rema-
+ins unchanged to prevent catastrophic forgetting. The core
+mechanism involves introducing a small set of new, learna-
+ble parameters called prompts for each task. These prompts
+are typically vectors that are prepended to the input sequ-
+ence embeddings or inserted into intermediate layers. This
+effectively steers the frozen model’s behavior towards the
+new task’s objective without overwriting knowledge from
+previous tasks.
+A key innovation in this area is the concept of a prompt
+pool. Rather than learning a single, monolithic prompt for
+each task, methods like L2P [11] learn a collection of shared
+prompt vectors. During inference, the model uses a query-
+based mechanism (e.g., matching input features to prompt
+keys) to select a sparse combination of prompts from this
+pool that are most relevant to the current input instance. This
+approach not only adapts to the current task but also allows
+the model to potentially recognize and handle inputs from
+previous tasks by selecting the appropriate "old"prompts,
+enabling a form of rehearsal-free task routing.
+Further refinements focus on the structure and function
+of the prompts themselves. For instance, DualPrompt [47]
+introduced the idea of learning two distinct sets of prompts:
+a general prompt shared across all tasks to capture com-
+mon knowledge, and a set of task-specific prompts to cap-
+ture task-unique features. CoDA-Prompt [53] builds on this
+by using a decomposed attention mechanism, allowing the
+model to explicitly query general versus task-specific know-
+ledge encoded in the prompts, thereby improving modula-
+rity and reducing interference between task-specific instruc-
+tions.
+Despite their success in parameter-efficient, rehearsal-
+free learning, these methods face a fundamental limita-
+tion, particularly in domain-incremental learning (DIL):
+they struggle to adapt the classifier to distributional shifts
+between tasks. While the backbone features remain largely
+fixed, the learned prompts or adapters often fail to capture
+semantic drift in task labels or decision boundaries. Con-
+sequently, when a new task comes from a domain substan-
+tially different from previous ones, the classifier may mi-
+srepresent the task despite informative backbone features.
+This highlights the need for future approaches that strategi-
+cally update classifier parameters or the backbone itself, or
+develop more flexible prompt-tuning strategies capable of
+handling evolving task distributions.
+Addressing Feature Drift in Continual Learning.
+A
+critical challenge in continual learning is the feature drift
+of old classes when new tasks are learned without access to
+previous samples. Methods often define prototypes of clas-
+ses [12, 18] in the feature space and prevent their drift. SDC
+[59] and [49] estimate and compensate for feature drift with
+current-task data following each training phase. NAPA-VQ
+[30] and Prototype Reminiscence [45] reshape old prototy-
+
+pes through topological information with current-data sam-
+ples. FeTrIL [38] introduces a feature translation strategy
+that aligns new and old class feature distributions. ADC [13]
+generates adversarial pseudo-exemplars of new classes to
+adjust prototypes of earlier classes. EASE [61] introduces a
+semantic-guided prototype complement strategy that resha-
+pes prototypes of old classes in the feature space adjusted by
+the current task’s data. Liu and Chang [28] defines a drift-
+resistant space in which the model weights can be adjusted
+to the new task without interfering with old data features. In
+this work, we do not refer to the concept of prototype. In-
+stead, we mitigate the feature drift by enforcing each layer
+to preserve its performed transformation on its subdomain
+defined by the previous tasks’ data.
+Interval Arithmetic in Continual Learning.
+Interval
+arithmetic [6, 35] has been applied to continual learning in
+InterContiNet [55], where the key idea is to employ inte-
+rval constraints on the weights associated with successive
+tasks. The intersection of these intervals defines the subset
+of weights that yield satisfactory performance across all ta-
+sks. HINT [24] employs intervals in the embedding space
+and leverages a hypernetwork to map them to the weight
+space of the target network. In contrast, we propose a novel
+approach, also grounded in interval arithmetic: each layer
+of the neural network is regularized to preserve its transfor-
+mation within a subdomain delineated by a hyper-interval,
+which encapsulates data from previously learned tasks.
+Parameter-Isolation Approaches.
+Another strategy is to
+prevent interference across tasks by isolating parameters.
+Progressive Neural Networks [43] expand the architecture
+with task-specific columns and lateral connections, reusing
+prior knowledge without overwriting it. While this elimi-
+nates forgetting by construction, network growth scales li-
+nearly with the number of tasks, making these approaches
+impractical for long task sequences or large-scale settings.
+Regularization-Based
+Methods.
+Regularization-based
+approaches constrain weight updates to preserve infor-
+mation from earlier tasks. Elastic Weight Consolidation
+(EWC) [60] introduces a Fisher information–based penalty
+to protect important parameters, while Synaptic Intel-
+ligence (SI) [26] and Memory Aware Synapses (MAS)
+[21] estimate weight importance through gradient flow.
+Learning Without Forgetting (LwF) [1] further anchors
+predictions of past tasks using knowledge distillation.
+Despite their success, these methods focus primarily on the
+parameter space, leaving internal representations vulnera-
+ble to drift. As a result, preserving weight importance does
+not necessarily maintain the functional behavior of learned
+features.
+Representation-Level Stability.
+A complementary di-
+rection emphasizes stabilizing learned representations ra-
+ther than weights. Approaches inspired by interval analysis
+[35] and activation regularization aim to limit representa-
+tion drift by constraining activations to remain within task-
+specific bounds. However, these ideas have seen limited ad-
+option in continual learning due to the difficulty of summa-
+rizing activation distributions efficiently.
+7. Preliminaries
+This section presents the key technical concepts underlying
+prompt-based continual learning. We begin by explaining
+how parameter-efficient prefix tuning allows a frozen pre-
+trained feature extractor to be adapted without modifying
+its weights. We then provide an overview of three represen-
+tative prompt-management frameworks, L2P, DualPrompt,
+and CODA-Prompt, which illustrate how modern methods
+organize and select prompts to support rehearsal-free lear-
+ning while minimizing interference across tasks.
+Prompt-Based
+Continual
+Learning.
+Recent
+work
+explores continual learning through prompts, leveraging
+the representational capacity of pretrained vision models.
+The core idea is to introduce a small set of learnable prompt
+tokens, which guide a frozen network backbone to adapt
+to new tasks, significantly reducing catastrophic forgetting
+without requiring rehearsal of old data. We now detail the
+mechanics and principal architectures of these methods.
+Let fθ denote a pretrained encoder (e.g., a Vision Trans-
+former [9]) with frozen parameters θ. We denote the input
+token embeddings to the l-th layer as h(l) ∈RL×D, where
+L is the sequence length (tokens) and D is the embed-
+ding dimension. In prompt-based continual learning, each
+task is associated with a set of learnable prompt vectors,
+p ∈RLp×D, where Lp is the prompt length. These prompts
+serve as additional tokens that condition the model’s self-
+attention, allowing it to adapt to new tasks without modify-
+ing the shared backbone parameters θ.
+A common and widely used implementation of prompt
+injection is prefix-tuning [25]. In a standard multi-head self-
+attention (MSA) layer, the input h(l) is linearly projected
+into Query (Q), Key (K), and Value (V ) matrices using fro-
+zen projection matrices WQ, WK, WV . Prefix-tuning intro-
+duces a layer-specific prompt p(l) composed of two sets of
+vectors, p(l)
+K , p(l)
+V
+∈RLp×D. These vectors are prepended
+(concatenated) to the K and V matrices, respectively, re-
+placing the standard MSA operation with a prompted one:
+Q = h(l)WQ,
+K′ = [p(l)
+K ; h(l)WK],
+V ′ = [p(l)
+V ; h(l)WV ],
+h(l+1) = MSA(Q, K′, V ′),
+(17)
+
+Where MSA(·) denotes the standard multi-head self-
+attention operation, [; ] is concatenation along the sequence
+dimension, and WQ, WK, WV are the frozen projection ma-
+trices. K′ and V ′ are the augmented Key and Value ma-
+trices incorporating the prompt components p(l)
+K and p(l)
+V .
+where [; ] denotes concatenation along the sequence length
+dimension. This design enables task-specific adaptation pu-
+rely through the small set of learnable prompts p(l) while
+keeping the entire backbone fθ frozen. Additionally, the
+model includes a trainable classifier head (a linear layer)
+whose weights are optimized alongside the prompts to map
+the prompt-adapted feature representations to the specific
+class logits.
+Prompt Selection and Memory Structure.
+A central
+challenge is managing and selecting the correct prompts
+when the task identity is unknown at test time (task-agnostic
+continual learning). Learning to Prompt (L2P) [54] addres-
+ses this by storing prompts in a shared prompt pool (or me-
+mory) P = {(ki, pi)}M
+i=1, where M is the pool size. Each
+prompt pi is associated with a corresponding learnable key
+ki ∈RD.
+During training on each task, a subset of the key-prompt
+pairs is optimized via backpropagation to capture task-
+relevant knowledge, while fθ remains frozen. At inference
+time, L2P uses a two-stage mechanism to process an input
+x:
+1. Query Pass (Prompt Selection): The input x is first
+passed through the frozen, unprompted encoder fθ. The
+resulting output embedding of the [CLS] token, q(x) =
+fθ(x)[CLS], is used as a query. This query is compared
+to all keys ki ∈P using a similarity function (e.g., co-
+sine similarity) to select a subset containing the N most
+relevant prompts.
+2. Execution Pass (Task Processing): The N selected
+prompts {pj}j∈S, with S ⊂{1, . . . , M}, are first aggre-
+gated into a single final prompt, typically via averaging:
+pfinal =
+1
+|S|
+P
+j∈S pj, where |S| denotes cardinality of
+S. The input x is then processed by the encoder fθ a se-
+cond time, where pfinal is injected into the self-attention
+layers (e.g., using Eq. 17).
+This mechanism allows the model to retrieve the most rele-
+vant knowledge from memory based on the input features.
+During training, only the N selected key–prompt pairs are
+updated, while the rest of the pool remains unchanged.
+Optimization Objective.
+Since the prompt retrieval me-
+chanism (e.g., Top-K selection) is typically discrete and
+non-differentiable, gradients from the primary classifica-
+tion objective cannot flow back to update the keys {ki}.
+To address this, prompt-based methods employ a compo-
+site loss function. The learnable prompt vectors p and the
+classifier head are optimized via the standard task loss Ltask
+(e.g., Cross-Entropy). Simultaneously, the keys k are opti-
+mized via an auxiliary surrogate loss Laux (e.g., a mat-
+ching loss) that minimizes the distance between the query
+and the selected keys. The total objective is formulated as
+LTotal = Ltask + λLaux, ensuring that the keys learn to cap-
+ture the input distribution while the prompts learn to mini-
+mize the prediction error.
+Complementary and Decomposed Prompting.
+Dual-
+Prompt [53] extends L2P by dividing the prompt space into
+two functional parts: a shared G-Prompt (g), which captu-
+res task-invariant knowledge, and a task-specific E-Prompt
+(et), which captures task-unique features. DualPrompt in-
+serts E-Prompts et = {e(l)
+t } into a set of shallow layers
+(e.g., layers [1, . . . , Le]) and the G-Prompt g = {g(l)} into
+deeper layers (e.g., layers [Le + 1, . . . , Lg]). The forward
+pass is a sequential application of prompted blocks:
+h(l+1) =
+(
+Block(h(l), e(l)
+t )
+for l ∈[1, Le]
+Block(h(l), g(l))
+for l ∈[Le + 1, Lg]
+(18)
+where Block(h, p) denotes a Transformer block using
+prompt p in its MSA (via Eq. 17). Unlike L2P’s shared
+pool, DualPrompt learns a discrete set of key-prompt pa-
+irs {(kt, et)} (one for each task t). At inference, the query
+q(x) is used to find the best-matching key kt via cosine si-
+milarity, and its corresponding E-Prompt et is selected.
+CODA-Prompt [47] generalizes this mechanism by com-
+posing the final prompt from a weighted sum of M learna-
+ble prompt components P = {Pm}M
+m=1. The query q(x)
+computes a set of attention weights α(x) = {αm(x)}M
+m=1
+over the components, representing a continuous composi-
+tion over the memory:
+αm(x) =
+exp
+ ⟨q(x) ⊙Am, Km⟩/τ
+
+PM
+j=1 exp
+ ⟨q(x) ⊙Aj, Kj⟩/τ
+,
+(19)
+where Km, Am
+∈
+RD are learnable keys and query-
+modulation vectors, ⊙is the Hadamard product, and τ is a
+temperature parameter. The final prompt p(x) is then com-
+posed as:
+p(x) =
+M
+X
+m=1
+αm(x)Pm.
+(20)
+This continuous, differentiable composition increases flexi-
+bility, allows capacity to scale by adding new components
+when needed, and uses orthogonality regularization to re-
+duce interference.
+8. Implementation Details
+This section provides all necessary implementation and
+technical details. We discuss the architectures utilized, the
+construction of the dataset tasks, and the GPU resources
+used for the computations.
+
+Architectures.
+We perform experiments using three wi-
+dely used neural architectures:
+• MLP: A three-layer fully connected network with 400
+hidden units per layer, used for low-dimensional datasets
+(Split MNIST and Split FMNIST). This serves as a ligh-
+tweight baseline.
+• ResNet-18 [14]: A convolutional network with residual
+connections, used for medium-scale datasets such as
+Split CIFAR-10. We use it as a feature extractor and
+unfreeze only the final residual block to allow limited ad-
+aptation. As a head, we employ a lightweight MLP clas-
+sifier consisting of a single hidden layer with 400 units.
+• ViT [9]: A Vision Transformer that operates on patch to-
+kens with global self-attention. It is used for larger and
+more diverse benchmarks (DomainNet and ImageNet-R),
+and also for Split CIFAR-100. In this setup, ViT acts
+as both the feature extractor and the query function in
+prompt-based frameworks, and is kept fully frozen during
+training.
+The classifier head is configured according to the continual
+learning setting. In the CIL scenario, where each task in-
+troduces new, non-overlapping classes, the classifier head is
+expanded by adding output neurons for the new labels. In
+the DIL scenario, the label set is shared across tasks, so the
+classifier head remains fixed and only the input distribution
+changes.
+For prompt-based methods under CIL, the CODA-
+Prompt formulation applies an output masking mechanism
+that restricts predictions to classes observed so far. To en-
+sure fair comparison, we adopt the same masking for all
+prompt-based baselines and for InTAct in CIL experiments,
+including Split CIFAR-10. We do not apply masking in the
+MLP experiments, as the model is intentionally capacity-
+limited and we aim to evaluate each method’s ability to mi-
+tigate forgetting without additional constraints.
+Datasets.
+We evaluate InTAct on six widely used conti-
+nual learning benchmarks that vary in scale, visual comple-
+xity, and type of distribution shift. All datasets are normali-
+zed to the [0, 1] range. Unless stated otherwise, we consider
+both the CIL and DIL scenarios.
+• Split MNIST [16]: The MNIST dataset is partitioned into
+five sequential tasks, each forming a binary classification
+problem from two non-overlapping digit classes.
+• Split
+FMNIST
+[58]:
+Constructed
+analogously
+to
+Split MNIST using Fashion-MNIST, providing higher
+visual diversity and texture across tasks.
+• Split CIFAR-10 [23]: CIFAR-10 is divided into five ta-
+sks, each containing two distinct object categories. This
+benchmark introduces natural image variability, incre-
+asing the difficulty of representation stability.
+• Split CIFAR-100 [23]: CIFAR-100 is split into ten tasks,
+each containing ten classes. This benchmark is evaluated
+only under the CIL setting.
+• DomainNet [37]: A large-scale multi-domain benchmark
+with six visually distinct domains (clipart, painting, real,
+sketch, quickdraw, infograph). In the DIL setting, each
+domain forms one task (6 tasks total). In the CIL setting,
+we split classes into 5 tasks, with all domains present in
+each task. This results in domain-mixed CIL, where se-
+mantic novelty, not visual style, drives task progression.
+• ImageNet-R [15]: A distribution shift benchmark of 200
+ImageNet classes represented as renditions (e.g., dra-
+wings, sculptures, cartoons). In the DIL setting, we con-
+struct sequential tasks by randomly partitioning the 200
+classes into 15 or 5 partitions, while keeping the label
+space constant. In the CIL setting, we evaluate two confi-
+gurations with 10 and 20 tasks, where each task contains a
+disjoint subset of classes, but all domains remain present
+in every task.
+All datasets are normalized to the [0, 1] pixel range. For
+ImageNet-R, images are resized such that the shorter side
+is 256px, then during training, randomly cropped to 224 ×
+224 with random horizontal flip, and normalized using the
+ImageNet mean and standard deviation. At evaluation, the
+random crop is replaced with a center crop of the same size.
+Code and Reproducibility.
+For experiments involving
+prompt-based architectures, we build directly on the offi-
+cial implementation of CODA-Prompt, and we adapt the
+DomainNet DIL task handlers from the KAC GitHub re-
+pository. To ensure strict reproducibility and a fair compa-
+rison with reported baselines, we match the software envi-
+ronment used in CODA-Prompt, including the same timm
+version (0.4.12), which is essential to ensure identical pre-
+trained ViT weights. Our method InTAct is integrated into
+this codebase without modifying the underlying prompt se-
+lection or training routines.
+For
+all
+remaining
+experiments
+(i.e.,
+non-prompt-
+based settings), we implement InTAct along with other
+referenced methods within a custom continual lear-
+ning framework, using the following package versions:
+pyrootutils 1.0.1, hydra-core 1.3.2, omegaconf
+2.3.0, torch 2.5.1, torchvision 0.20.1, lightning
+2.5.0, lightning-fabric 2.5.0, wandb 0.19.1, and
+continuum [10].
+All experiments were conducted on NVIDIA A100
+(80GB) and V100 (32GB) GPUs within a DGX cluster, as
+well as on standalone RTX 4090 machines. Full training pi-
+pelines, configuration files, and scripts for reproducing all
+reported results are available in our GitHub repository.
+9. Selected Hyperparameters of InTAct
+This section summarizes the key hyperparameters and tra-
+ining procedures used for InTAct across all benchmarks. For
+
+transparency, we report both the selected values and the cor-
+responding search ranges.
+Optimization
+Procedure.
+For
+Split
+MNIST,
+Split FMNIST, and Split CIFAR-10 (under both CIL
+and DIL), we select hyperparameters using a Bayesian
+optimization framework. The following search ranges are
+used consistently:
+• Batch size (grid): {512, 256, 128}.
+• Number of epochs (grid): {15, 10, 5}.
+• Learning rate: log-uniform in [10−4, 10−2].
+• λFeat: uniform in [0, 1000].
+• λIntDrift: uniform in [0, 1000].
+• λVar: uniform in [0, 10].
+We emphasize that the baseline results reported in Ta-
+ble 9 and Table 10 are also obtained using Bayesian search.
+For readability, the hyperparameter values reported in the
+tables are rounded; the exact values used in experiments are
+provided in the code. All training scripts and the final selec-
+ted hyperparameters are included in the codebase.
+For Split CIFAR-100, DomainNet, and ImageNet-R
+(prompt-based experiments), we adopt the hyperparameter
+configurations reported in CODA-Prompt wherever availa-
+ble. CODA-Prompt does not provide results for Domain-
+Net under DIL, nor for ImageNet-R under DIL with 5- or
+15-task settings. In these cases, we transfer the best con-
+figuration identified in the corresponding CIL setting for
+DomainNet, and for ImageNet-R we reuse the configura-
+tion tuned for the 5-task CIL scenario. Training schedules
+and learning-rate schedulers remain unchanged. To accom-
+modate GPUs with lower memory capacity, we reduce the
+batch size from 128 to 64 in these experiments.
+For InTAct integrated into prompt-based architectures
+under the CIL setting, we additionally perform a grid se-
+arch over:
+• λVar: {0.001, 0.01, 0.1, 1.0},
+• λIntDrift: {0.0001, 0.001, 0.01, 0.1},
+• λFeat: {0.0001, 0.001, 0.01, 0.1}.
+In the DIL setting, we use the same grid search, but addi-
+tionally scale λIntDrift by the total number of classes encoun-
+tered throughout training. We found that the classifier head
+to which this regularization is applied is sensitive to the ab-
+solute magnitude of λIntDrift, making this scaling beneficial
+for stable optimization.
+The configuration achieving the highest validation AA is
+used for all final results reported in the main paper.
+Best
+Hyperparameters.
+The
+selected
+hyperparame-
+ters for InTAct on Split MNIST, Split FMNIST, and
+Split CIFAR-10 are shown in Table 5. Table 6 reports
+the hyperparameters used when integrating InTAct with
+prompt-based methods. Note that in the CIL setting, we
+set λIntDrift to zero because the outputs corresponding to
+previously seen classes are masked in the classifier at the
+top of the ViT architecture. In this case, the loss component
+defined in Eq. (10) does not apply.
+10. Interval Arithmetic
+Interval arithmetic, introduced in its modern form by Ra-
+mon E. Moore [35], provides a method for performing com-
+putations on ranges of real numbers rather than single po-
+int values. An interval x is a closed, bounded set of real
+numbers defined by its endpoints, x = [xl, xu], such that
+xl ≤xu. This framework is essential for validated nume-
+rics, as it allows for the rigorous containment of numerical
+errors, including rounding errors and uncertainties in initial
+data.
+10.1. Fundamental Operations
+The fundamental principle of interval arithmetic is the inc-
+lusion property: the resulting interval of an operation must
+contain all possible results from applying the same opera-
+tion to any real numbers within the operand intervals. Let
+x = [xl, xu] and y = [yl, yu] be two intervals. The elemen-
+tary arithmetic operations are defined as follows:
+Addition. The sum is obtained by adding the respective
+endpoints:
+x + y = [xl + yl, xu + yu]
+(21)
+Subtraction. The difference is computed by cross-adding
+the endpoints:
+x −y = [xl −yu, xu −yl]
+(22)
+Multiplication. The product is the interval spanning the
+minimum and maximum of the four products of the
+endpoints.
+x · y = [zl, zu],
+(23)
+where
+zl = min(xlyl, xlyu, xuyl, xuyu),
+(24)
+zu = max(xlyl, xlyu, xuyl, xuyu).
+(25)
+Division. Division is defined as multiplication by the reci-
+procal of y, provided that 0 /∈y.
+x
+y = x ·
+ 1
+yu
+, 1
+yl
+
+,
+if 0 /∈[yl, yu]
+Suppose the divisor interval y contains zero. In that
+case, the operation is typically undefined or results in
+extended intervals (e.g., a union of two intervals), de-
+pending on the specific framework being used [35].
+
+Tabela 5. Selected hyperparameters used for InTAct across the Split MNIST, Split FMNIST, and Split CIFAR-10 benchmarks under both
+CIL and DIL settings.
+Dataset
+Scenario
+Batch size
+Epochs
+Learning rate
+λFeat
+λIntDrift
+λVar
+Split MNIST
+CIL
+512
+5
+2 × 10−4
+779
+6
+4.2
+DIL
+512
+5
+1 × 10−4
+602
+634
+4.0
+Split FMNIST
+CIL
+128
+10
+4 × 10−4
+227
+731
+0.8
+DIL
+512
+5
+1 × 10−4
+927
+196
+1.6
+Split CIFAR-10
+CIL
+32
+15
+1 × 9−3
+391
+792
+0.2
+DIL
+64
+5
+6 × 10−4
+239
+96
+0.7
+Tabela 6. Selected regularization hyperparameters for InTAct integrated into prompt-based methods. Rows correspond to datasets and
+learning scenarios; columns list the regularization coefficients used for each base method.
+L2P
+DualPrompt
+CODA-Prompt
+Dataset
+Scenario
+λFeat
+λIntDrift
+λVar
+λFeat
+λIntDrift
+λVar
+λFeat
+λIntDrift
+λVar
+Split CIFAR-100
+CIL
+0.0001
+0.0
+0.001
+0.1
+0.0
+0.001
+0.01
+0.0
+0.001
+DomainNet
+CIL
+0.1
+0.0
+0.001
+0.001
+0.0
+0.01
+0.0001
+0.0
+1.0
+DomainNet
+DIL
+0.1
+0.0001
+345
+0.001
+0.001
+0.001
+345
+0.01
+0.0001
+0.001
+345
+1.0
+ImageNet-R
+CIL (10 tasks)
+0.0001
+0.0
+0.01
+0.001
+0.0
+0.001
+0.1
+0.0
+0.1
+ImageNet-R
+CIL (20 tasks)
+0.001
+0.0
+0.01
+0.0001
+0.0
+0.001
+0.1
+0.0
+0.1
+ImageNet-R
+DIL (5 tasks)
+0.01
+0.1
+200
+0.01
+0.01
+0.0001
+200
+0.1
+0.001
+0.1
+200
+0.1
+ImageNet-R
+DIL (15 tasks)
+0.1
+0.01
+200
+0.01
+0.0001
+0.01
+200
+0.1
+0.1
+0.001
+200
+0.1
+10.2. Interval Matrix Multiplication
+The operations of interval arithmetic extend naturally to li-
+near algebra, enabling computations with interval matrices.
+An interval matrix A is a matrix whose elements are in-
+tervals. Given two compatible interval matrices, A and B,
+their product C = AB is an interval matrix where each ele-
+ment cij the interval extension of the standard dot product
+defines:
+cij =
+n
+X
+k=1
+aikbkj.
+(26)
+Here, each multiplication aikbkj is an interval multiplica-
+tion, and the summation P represents a sequence of inte-
+rval additions. This operation is fundamental for solving in-
+terval linear systems, which are crucial for analyzing the
+effects of bounded uncertainties in models. However, this
+definition is highly susceptible to the dependency problem;
+if the same interval variable appears in multiple entries of
+A or B, the resulting bounds on C can be much wider than
+the true range.
+10.3. Interval Convolutions
+Interval arithmetic can be extended to operations like co-
+nvolutions, which are fundamental in areas such as signal
+processing and image analysis. By representing an input si-
+gnal X and a filter kernel W as intervals, one can analyze
+systems where inputs or parameters are subject to bounded
+uncertainties.
+A key operation is the interval convolution. For a 2D in-
+put X, an interval kernel (filter) W, and an optional interval
+bias b, the resulting output feature map Y is computed as:
+Yij =
+
+X
+k,l
+Xi+k,j+l · Wk,l
+
++ b.
+(27)
+This computation propagates the interval bounds through
+the filtering operation, producing a rigorous enclosure for
+the true output. This is particularly useful in robust state
+estimation and control, where system parameters or measu-
+rements are known to lie within certain bounds [19].
+10.4. Key Properties and Considerations
+While interval arithmetic provides rigorous bounds, it has
+two important characteristics.
+First, to be implemented correctly on a computer, in-
+terval arithmetic must use directed rounding (or outward
+rounding). For any operation, the computed lower bound
+must be rounded down (towards −∞) and the computed
+upper bound must be rounded up (towards +∞). This prac-
+tice, supported by standards like IEEE 754, ensures that
+the resulting floating-point interval strictly encloses the true
+(and often unknowable) real-number interval. It is critical to
+note, however, that standard computing environments and
+programming languages, such as Python or MATLAB, do
+
+not satisfy this requirement by default for general floating-
+point operations. Specialized interval arithmetic libraries
+(e.g., python-intervals, JuliaIntervals) or to-
+ols that explicitly manage floating-point control registers
+are necessary to ensure correct outward rounding and, thus,
+the validity of the computed bounds.
+Second, interval arithmetic is subject to the dependency
+problem. When a variable appears multiple times in an
+expression, interval arithmetic treats each occurrence inde-
+pendently, which can lead to a significant overestimation of
+the true range. A classic example is computing x −x with
+x = [0, 1]. The result is:
+[0, 1] −[0, 1] = [0 −1, 1 −0] = [−1, 1]
+This is a valid enclosure, but the true range for the function
+f(x) = x−x over the interval [0, 1] is simply {0}. This ove-
+restimation, also known as the wrapping effect, is a central
+challenge in interval-based methods, as seen in both matrix
+multiplication and complex dynamic systems [19, 35].
+11. Metrics
+We evaluate continual learning performance using two stan-
+dard metrics: the Average Accuracy (AA) and the Average
+Forgetting (AF). These metrics assess how well the mo-
+del retains knowledge across tasks and how much it forgets
+after learning new ones.
+Let there be N tasks in sequence. Let Ri,j denote the test
+accuracy on task i after the model has been trained on task
+j. In particular, Ri,N represents the final accuracy on task i
+after training on all N tasks.
+Average Accuracy (AA).
+The AA measures the mean
+performance over all tasks at the end of training:
+AA = 1
+N
+N
+X
+i=1
+Ri,N.
+(28)
+A higher AN indicates better overall continual learning per-
+formance and knowledge retention across all tasks.
+Average Forgetting (AF).
+The standard definition of AF,
+as used for example in [3], measures for each task the gap
+between its best performance and its final performance:
+˜
+AF =
+1
+N −1
+N−1
+X
+i=1
+ max
+j∈{i,...,N} Ri,j −Ri,N
+
+,
+(29)
+where Ri,j denotes the accuracy on task i after training up
+to task j.
+However, following the evaluation protocol used in the
+CODA-Prompt paper [47], and in order to ensure compa-
+rability with prompt-based baselines, we adopt the forget-
+ting formulation implemented in their official codebase. For
+each task t and each earlier task i < t, forgetting is accu-
+mulated as the incremental reduction in performance from
+step t −1 to t, averaged over all earlier tasks:
+AF =
+1
+N −1
+N
+X
+t=2
+ 
+1
+t −1
+t−1
+X
+i=1
+ Ri,t−1 −Ri,t
+
+!
+.
+(30)
+Here, Ri,t denotes the accuracy on task i after completing
+training on task t. A lower value of FN indicates better re-
+tention of previously learned knowledge.
+This corresponds exactly to the computation used in the
+CODA-Prompt evaluation script, ensuring direct compara-
+bility across all reported results.
+12. Detailed Derivation of Internal Represen-
+tation Drift Loss
+Here, we provide the complete derivation for the LIntDrift
+regularization term introduced in the main paper. Our ob-
+jective is to ensure that the preactivations of the l-th layer,
+l ∈SH, remain unchanged for all inputs x belonging to the
+hypercube H(t−1)
+l−1 . Formally, consider the affine layer
+f(x; θl) = Wlx + bl.
+(31)
+After applying the parameter update (∆Wl, ∆bl), the new
+preactivation becomes
+f(x; θl + ∆θl) = (Wl + ∆Wl)x + (bl + ∆bl).
+(32)
+To ensure that the preactivations of the layer remain unchan-
+ged for every x ∈H(t−1)
+l−1 , we require that
+f(x; θl + ∆θl) −f(x; θl) = 0,
+∀x ∈H(t−1)
+l−1 .
+(33)
+Substituting the expressions above yields the condition
+∆Wlx + ∆bl = 0,
+∀x ∈H(t−1)
+l−1 .
+(34)
+Using interval arithmetic, we extend this constraint over
+the full hypercube H(t−1)
+l−1
+= [ x(t−1)
+l−1 , x(t−1)
+l−1
+]. The interval
+version of the preactivation-stability condition becomes
+∆Wl
+
+x(t−1)
+l−1 , x(t−1)
+l−1
+
++ ∆bl = [0, 0].
+(35)
+This condition must hold for each output coordinate. Let
+w⊤
+l,i denote the i-th row of the weight update matrix ∆Wl.
+We therefore compute the interval bounds of the linear map-
+ping w⊤
+l,iH(t−1)
+l−1 . For each coordinate i, interval arithmetic
+yields:
+w⊤
+l,iH(t−1)
+l−1
+=
+h X
+j
+min{wl,ijx(t−1)
+l−1,j , wl,ijx(t−1)
+l−1,j }, (36)
+X
+j
+max{wl,ijx(t−1)
+l−1,j , wl,ijx(t−1)
+l−1,j }
+i
+.
+(37)
+
+To obtain a differentiable form of the bounds, we decom-
+pose w⊤
+l,i into its positive and negative parts:
+ w⊤
+l,i
++ = max(0, w⊤
+l,i),
+(38)
+ w⊤
+l,i
+−= max(0, −w⊤
+l,i),
+(39)
+so that w⊤
+l,i =
+ w⊤
+l,i
++ −
+ w⊤
+l,i
+−. The interval product
+w⊤
+l,iH(t−1)
+l−1
+is then computed as [35]:
+w⊤
+l,iH(t−1)
+l−1
+=
+ w⊤
+l,i
++ −
+ w⊤
+l,i
+−
+x(t−1)
+l−1 , x(t−1)
+l−1
+
+(40)
+=
+ w⊤
+l,i
++
+x(t−1)
+l−1 , x(t−1)
+l−1
+
+(41)
+−
+ w⊤
+l,i
+−
+x(t−1)
+l−1 , x(t−1)
+l−1
+
+(42)
+=
+ w⊤
+l,i
++x(t−1)
+l−1 ,
+ w⊤
+l,i
++x(t−1)
+l−1
+
+(43)
+−
+ w⊤
+l,i
+−x(t−1)
+l−1 ,
+ w⊤
+l,i
+−x(t−1)
+l−1
+
+.
+(44)
+Using interval subtraction
+
+a, b
+
+−
+
+c, d
+
+=
+
+a−d, b−c
+
+,
+we obtain the final hypercube
+
+˜xl,i, ˜xl,i
+
+:
+˜xl,i =
+ w⊤
+l,i
++ x(t−1)
+l−1
+−
+ w⊤
+l,i
+−x(t−1)
+l−1 ,
+(45)
+˜xl,i =
+ w⊤
+l,i
++ x(t−1)
+l−1
+−
+ w⊤
+l,i
+−x(t−1)
+l−1 .
+(46)
+Adding the bias update ∆bl,i, the constraint from
+Eq. (35) becomes:
+
+˜xl,i + ∆bl,i,
+˜xl,i + ∆bl,i
+
+= [0, 0].
+(47)
+To enforce this condition during training, our regularizer
+LIntDrift penalizes the squared L2 norm of these hypercube
+endpoint bounds, driving both toward zero, which yields
+Equation (10).
+13. Internal Representation Drift Loss for
+Other Layers
+This section presents the full derivation of the interval re-
+presentation drift loss for convolutional and batch normali-
+zation layers.
+Convolutional Layer.
+Here, we adapt the LIntDrift deriva-
+tion from Appendix 12 for a 2D convolutional layer. All
+notation (such as l, t, and H) follows the definitions in the
+previous section.
+A convolutional layer f(x; θl) = Conv2d(x, Wl) + bl
+is a linear operator that applies a shared filter Wl across all
+spatial locations of the input x. A key insight is that this
+operation is a form of affine transformation (like a fully-
+connected layer) applied to local patches of the input.
+Let ∆Wl and ∆bl be the updates to the layer’s parame-
+ters. Our stability objective is to ensure that the preactiva-
+tion change is zero for any input x within the prior task’s
+hypercube H(t−1)
+l−1 :
+Conv2d(x, ∆Wl) + ∆bl = 0,
+∀x ∈H(t−1)
+l−1 .
+(48)
+We can analyze this by focusing on a single preactivation
+yi in the i-th output channel. This value is computed by
+a dot product between the i-th filter of the kernel update,
+∆wl,i, and the corresponding input patch xp:
+yi = ∆w⊤
+l,ixp + ∆bl,i.
+(49)
+Here, ∆wl,i and xp are the flattened vector representa-
+tions of the i-th filter and the input patch, respectively.
+This formulation is mathematically identical to the affine
+layer case presented in Appendix 12. The input xp is drawn
+from a hypercube Hpatch defined by the interval bounds
+[x(t−1)
+l−1 , x(t−1)
+l−1 ] of the corresponding input elements.
+Therefore, we can directly apply the same interval arith-
+metic derivation. The interval bounds on the output drift for
+the i-th channel,
+
+˜xl,i, ˜xl,i
+
+, are computed analogously. Let
+∆wl,i be the flattened i-th filter update, and let xp and xp be
+the corresponding flattened lower and upper bounds of the
+input patch. The bounds are:
+˜xl,i =
+ ∆w⊤
+l,i
++ xp −
+ ∆w⊤
+l,i
+−xp,
+(50)
+˜xl,i =
+ ∆w⊤
+l,i
++ xp −
+ ∆w⊤
+l,i
+−xp.
+(51)
+Note that
+ ∆w⊤
+l,i
++ and
+ ∆w⊤
+l,i
+−are the positive and
+negative parts of the filter update, and the products are
+element-wise dot products. The constraint from Eq. (35) be-
+comes:
+
+˜xl,i + ∆bl,i,
+˜xl,i + ∆bl,i
+
+= [0, 0].
+(52)
+Our regularizer LIntDrift penalizes the squared L2 norm of
+these hypercube endpoints, just as in the affine case, driving
+the representation drift within the defined input domain to
+zero.
+BatchNorm Layer.
+The same principle applies to Batch-
+Norm (BN) layers. In inference, a BN layer computes an
+affine transformation:
+f(x; θl) = γl
+ 
+x −µl
+p
+σ2
+l + ϵ
+!
++ βl,
+(53)
+where the learnable parameters are θl = (γl, βl), and the
+fixed (non-learnable) parameters are the running statistics
+µl and σ2
+l . We can rewrite this as a standard affine layer
+f(x) = W eff
+l x + beff
+l , where:
+W eff
+l
+=
+γl
+p
+σ2
+l + ϵ
+(54)
+beff
+l
+= βl −
+γlµl
+p
+σ2
+l + ϵ
+.
+(55)
+
+When the parameters are updated by (∆γl, ∆βl), the drift
+in the output, ∆f(x), is:
+∆f(x) = f(x; θl + ∆θl) −f(x; θl)
+(56)
+=
+ 
+∆γl
+p
+σ2
+l + ϵ
+!
+x +
+ 
+∆βl −
+∆γlµl
+p
+σ2
+l + ϵ
+!
+(57)
+= ∆W eff
+l x + ∆beff
+l .
+(58)
+This drift ∆f(x) is itself an affine transformation of x. We
+want to enforce ∆f(x) = 0 for all x ∈H(t−1)
+l−1 . This is the
+exact same problem as in Appendix 12.
+Therefore, we can compute LIntDrift for a BN layer by ap-
+plying the derivation from Eq. (45) and Eq. (46), simply by
+replacing the weight update ∆Wl with the effective weight
+update ∆W eff
+l
+and the bias update ∆bl with the effective
+bias update ∆beff
+l .
+14. Training Algorithm
+The complete training procedure for InTAct is provided in
+Algorithm 1. To make this procedure applicable to a wide
+range of continual learning setups, whether using standard
+architectures or prompt-based extensions, we adopt a uni-
+fied formulation for both input handling and parameter opti-
+mization.
+Unified Notation.
+Let Ψ denote the set of all learnable
+parameters in the current training configuration. This set
+may include model parameters, prompt parameters, or any
+additional task-specific components that are updated during
+training. Before describing the two possible settings, we in-
+troduce the procedure QUERYPROMPTS: this procedure is
+responsible for processing an input sample x and returning
+(i) a possibly modified input xp, where prompt or context
+tokens may be injected, and (ii) an auxiliary loss term Laux
+that arises when prompt mechanisms impose additional le-
+arning objectives. Using this unified interface for input pro-
+cessing allows Algorithm 1 to operate consistently across
+different architectures and training strategies.
+• When prompt-based methods are not applied: In this
+case, no prompt parameters are present (ϕ = ∅), and the
+only learnable parameters are those inherent to the mo-
+del, denoted by θ. Thus, the optimization target reduces
+to Ψ = θ. Since no prompt mechanism is used, QUERY-
+PROMPTS becomes an identity operation: it returns the
+original input (xp = x) and contributes no auxiliary loss
+(Laux = 0).
+• When prompt-based methods are applied: Here, the
+system includes a set of learnable prompt parameters ϕ,
+and may also include other components that remain tra-
+inable, depending on the chosen configuration. To de-
+scribe this generally, we write Ψ ⊆{θ, ϕ}. In this set-
+ting, QUERYPROMPTS uses the input x to retrieve prompt
+or context tokens, producing a modified input xp ̸= x
+and, when applicable, generating a prompt-related auxi-
+liary loss Laux.
+This unified formulation ensures that Algorithm 1 han-
+dles input transformation, gradient propagation, and all as-
+sociated loss terms in a consistent manner across diverse
+continual learning configurations.
+Algorithm 1 InTAct Training Algorithm
+Require: Number of tasks T; Sequential tasks {Dt}T
+t=1; Neural network
+f with parameters θ; Optional prompt module parameters ϕ.
+Require: Set of layer indices SH for which activation hypercubes are
+computed.
+Require: Hyperparameters: λVar, λIntDrift, λFeat, λPrompt, α; Training
+epochs E; Learning rate η.
+Ensure: Optimized parameters Ψ.
+1: Initialize: Parameters θ, ϕ; Hypercubes H(0)
+l
+←∅for all l ∈SH.
+2: Define Active Parameters: Ψ ⊆{θ, ϕ}.
+3: for task t = 1 to T do
+4:
+for epoch e = 1 to E do
+5:
+for batch (x, y) ∼Dt do
+6:
+{Step 1: Prompt Query & Pre-processing}
+7:
+xp, Laux ←QUERYPROMPTS(x)
+8:
+{Step 2: Forward Pass}
+9:
+ˆy ←f(xp; θ)
+10:
+{Step 3: Loss Calculation}
+11:
+LTotal ←LCE + λPromptLaux
+12:
+Calculate variance loss LVar (Eq. (13))
+13:
+LTotal ←LTotal + λVarLVar
+14:
+if t ≥2 then
+15:
+Calculate feature distillation loss LFeat (Eq. (15))
+16:
+Calculate internal representation drift loss (Eq. (10))
+17:
+Calculate inter-task alignment loss LAlign (Eq. 14)
+18:
+LTotal ←LTotal + λFeatLFeat + λIntDriftLIntDrift + LAlign
+19:
+end if
+20:
+{Step 4: Optimization}
+21:
+Update Ψ ←Ψ −η∇ΨLTotal
+22:
+end for
+23:
+end for
+24:
+{Step 5: Update Activation Hypercubes}
+25:
+Collect activations Al = {hl(xp; θ) | x ∈Dt} for all l ∈SH
+26:
+for each layer index l ∈SH do
+27:
+v ←percentileα(Al);
+v ←percentile100−α(Al)
+28:
+if t = 1 then
+29:
+H(t)
+l
+←[v, v]
+30:
+else
+31:
+Let H(t−1)
+l
+= [h, h]
+32:
+H(t)
+l
+←
+h
+min(h, v), max(h, v)
+i
+33:
+end if
+34:
+end for
+35: end for
+15. Additional Results
+In this section, we report additional experiments and analy-
+sis that further demonstrate the effectiveness of InTAct.
+Results on CIFAR-100 under the CIL scenario.
+Tab. 7
+shows results on the 10-task CIFAR-100. Across all me-
+thods, InTAct maintains or improves accuracy while sub-
+
+stantially reducing variance, confirming its stabilizing ef-
+fect. For L2P and DualPrompt, InTAct matches baseline ac-
+curacy but halves standard deviation, preserving functional
+stability without limiting adaptability. The largest gain oc-
+curs for CODA-Prompt, where AA rises from 86.25% to
+87.31% and variance drops sharply, approaching the upper
+bound.
+Tabela 7. Results on the 10-task (10 classes each) CIFAR-100
+benchmark (CIL setting). We report the mean and standard de-
+viation of AA and AF averaged over 5 random seeds.
+Method
+AA (↑)
+AF (↓)
+Upper-Bound
+89.30
+–
+L2P
+82.50 ± 1.10
+1.75 ± 0.42
+w/ InTAct
+82.40 ± 0.30
+1.75 ± 0.18
+DualPrompt
+83.05 ± 1.16
+1.72 ± 0.40
+w/ InTAct
+82.71 ± 0.51
+1.66 ± 0.33
+CODA-P
+86.25 ± 0.74
+1.67 ± 0.26
+w/ InTAct
+87.31 ± 0.17
+1.77 ± 0.2
+Results on DomainNet under the CIL scenario.
+Table 8
+summarizes performance on the 5-task DomainNet bench-
+mark (CIL). Adding InTAct to L2P and DualPrompt impro-
+ves AA while maintaining competitive AF. Notably, InTAct
+reduces variance across random seeds, indicating increased
+training stability on this challenging multi-domain setting.
+Tabela 8. Results on the 5-task (69 classes each) DomainNet
+benchmark (CIL setting). We report the mean and standard devia-
+tion of AA and AF calculated over 3 random seeds. Results from
+baselines are obtained from the paper [47].
+Method
+AA (↑)
+AF (↓)
+Upper-Bound
+79.65
+–
+L2P
+69.58 ± 0.39
+2.25 ± 0.08
+w/ InTAct
+70.02 ± 0.17
+3.13 ± 0.34
+DualPrompt
+70.73 ± 0.49
+2.03 ± 0.22
+w/ InTAct
+71.33 ± 0.13
+3.87 ± 0.59
+CODA-P
+73.24 ± 0.59
+3.46 ± 0.09
+w/ InTAct
+72.12 ± 0.10
+3.59 ± 0.13
+Results
+for
+Regularization-based
+Methods
+(CIL).
+InTAct
+achieves
+the
+best
+performance
+among
+all
+regularization-based methods on the CIL benchmarks,
+consistently improving AA across tasks. The detailed re-
+sults are shown in Table 9 for Split MNIST, Split FMNIST,
+and Split CIFAR-10. In particular, InTAct outperforms
+the strongest baseline (LwF) by more than six percentage
+points on Split MNIST and Split FMNIST, demonstrating
+its ability to mitigate catastrophic forgetting and stabilize
+internal representations across sequential tasks. Note that
+these gains are achieved without any task-specific archi-
+tectural modifications or rehearsal buffers, highlighting the
+robustness and generality of the proposed interval-based
+regularization.
+Tabela 9. Comparison of regularization-based continual learning
+baselines and InTAct across multiple datasets (CIL setting). Re-
+sults report the AA metric values and are averaged over 5 random
+seeds.
+Method
+Split MNIST
+Split FMNIST
+Split CIFAR-10
+EWC
+20.57 ± 0.78
+19.92 ± 0.02
+30.43 ± 1.69
+LwF
+28.63 ± 0.61
+25.92 ± 0.84
+24.26 ± 0.75
+MAS
+17.91 ± 2.93
+18.74 ± 3.40
+21.75 ± 0.67
+SI
+18.40 ± 0.33
+17.30 ± 0.52
+20.18 ± 0.27
+InTAct
+35.27 ± 2.27
+34.25 ± 2.91
+31.28 ± 0.77
+Results for Regularization-Based Methods (DIL).
+In-
+TAct achieves also the strongest performance among
+regularization-based methods on the DIL benchmarks. The
+detailed results are reported in Table 10 for Split MNIST,
+Split FMNIST, and Split CIFAR-10. On Split MNIST, In-
+TAct clearly outperforms EWC, MAS, and SI, achieving the
+highest AA. For Split FMNIST, all methods perform com-
+petitively, with InTAct and EWC obtaining similar results.
+On Split CIFAR-10, InTAct matches the best-performing
+baseline (LwF), confirming that the proposed regularization
+is effective even in more complex visual tasks.
+Tabela 10. Comparison of regularization-based continual learning
+baselines and InTAct across multiple datasets (DIL setting). Re-
+sults report the AA metric values and are averaged over 5 random
+seeds.
+Method
+Split MNIST
+Split FMNIST
+Split CIFAR-10
+EWC
+78.90 ± 2.28
+92.30 ± 0.80
+68.93 ± 1.13
+LwF
+75.54 ± 0.37
+84.74 ± 0.76
+76.45 ± 0.63
+MAS
+77.59 ± 2.84
+91.16 ± 2.56
+69.35 ± 3.40
+SI
+69.84 ± 10.15
+85.03 ± 3.98
+67.66 ± 0.38
+InTAct
+82.51 ± 0.83
+92.57 ± 0.63
+75.84 ± 0.63
+These gains are achieved without task-specific know-
+ledge distillation or memory buffers, highlighting the ge-
+neral applicability of InTAct in DIL scenarios.
+Impact of λVar on AA.
+In Fig. 6, we illustrate the effect
+of varying λVar on AA for the Split MNIST dataset under
+the CIL setting.
+
+Rysunek 6. Impact of the λVar hyperparameter on AA for the
+Split MNIST dataset under the CIL scenario. Results are avera-
+ged over 5 seeds.
+We observe that increasing the value of λVar generally
+leads to improved AA. This is because stronger representa-
+tion variance regularization (Eq. (13)) encourages the hid-
+den representations to become more compact and structu-
+red. In turn, this results in activation hypercubes of smaller
+volume. Since our regularization mechanism constrains in-
+layer transformations within these hypercubes, operating on
+a smaller and more coherent region of the activation space
+yields a more effective and stable control signal. All other
+hyperparameters are fixed to their respective optimal values
+to isolate the effect of λVar.
+16. Extended Table Results in CIL Scenario
+In this section, we present extended results on the CIFAR-
+100, DomainNet, and ImageNet-R benchmarks (Tables 11,
+12, and 13). Overall, InTAct consistently enhances the per-
+formance of existing prompt-based methods (L2P, Dual-
+Prompt, CODA-P), improving AA while achieving compe-
+titive or lower AF. Beyond prompt-based approaches, In-
+TAct also surpasses non-prompt continual learning baseli-
+nes such as ER [40], sequential fine-tuning (FT), its impro-
+ved variant FT++, which uses the same classifier implemen-
+tation as prompt-based methods in the CIL scenario, and
+LwF [26] on most benchmarks. The notable exception is
+DomainNet, where LwF surprisingly achieves the highest
+AA. These results demonstrate that InTAct effectively bo-
+osts prompt-based methods and remains competitive aga-
+inst traditional continual learning strategies. In all tables,
+the best results in each column are highlighted in bold.
+17. Additional Visualization
+Here, we present additional visualizations of representation
+drift in InTAct and LwF, and provide analysis based on the
+Split MNIST dataset in the DIL scenario.
+Tabela 11. Extended results on the 10-task (10 classes each)
+CIFAR-100 benchmark (CIL setting). We report the mean and
+standard deviation of AA and AF averaged over 5 random seeds.
+Best results in each column are highlighted in bold. Results from
+baselines are obtained from [47].
+Method
+AA (↑)
+AF (↓)
+Upper-Bound
+89.30
+−
+ER (5000)
+76.20 ± 1.04
+8.50 ± 0.37
+FT
+9.92 ± 0.27
+29.21 ± 0.18
+FT++
+49.91 ± 0.42
+12.30 ± 0.23
+LwF.MC
+64.83 ± 1.03
+5.27 ± 0.39
+L2P
+82.50 ± 1.10
+1.75 ± 0.42
+w/ InTAct
+82.40 ± 0.30
+1.75 ± 0.18
+DualPrompt
+83.05 ± 1.16
+1.72 ± 0.40
+w/ InTAct
+82.71 ± 0.51
+1.66 ± 0.33
+CODA-P
+86.25 ± 0.74
+1.67 ± 0.26
+w/ InTAct
+87.31 ± 0.17
+1.77 ± 0.20
+Tabela 12. Extended results on the 5-task (69 classes each) Doma-
+inNet benchmark (CIL setting). We report the mean and standard
+deviation of AA and AF calculated over 3 random seeds. Best re-
+sults in each column are highlighted in bold. Results from baseli-
+nes are obtained from [47].
+Method
+AA (↑)
+AF (↓)
+Upper-Bound
+79.65
+−
+ER (5000)
+58.32 ± 0.47
+26.25 ± 0.24
+FT
+18.00 ± 0.26
+43.55 ± 0.27
+FT++
+39.28 ± 0.21
+44.39 ± 0.31
+LwF.MC
+74.78 ± 0.43
+5.01 ± 0.14
+L2P
+69.58 ± 0.39
+2.25 ± 0.08
+w/ InTAct
+70.02 ± 0.17
+3.13 ± 0.34
+DualPrompt
+70.73 ± 0.49
+2.03 ± 0.22
+w/ InTAct
+71.33 ± 0.13
+3.87 ± 0.59
+CODA-P
+73.24 ± 0.59
+3.46 ± 0.09
+w/ InTAct
+72.12 ± 0.10
+3.59 ± 0.13
+Analysis of Internal Representation Drift.
+We provide
+a qualitative analysis of internal representation stability in
+Figure 7. This experiment, conducted on SplitMNIST, visu-
+alizes the internal representation drift experienced by data
+from past tasks as new tasks are learned. The plot tracks
+the L1 norm of the activation difference for specific refe-
+rence images (e.g., the image "0"from Task 1, "2"from Task
+2, etc.) compared to their original activations recorded after
+their respective tasks were first learned.
+
+Tabela 13. Extended results on the ImageNet-R dataset (CIL setting). We report the mean and standard deviation of AA and AF averaged
+over 5 random seeds. Results include 10- and 20-tasks baselines. Best results in each column are highlighted in bold. Results from baselines
+are obtained from [47].
+Method
+10 steps
+20 steps
+AA (↑)
+AF (↓)
+AA (↑)
+AF (↓)
+Upper-Bound
+77.13
+−
+77.13
+-
+ER (5000)
+64.43 ± 1.16
+10.30 ± 0.05
+52.43 ± 0.87
+7.70 ± 0.13
+FT
+10.12 ± 0.51
+25.69 ± 0.23
+4.75 ± 0.40
+16.34 ± 0.19
+FT++
+48.93 ± 1.15
+9.81 ± 0.31
+35.98 ± 1.38
+6.63 ± 0.11
+LwF.MC
+66.73 ± 1.25
+3.52 ± 0.39
+54.05 ± 2.66
+2.86 ± 0.26
+L2P
+69.29 ± 0.73
+2.03 ± 0.19
+65.89 ± 1.30
+1.24 ± 0.14
+w/ InTAct
+69.44 ± 0.45
+2.89 ± 0.46
+66.18 ± 0.36
+1.30 ± 0.13
+DualPrompt
+71.32 ± 0.62
+1.71 ± 0.24
+67.87 ± 1.39
+1.07 ± 0.14
+w/ InTAct
+70.98 ± 0.60
+1.68 ± 0.07
+67.89 ± 0.66
+1.19 ± 0.18
+CODA-P
+75.45 ± 0.56
+1.64 ± 0.10
+72.37 ± 1.19
+0.96 ± 0.15
+w/ InTAct
+76.40 ± 0.16
+2.07 ± 0.16
+73.30 ± 0.41
+1.56 ± 0.26
+Rysunek 7. Activation drift across tasks on SplitMNIST (DIL sce-
+nario). For each task, we record hidden activations of a reference
+image and then track the normalized absolute change of these ac-
+tivations as new tasks are learned. LwF shows steadily increasing
+drift, whereas InTAct keeps activation changes bounded, indica-
+ting substantially more stable internal representations.
+Conclusions from the Visualization.
+The results show a
+stark contrast between our method (InTAct) and the LwF
+baseline. For LwF (dashed lines), the activation drift is both
+significant and cumulative. As new tasks are introduced, the
+internal representations for data from all previous tasks drift
+substantially. For instance, the reference sample from Task
+1 (blue dashed line) experiences a large initial drift that con-
+tinues to increase as more tasks are added. In contrast, In-
+TAct (solid lines) demonstrates superior stability. While a
+small, initial drift is observed when the first new task is in-
+troduced (e.g., the blue solid line at Task 2), the drift re-
+mains bounded and stabilizes for all subsequent tasks. This
+visualization provides strong evidence that InTAct success-
+fully preserves the functional behavior of the network on
+data from previous tasks, directly mitigating a key cause of
+catastrophic forgetting.

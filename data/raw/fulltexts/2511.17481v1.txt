@@ -1,0 +1,1559 @@
+Counterfactual World Models via Digital Twin-conditioned Video Diffusion
+Yiqing Shen, Aiza Maksutova, Chenjia Li, Mathias Unberath
+Johns Hopkins University
+{yshen92, unberath}@jhu.edu
+Abstract
+World models learn to predict the temporal evolution of
+visual observations given a control signal, potentially en-
+abling agents to reason about environments through for-
+ward simulation.
+Because of the focus on forward sim-
+ulation, current world models generate predictions based
+on factual observations. For many emerging applications,
+such as comprehensive evaluations of physical AI behav-
+ior under varying conditions, the ability of world models
+to answer counterfactual queries – such as “what would
+happen if this object was removed?” – is of increasing im-
+portance. We formalize counterfactual world models that
+additionally take interventions as explicit inputs, predict-
+ing temporal sequences under hypothetical modifications to
+observed scene properties. Traditional world models oper-
+ate directly on entangled pixel-space representations where
+object properties and relationships cannot be selectively
+modified. This modeling choice prevents targeted interven-
+tions on specific scene properties. We introduce CWMDT,
+a framework to overcome those limitations, turning stan-
+dard video diffusion models into effective counterfactual
+world models. First, CWMDT constructs digital twins of
+observed scenes to explicitly encode objects and their rela-
+tionships, represented as structured text. Second, CWMDT
+applies large language models to reason over these rep-
+resentations and predict how a counterfactual intervention
+propagates through time to alter the observed scene. Third,
+CWMDT conditions a video diffusion model with the mod-
+ified representation to generate counterfactual visual se-
+quences.
+Evaluations on two benchmarks show that the
+CWMDT approach achieves state-of-the-art performance,
+suggesting that alternative representations of videos, such
+as the digital twins considered here, offer powerful control
+signals for video forward simulation-based world models.
+1. Introduction
+World models learn to predict the temporal evolution of vi-
+sual observations, generating future states from current ob-
+servation [18]. Recent work demonstrates their effective-
+ness in reinforcement learning [49], robotic control [20, 59],
+and game playing [28], where agents learn policies through
+predicted interactions rather than direct environmental ex-
+ploration.
+Yet, current world models generate only fac-
+tual predictions following a given scene [14], lacking the
+capability to reason about alternative outcomes under hy-
+pothetical modifications. Consider an autonomous vehicle
+encountering an obstacle: beyond predicting the default tra-
+jectory, it needs to evaluate how counterfactual scenarios
+evolve over time, such as “what sequence of events would
+unfold if the obstacle moved?” or “how would the scene
+dynamics change if road conditions were different?” [29].
+Therefore, we propose counterfactual world models that ex-
+tend traditional formulations by incorporating interventions
+as explicit inputs, predicting temporal sequences that cap-
+ture both immediate intervention effects and their propaga-
+tion through subsequent time steps.
+However, existing world models suffer from two con-
+straints that prevent counterfactual reasoning. First, tradi-
+tional world models learn direct mappings from observa-
+tions to future states without explicit factorization of scene
+components, preventing targeted interventions on specific
+objects or relationships [18]. Video diffusion models like
+OpenAI’s SORA, LTX-video and Wan2.2 [4, 6, 19, 24, 54,
+56], while capable of temporal generation, lack the inter-
+vention capabilities required for counterfactual world mod-
+els [39, 43]. They learn entangled pixel-space represen-
+tations where object properties, spatial relationships, and
+temporal dynamics are encoded within the latent distribu-
+tion [12, 22].
+When attempting to implement interven-
+tions directly in this entangled space, modifying one ob-
+ject’s properties cannot be isolated from other scene ele-
+ments, preventing controlled propagation of intervention ef-
+fects through time. Furthermore, the existing world models,
+particularly those video diffusion models, lack the explicit
+reasoning capability to determine how interventions should
+propagate [42].
+We introduce CWMDT (Counterfactual World Model
+with Digital Twin Representation Conditioned Diffusion
+Model), a framework that can transform video diffusion
+models into counterfactual world models. Rather than oper-
+1
+arXiv:2511.17481v1  [cs.CV]  21 Nov 2025
+
+ating directly on entangled pixel space, we first extract dig-
+ital twin representations i.e., a structured intermediate rep-
+resentation that explicitly encode objects and relationships
+in text. The digital twin representation enables large lan-
+guage models (LLMs) to simulate counterfactual dynamics,
+predicting how interventions affect object states and rela-
+tionships over time rather than merely generating modified
+pixels [50, 53]. Afterwards, the modified digital twin rep-
+resentations from LLM condition a video diffusion model
+to synthesize corresponding visual frames, translating the
+LLM-predicted temporal evolution into pixel-space video
+sequences. In other words, the digital twin representation
+enables a decoupling between reasoning and synthesis, sep-
+arating the logical determination of how interventions affect
+scene dynamics from the pixel-level generation process that
+existing world models cannot achieve.
+The major contributions are three-fold. First, we formal-
+ize counterfactual world models as an extension of tradi-
+tional world models that incorporate interventions to gener-
+ate alternative trajectories. Second, we present CWMDT, a
+novel framework to turn video diffusion model into coun-
+terfactual world model by decomposition of counterfac-
+tual generation into perception, intervention, and synthe-
+sis through digital twin representations.
+It demonstrates
+how video diffusion models can be augmented with ex-
+plicit reasoning capabilities for LLMs. Third, we validate
+our approach through extensive experiments on reasoning-
+intensive benchmarks, where CWMDT achieves superior
+performance.
+2. Related Work
+World Models.
+World models learn latent representations
+of environment dynamics to generate future states from cur-
+rent observations [18]. For example, early work [18] in-
+troduced variational autoencoders combined with recurrent
+networks to compress visual observations into compact la-
+tent representation, allowing agents to train policies through
+simulated rather than direct interaction. Recent work has
+explored transformer-based architectures for world model-
+ing [9, 40, 65], showing improved sample efficiency and
+long-range dependency modeling. Diffusion-based world
+models have also emerged [1, 13, 45, 55], integrating
+transformer backbones into diffusion processes for scal-
+able video generation. Beyond architectural improvements,
+learning paradigms have evolved to optimize for decision-
+making rather than reconstruction.
+MuZero [49] learns
+value-equivalent models that preserve decision-relevant in-
+formation while discarding reconstruction fidelity. Dream-
+erV3 [21] trains policies by back propagating through pre-
+dicted trajectories in learned latent space, extending world
+models to continuous control domains. These approaches
+have found applications in autonomous driving [15, 26,
+38, 57] and embodied AI [35], where simulated interac-
+tions enable policy learning and scenario forecasting. Video
+diffusion models like SORA [44] have been characterized
+as world simulators due to their emergent object perma-
+nence and temporal coherence [62], though recent studies
+reveal limitations in complex physical reasoning and out-
+of-distribution generalization [36, 42]. Despite these ad-
+vances, existing world models generate predictions condi-
+tioned solely on observed states and selected actions. Our
+work formalizes counterfactual world models that accept in-
+terventions as explicit inputs, generating multiple plausible
+trajectories under modified scene conditions.
+Video Diffusion Models.
+Video diffusion models such as
+OpenAI’s SORA [44] show simulation capabilities through
+large-scale training on diverse visual data, with approaches
+spanning latent space diffusion [4], text-conditioned gen-
+eration [54], and real-time synthesis [19, 56]. Recent ef-
+forts have adapted video diffusion models toward action-
+conditioned world models, with Genie [6] learning latent
+action spaces from unlabeled videos and AVID [48] intro-
+ducing learned adapters that modify intermediate diffusion
+outputs based on action inputs. Motion control approaches
+such as Pandora [27] and Go-with-the-Flow [7] enable tra-
+jectory manipulation through structured noise and optical
+flow guidance [3, 8]. However, video diffusion models gen-
+erate frames through entangled latent distributions where
+object properties, spatial relationships, and temporal dy-
+namics are implicitly encoded [12, 22]. Some approaches
+like NewtonGen [64] attempt to inject physical constraints
+into generation but remain limited to implicit physical pri-
+ors embedded in data distributions without structured rea-
+soning about intervention effects. We address this limita-
+tion by introducing digital twin representations that decou-
+ple reasoning from synthesis, enabling explicit intervention
+determination before video generation.
+Digital Twin Representations.
+Previous work [50] ar-
+gues that foundation models (such as the world model) re-
+quire digital twin representations to capture fine-grained
+spatial-temporal dynamics and perform causal reasoning.
+The argument rests on the observation that learned repre-
+sentations in foundation models encode scene properties in
+entangled latent spaces, making it difficult to isolate and
+manipulate individual factors such as object positions or
+physical relationships. Previous work such as just-in-time
+digital twin framework [53] demonstrates that LLM can dy-
+namically construct digital twin representations from video
+using vision models, decoupling perception from reason-
+ing to allow multi-step spatial-temporal inference without
+model fine-tuning. These representations encode object at-
+tributes, spatial relationships, and dynamic states in natu-
+ral language, creating an interface for LLM to apply world
+knowledge during reasoning [50, 53].
+Unlike video dif-
+2
+
+fusion models that learn implicit scene dynamics through
+entangled latent distributions, digital twin representations
+make scene factors explicit and separable, allowing con-
+trolled modifications to individual objects or relationships.
+3. Methods
+Formulation of Counterfactual World Model.
+The
+world model can be defined as a predictor for future visual
+observations, formulated as f : Vt × C →P(Vt+1:t+k).
+Here, Vt denotes the space of visual observations in time
+t, representing a single video frame, while Vt+1:t+k de-
+notes a sequence of future video frames k that span time
+t + 1 to t + k. The space C represents all possible text
+prompts as conditions, and P(Vt+1:t+k) denotes the prob-
+ability distribution over these future visual observations.
+We extend this definition to counterfactual world models
+by introducing an intervention space I ⊆C, which rep-
+resents conditions that specify counterfactual modifications
+to scene such as “what would the scene look like if condi-
+tion X were different?” The counterfactual world model
+can therefore be formulated as fcf : Vt × I →P(˜Vt:t+k),
+where ˜Vt:t+k represents the space of counterfactual video
+sequences from time t to t + k Formally, given an initial
+visual observation vt and an intervention i ∈I, the coun-
+terfactual world model generates ˜vt:t+k ∼fcf(vt, i) that
+incorporates both the immediate effects of the intervention
+and its propagation through subsequent time steps. Sam-
+pling from this distribution yields multiple possible outputs
+{˜v(1)
+t:t+K, ˜v(2)
+t:t+K, . . . , ˜v(N)
+t:t+K} from a single intervention.
+Method Overview.
+We introduce CWMDT (Counterfac-
+tual World Model with Digital Twin Representation Condi-
+tioned Diffusion Model), an end-to-end implementation of
+the counterfactual world model using digital twin represen-
+tations as an intermediate layer, as shown in Fig. 1. For-
+mally, we decompose the counterfactual world model into
+three consecutive mappings, depicted as
+fcf = fsynth ◦finterv ◦(fpercept, id),
+(1)
+where id denotes the identity function, ensuring that
+(fpercept, id) transforms the input pair (vt, i) into (st, i).
+Perception mapping fpercept : Vt →St converts video
+frames to digital twin representations through vision mod-
+els [53], where St denotes the space of digital twin repre-
+sentations. The intervention mapping finterv : St × I →
+P( ˜St:t+k) generates modified digital twin representations
+under interventions i ∈I through an LLM. Here, ˜St:t+k de-
+notes the space of counterfactual digital twin representation
+sequences spanning from time t to t+k that reflect both the
+intervention and their predicted temporal evolution. Innova-
+tively, rather than operating on video frames directly, inter-
+ventions are applied to the digital twin representation st to
+enable explicit reasoning over scene factors with embedded
+world knowledge in LLM Finally, the synthesis mapping
+fsynth : ˜St:t+k →P(˜Vt:t+k) generates video frames condi-
+tioned on the modified digital twin representation through a
+video diffusion model, where ˜Vt:t+k represents the space of
+counterfactual video sequences.
+Digital Twin Representation Construction.
+To enable
+counterfactual reasoning over the scene, we first transform
+each given video frame vt ∈Vt into a digital twin represen-
+tation st ∈St, depicted as:
+st = {(j, c(t)
+j , a(t)
+j , p(t)
+j , m(t)
+j )}Nt
+j=1,
+(2)
+where Nt denotes the number of object instances in the
+frame vt. Each instance tuple contains an identifier j that
+maintains correspondence across frames, a semantic cate-
+gory c(t)
+j
+describing the object class, attribute descriptions
+a(t)
+j
+capturing visual properties such as color and texture,
+spatial properties p(t)
+j
+= (x, y, z, w, h) encoding centroid
+coordinates, depth, width, and height, and a segmentation
+mask m(t)
+j
+defining the precise object locations. We con-
+struct st through various vision foundation models operat-
+ing on individual frames. Object segmentation and cross-
+frame tracking are performed through SAM-2 [30, 47],
+which generates instance-level masks and maintains object
+identity across video sequences. Depth estimation network
+DepthAnything [61] computes per-pixel depth maps that
+we sample at object centroids to obtain spatial position-
+ing. Semantic categorization assigns each detected instance
+to conceptual classes through object detection model, i.e,
+OWLv2 [41]. QWen2.5-VL [2] generates natural language
+descriptions of object attributes by analyzing localized im-
+age regions corresponding to each segmentation mask. We
+serialize the resulting digital twin representation st in struc-
+tured text format of JSON, which transforms the counterfac-
+tual world model problem from reasoning over visual obser-
+vations to reasoning over explicit textual scene descriptions.
+Counterfactual Reasoning over Digital Twin Represen-
+tation.
+Given a digital twin representation st and an inter-
+vention i ∈I, we then implement the intervention mapping
+finterv : St × I →P( ˜St:t+k) to generate a sequence of
+modified digital twin representations with LLM. First, the
+LLM analyzes the given intervention to identify which ob-
+jects and relationships within st are directly affected. Then,
+LLM predicts the temporal evolution of these changes in
+the subsequent video frames. For instance, given an inter-
+vention such as “remove the obstacle from the path,” the
+LLM identifies the relevant object instance in st, deter-
+mines which spatial relationships change as a result, and
+predicts how other objects might respond to the newly avail-
+3
+
+Video
+b. Digital Twin Representation Structured in JSON
+a. Vision Foundation Models
+OWLv2
+SAM-2
+DepthAnything
+{
+"description": "An office scene showing several 
+workstations arranged in an open ...",
+"frames": {
+"00001.jpg": {
+"object_0": {
+"label": “office desk",
+"detection_bbox": [74, 1506, 4022, 654],
+"detection_centroid": [2106.58, 1026.80],
+"depth": 4.06,
+"mask_path": "masks/00001/object_0.png"
+},
+"object_1": {"label": "office chair", …}, ...
+},
+"00002.jpg": {"object_0": {…}, …}, …}
+}
+Step 2. Counterfactual Reasoning over Digital Twin Representation
+Query: What if the robbers escaped just before the police arrived?
+{"scene_description": {
+"location": "Modern office space with open desks, white walls, and large 
+windows allowing natural light.",
+"time_of_day": "Daytime",  "major_elements": [
+{"object": "office desk",
+"spatial_description": "Located near the center-left of the room, mid-
+depth region.",
+"features": {"computer": {"description": "A desktop computer is placed 
+on the office desk. The screen of the computer is visibly broken with a large 
+crack across the middle. There are scattered paper documents and a closed 
+notebook on the desk, suggesting signs of disruption."
+},
+"desk_state": "The desk appears to be in disarray, with drawers 
+slightly open and objects out of place, indicating a hurried search or 
+disturbance."} },... ] },
+"entities": [ {
+"actor": "on-site police officer",
+"details": {
+"role": "Investigator",
+"description": "A police officer is standing near the desk inside the 
+caution-taped area. The officer is wearing a dark navy uniform, holding a 
+notepad and inspecting the scene for potential evidence while maintaining the 
+security of the crime scene." } },... ],
+"context": {
+"event": "Robbery Incident",
+"description": "The office space has been turned into a crime scene 
+following a reported robbery. Objects on and around the desk suggest that a 
+robbery took place, and investigators are actively gathering clues." },
+"relationships": [ {
+"relationship": "police investigator examining desk",
+"description": "The officer is analyzing the contents and items on the 
+desk, such as the broken computer screen and scattered papers, to infer possible 
+evidence about the robbery." }, ...]}
+Edited Video
+…
+𝑣!
+𝑣!"#
+Image Editing Model
+𝑣!"$
+𝑣"!
+𝑣!
+𝑣!"$%
+𝑣!"&%
+𝑣!"'%
+𝑣!"(%
+VAE Encoder
+VAE Decoder
+Latent Diffusion
+Step 3. Video Synthesis Conditioned on Digital Twin Representation
+Step 1. Digital Twin Representation Construction
+𝑣"!
+𝑣"!"$%
+𝑣"!"&%
+𝑣"!"'%
+𝑣"!"(%
+Digital Twin 
+Representation 
+Construction
+Counterfactual 
+Reasoning over 
+Digital Twin 
+Representation
+Video Synthesis 
+Conditioned on 
+Digital Twin 
+Representation
+Workflow
+Frozen
+Trainable
+LTX-Video 
+Model
+Conditioning 
+Input (Inference)
+Condition on 
+Representation 𝑠!
+Condition on Counterfactual 
+Modifications specified in 𝑠̃"
+Condition on First Frame 𝑣$"
+and a random noise 
+Text Encoder
+LoRA
+Noise
+𝑍! ∼ 𝒩(0, 𝐼)
+Processed by 
+LLM
+Figure 1. Method overview for CWMDT. Our approach consists of three stages. (1) Digital twin representation construction: Vision
+models extract structured scene representations st from video frames vt. (2) Counterfactual reasoning: An LLM processes intervention
+queries to predict temporal evolution, generating modified digital twin representations ˜st:t+k. (3) Video synthesis: A fine-tuned diffusion
+model generates counterfactual videos ˜vt:t+k conditioned on the edited first frame ˜vt and the modified digital twin representation ˜st:t+k.
+able space across subsequent time steps. The output con-
+sists of a sequence of modified digital twin representations
+˜st:t+k = {˜st, ˜st+1, . . . , ˜st+k}, where ˜st encodes the imme-
+diate effects of the intervention, and subsequent representa-
+tions capture the predicted temporal propagation. Each ˜sτ
+maintains the same structural format as st, preserving the
+object-level decomposition. Finally, by sampling the distri-
+bution P( ˜St:t+k), we may obtain multiple plausible coun-
+terfactual trajectories that reflect uncertainty in how inter-
+ventions might propagate.
+Video Synthesis Conditioned on Digital Twin Repre-
+sentation.
+The synthesis mapping fsynth
+:
+˜St:t+k
+→
+P(˜Vt:t+k) generates counterfactual video sequences from
+the modified digital twin representations via a video diffu-
+sion model. Formally, we adopt a pre-trained video dif-
+fusion model as the backbone and fine-tune it on paired
+data of digital twin representations and corresponding video
+frames. During fine-tuning, the backbone video diffusion
+model learns to condition the denoising process on both
+the digital twin representations sτ at each frame τ as tex-
+tual input and the corresponding first frame vt as visual
+input to generate subsequent frames.
+Through this fine-
+tuning process, the video diffusion model therefore learns
+to predict subsequent frame dynamics from the initial vi-
+sual state while respecting the temporal evolution specified
+by the digital twin representations. During inference, we
+first apply an image editing method to modify the origi-
+nal frame vt according to the counterfactual modifications
+specified in ˜st, producing an edited frame ˜vt that visually
+reflects the intervention effects. This editing step ensures
+consistency between the visual starting point and the textual
+scene description, as directly conditioning on the unmodi-
+fied frame vt would create a mismatch with the counterfac-
+tual digital twin sequence. Given the counterfactual digital
+twin sequence ˜st:t+k and the edited initial frame ˜vt, the fine-
+tuned video diffusion model then generates the correspond-
+ing counterfactual video frames. Eventually, by sampling
+multiple digital twin sequences from P( ˜St:t+k), we can
+therefore generate various counterfactual videos through re-
+peated inference runs on this video diffusion model.
+4. Experiments
+Implementation Details.
+We implement all experiments
+using PyTorch 2.8.0 on one NVIDIA GeForce RTX 4090
+GPU with 48 GB memory. The intervention mapping uses
+Qwen3-VL-8B-Instruct [2] as the LLM backbone to per-
+form counterfactual reasoning on digital twin representa-
+tions. For video synthesis, we adopt LTX-Video [19] as the
+pre-trained video diffusion model backbone and fine-tune
+it on 95 paired samples of digital twin representations and
+4
+
+Original Video
+InstructPix2Pix
+InstructV2V
+FlowDirector
+AnyV2V
+Original Video
+InstructPix2Pix
+InstructV2V
+FlowDirector
+AnyV2V
+Ours
+The food is removed from the table, and 
+the squirrel’s behavior shifts to searching 
+rather than feeding.
+The food is not removed, and the squirrel’s 
+actions still follow an eating or searching-
+for-food pattern.
+The food is still clearly present, and the 
+squirrel continues interacting with it as 
+if food remains.
+The food stays unchanged on the table, 
+and the squirrel’s motion still reflects 
+feeding behavior.
+The food remains on the table, and the 
+squirrel continues to act as if eating.
+Query: What if there is no food at the 
+table?
+The vase is flipped over, the flowers 
+spill across the surface, and the water 
+pours out realistically.
+Produces inconsistent artifacts but does not 
+produce a flipped vase or realistic fallen 
+flowers.
+The vase is not flipped, and the flowers 
+continue to sit properly inside it, with no 
+physical disruption.
+The vase stays in its original upright 
+position, and the flowers remain 
+unchanged.
+The vase remains upright, and the 
+flowers stay arranged as in the original 
+scene.
+Query: Show what this scene would 
+look like after someone flipped over 
+a plastic vase.
+Ours
+Figure 2. Qualitative comparison of counterfactual world model capabilities across different methods. Two intervention scenarios test
+whether models can predict alternative temporal sequences. CWMDT correctly generates counterfactual trajectories. Compared methods
+fail to execute these interventions. Red boxes indicate regions where intervention effects should appear.
+Table 1. Quantitative evaluation on RVEBench. Each metric is assessed across three levels of reasoning complexity (L1, L2, L3) in
+percentage (%). Higher scores indicate better performance for all metrics.
+Method
+CLIP-Text (↑)
+CLIP-F (↑)
+GroundingDINO (↑)
+LLM-as-a-Judge (↑)
+L1
+L2
+L3
+L1
+L2
+L3
+L1
+L2
+L3
+L1
+L2
+L3
+InstructDiff [17]
+19.57
+18.23
+17.21
+86.80
+86.40
+86.17
+14.73
+10.08
+9.38
+44.33
+39.89
+36.79
+InstructV2V [46]
+22.22
+21.43
+19.78
+91.80
+91.44
+90.59
+11.48
+7.50
+5.13
+38.86
+35.95
+34.70
+FlowDirector [33]
+19.56
+18.70
+17.15
+93.90
+94.06
+94.10
+8.73
+8.11
+5.56
+35.52
+30.75
+29.96
+AnyV2V [31]
+17.05
+16.29
+15.54
+93.71
+93.85
+93.61
+13.72
+12.38
+9.94
+20.01
+18.47
+17.68
+InstructPix2Pix [5]
+18.49
+17.45
+16.73
+92.18
+92.73
+93.06
+6.19
+6.32
+9.68
+34.53
+30.76
+29.49
+CWMDT (Ours)
+26.18
+25.42
+26.39
+97.87
+98.45
+98.48
+29.16
+28.57
+33.33
+62.47
+64.06
+58.81
+corresponding video frames from RVTBench [51]. Dur-
+ing fine-tuning of the video diffusion models, we perform
+LoRA [25] fine-tuning with rank 32 for 100 epochs with
+a batch size of 2 using the AdamW optimizer and Cosine
+scheduler with a learning rate of 1e-4. The diffusion model
+generates videos at 24 fps with a resolution of 768×768 pix-
+els over 65 frames. For image editing to produce the mod-
+ified initial frame ˜vt, we use Qwen-Image-Edit-2509 [58].
+5
+
+Query: What if the car was replaced with a motorcycle riding down the same road？
+AnyV2V
+Diverse Outputs from Our Method
+Case 1: Our method replaces the original car with a motorcycle moving along the same road direction and perspective while maintaining consistent motion and speed.
+Case 2: Our method replaces the original car with a faster-moving motorcycle that drives forward in the same direction, goes out of the frame, and later reappears.
+Case 3: Our method replaces the car with a faster-moving motorcycle that performs agile maneuvers along the curve, leaning and adjusting its direction.
+InstructPix2Pix
+Video
+Figure 3. Demonstration of diverse counterfactual trajectory generation from a single intervention. Given the query to replace a car with a
+motorcycle, CWMDT produces three distinct plausible scenarios: maintaining the original motion pattern (Case 1), accelerating beyond the
+frame boundary and reentering (Case 2), and executing agile cornering maneuvers (Case 3). Each trajectory respects physical constraints
+while exploring different behavioral possibilities that could arise from the same initial intervention. Baseline methods either fail to execute
+the vehicle replacement or produce visually inconsistent results, lacking the ability to reason about multiple plausible outcomes.
+During inference, we sample 3 counterfactual digital twin
+sequences from P( ˜St:t+k) for each intervention to generate
+multiple plausible counterfactual trajectories.
+Benchmark
+Datasets
+and
+Metrics.
+We
+evaluate
+CWMDT on two benchmarks that test different as-
+pects of counterfactual world model capabilities.
+First,
+RVEBench [52] provides 100 videos with 519 queries for
+6
+
+Table 2. Ablation study evaluating the contribution of each component in CWMDT on the FiVE benchmark. Checkmarks (✓) indicate
+component presence, while crosses (✗) indicate removal. Results show that digital twin representations and LLM-based intervention
+reasoning are important for accurate counterfactual world modeling, while the edited initial frame ensures visual-textual consistency.
+Digital Twin
+Representation
+LLM Intervention
+Reasoning
+LLM
+Scale
+Modified
+Initial Frame ˜vt
+CLIP-Text
+CLIP-F
+MUSIQ
+SSIM
+PSNR
+GroundingDINO
+LLM-as-a-Judge
+(↑)
+(↑)
+(↑)
+(↑)
+(↑)
+(↑)
+(↑)
+✗
+✓
+8B
+✓
+26.35±1.47
+97.21±0.14
+45.74±2.32
+45.09±0.55
+13.17±0.60
+17.65±12.42
+43.62±9.82
+✓
+✗
+8B
+✓
+27.10±1.30
+97.15±0.20
+43.50±2.10
+46.00±0.60
+14.00±0.65
+19.50±11.00
+46.99±8.75
+✓
+✓
+1.5B
+✓
+28.90±1.10
+98.00±0.28
+47.20±1.85
+50.10±0.50
+16.50±0.55
+24.00±10.50
+51.26±6.13
+✓
+✓
+8B
+✗
+27.98±0.99
+97.09±0.36
+36.53±1.66
+45.38±0.53
+13.66±0.54
+17.34±11.58
+48.31±7.51
+✓
+✓
+8B
+✓
+30.59±1.83
+98.85±0.25
+50.19±1.95
+53.47±0.52
+18.32±0.57
+30.18±6.25
+63.02±5.01
+Original Video
+Output
+Output
+Query: What if the scene stayed the same but the traffic became congested?
+Expectation: The scenery stays unchanged. The road fills with multiple vehicles, causing slow-moving, heavy traffic with stop-and-go motion.
+Analysis: Our method achieves realistic traffic congestion by editing vehicle motions so that the car in the original video stays stopped at first, then moves slowly while 
+following the front vehicle. Additional cars are introduced naturally, forming a dense queue, while an incoming car from the opposite lane enters the frame, slows down, 
+brakes, and finally stops due to the blocked road.
+Query: What if a tree falls onto the road while the car keeps moving at the same speed?
+Expectation: The car continues moving at the same speed without slowing down as the tree falls. As a result, the car crashes directly into the fallen tree, causing an abrupt 
+stop and visible collision impact.
+Analysis: Our method achieves a realistic tree-fall event by generating the falling tree and maintaining the car’s motion at a constant speed until impact. The car moves 
+forward without slowing, collides directly with the fallen tree, and comes to a sudden stop, producing a clear and plausible crash sequence. 
+Scenario 1: Traffic Congestion Counterfactual
+Scenario 2: Tree Fall Counterfactual
+Figure 4. Diverse counterfactual scenarios generated from a single
+original video sequence using the proposed CWMDT.
+reasoning video editing, which tests whether the model
+can reason about counterfactual scenarios that require
+multi-hop reasoning.
+It is organized into three levels of
+complexity in reasoning (L1, L2, L3), where each level
+requires progressively more reasoning steps to identify
+the intervention targets from implicit queries.
+FiVE
+benchmark [34] contains 100 videos with 420 object-level
+query pairs across six fine-grained editing types, testing
+the model’s ability to execute precise interventions while
+maintaining temporal consistency. We employ four metrics:
+CLIP-Text [23] measures the semantic alignment between
+the generated counterfactual video and the intervention
+description; CLIP-F [23, 60, 63] evaluates the temporal
+coherence between frames in the counterfactual sequence;
+GroundingDINO [37] assesses whether the intervention
+targets are correctly localized in the generated video; and
+LLM-as-a-Judge [66] assesses whether the counterfactual
+outcome aligns with the intervention intent. We report all
+metrics as percentage.
+Compared Methods.
+We compare CWMDT with five
+video generative models that represent different approaches
+to instruction-driven visual manipulation. Three methods
+operate directly on video: InstructV2V [46] performs end-
+to-end instruction-based editing through diffusion models,
+FlowDirector [33] applies optical flow for localized modi-
+fications, and AnyV2V [31] converts image editing models
+into video editors through temporal feature injection. Two
+image editing methods are also included by frame-by-frame
+processing in the videos: InstructDiff [17] interprets nat-
+ural language instructions for image manipulation, while
+InstructPix2Pix [5] learns to follow editing instructions
+through conditional diffusion training. These baselines re-
+veal the limitations of existing approaches when confronted
+with counterfactual reasoning in world models as they oper-
+ate directly on pixel representations without explicit scene
+understanding. Our comparison evaluates whether decom-
+posing counterfactual world modeling into perception, rea-
+soning, and synthesis through digital twin representations
+offers advantages over direct pixel-space editing.
+Evaluations on RVEBench.
+Table 1 presents quantita-
+tive results in RVEBench, where CWMDT outperforms all
+compared methods in all metrics and complexity levels.
+For GroundingDINO, CWMDT achieves 29.16%, 28.57%,
+and 33.33% at L1, L2, and L3 respectively, compared
+to the next best scores of 14.73%, 12.38%, and 9.94%.
+This improvement demonstrates that digital twin represen-
+tations enable precise spatial grounding during counterfac-
+tual reasoning.
+Similarly, LLM-as-a-Judge scores show
+CWMDT achieving 62.47%, 64.06%, and 58.81%, substan-
+tially higher than others’ 20.01%-44.33%, 18.47%-39.89%,
+and 17.68%-36.79% across the three levels. These results
+validate that separating reasoning from synthesis through
+digital twin representations produces counterfactual trajec-
+tories that align better with intervention semantics.
+The
+compared methods show declining performance as com-
+plexity increases from L1 to L3, reflecting their limitation
+in propagating intervention effects through time without
+explicit scene understanding. On the contrary, CWMDT
+maintains consistent performance and even improves at
+L3 for GroundingDINO. The high CLIP-F scores across
+all methods (above 86%) confirm temporal consistency in
+video generation, yet CWMDT achieves the highest scores
+(97.87%-98.48%), demonstrating that conditioning on dig-
+ital twin representations preserves coherent temporal dy-
+namics while executing interventions.
+Fig. 2 presents qualitative comparisons. For example,
+7
+
+when asked to remove food from the table, CWMDT gen-
+erates video sequences where the squirrel’s behavior adapts
+from feeding to searching, while the compared methods fail
+to execute the intervention and continue showing the squir-
+rel interacting with the still-present food. Fig. 3 demon-
+strates CWMDT’s ability to generate multiple plausible
+counterfactual trajectories from a single intervention. Fig. 4
+illustrates qualitative examples in which CWMDT gener-
+ates realistic counterfactual scenarios for the same given
+image with different counterfactual queries. These findings
+confirm that by introducing interventions as explicit inputs
+and reasoning over compositional scene structure, CWMDT
+generates alternative trajectories that accurately reflect hy-
+pothetical modifications to scene properties.
+Table 3. Quantitative evaluation of video editing methods on FiVE
+dataset. Each metric assesses editing quality from different per-
+spectives. Higher scores indicate better performance for all met-
+rics.
+Method
+CLIP-Text
+CLIP-F
+GroundingDINO
+LLM-as-a-Judge
+InstructDiff [17]
+24.81±0.28
+88.03±0.36
+17.67±4.07
+54.83±7.11
+InstructV2V [46]
+25.31±0.25
+91.84±0.28
+14.67±3.96
+59.85±10.50
+FlowDirector [33]
+20.50±0.44
+96.91±0.11
+19.59±7.50
+37.20±8.16
+AnyV2V [31]
+24.73±0.36
+96.98±0.12
+20.00±5.26
+54.85±8.76
+InstructPix2Pix [5]
+23.22±0.27
+92.26±0.25
+22.81±4.45
+41.85±12.34
+CWMDT (Ours)
+30.59±1.83
+98.85±0.25
+30.18±6.25
+63.02±5.01
+Evaluations on FiVE Benchmark.
+Tab. 3 shows the
+evaluation results on the FiVE becnhmark.
+CWMDT
+achieves 30.59% CLIP-Text score, 98.85% CLIP-F score,
+30.18% GroundingDINO score, and 63.02% LLM-as-a-
+Judge score, outperforming all compared methods.
+The
+improvements over baselines are particularly observable in
+CLIP-Text (20.8% relative gain over the 25.31% achieved
+by InstructV2V) and GroundingDINO (32.3% relative gain
+over the 22.81% achieved by InstructPix2Pix), demonstrat-
+ing that digital twin representations provide advantages be-
+yond complex reasoning scenarios.
+Unlike RVEBench,
+where the compared methods showed a consistent decline
+in complexity levels, the FiVE results reveal that pixel-
+space approaches achieve high temporal consistency (CLIP-
+F scores greater than 88%) but struggle with semantic
+alignment and spatial grounding.
+This pattern suggests
+that existing video editing methods can maintain frame-
+to-frame coherence but fail to execute interventions that
+require understanding and modifying specific scene com-
+ponents.
+The standard deviation analysis provides addi-
+tional evidence. CWMDT shows comparable or lower vari-
+ance than compared methods on CLIP-F (0.25) and LLM-
+as-a-Judge (5.01), indicating stable performance despite
+the added complexity of three-stage decomposition. Base-
+line methods exhibit higher variance on GroundingDINO
+(ranging from 3.96 to 7.50), reflecting inconsistent spatial
+grounding. These results show that CWMDT’s advantages
+extend beyond reasoning-intensive benchmarks to general
+video editing tasks.
+Ablation Study.
+We perform ablation on the FiVE bench-
+mark to evaluate the contribution of each component in
+CWMDT, as shown in Tab. 2. Removing digital twin rep-
+resentations and instead directly conditioning the diffusion
+model on input text prompts together with the edited first
+frame results in decreased GroundingDINO scores (17.65%
+versus 30.18%) and LLM-as-a-Judge scores (43.62% ver-
+sus 63.02%). It demonstrates that structured digital twin
+representations enable more accurate spatial localization
+and intervention execution compared to entangled text
+embeddings.
+Removing LLM intervention reasoning by
+switching Qwen3 to non-reasoning mode reduces LLM-
+as-a-Judge scores from 63.02% to 46.99%, indicating that
+explicit multi-hop reasoning over digital twin representa-
+tions produces counterfactual trajectories that better align
+with intervention semantics. Scaling down the LLM from
+Qwen3-8B to Qwen3-1.5B decreases performance across
+all metrics, with GroundingDINO dropping from 30.18%
+to 24.00% and LLM-as-a-Judge declining from 63.02%
+to 51.26%, confirming that larger LLM provide stronger
+reasoning capabilities for determining how interventions
+should propagate over time. Removing the modified ini-
+tial frame ˜vt and instead using the original frame vt leads
+to degraded MUSIQ scores (36.53% versus 50.19%) and
+lower LLM-as-a-Judge scores (48.31% versus 63.02%). It
+reveals that visual-textual consistency between the starting
+frame and the counterfactual digital twin sequence is nec-
+essary for the diffusion model to generate alternative trajec-
+tories. These results confirm that all components contribute
+to counterfactual world modeling, with digital twin repre-
+sentations and LLM-based reasoning being the most impor-
+tant for producing accurate interventions and their temporal
+propagation.
+5. Conclusion
+World models enable forward simulation of environment
+dynamics, yet existing methods generate only factual pre-
+dictions from observed states. We formalize counterfactual
+world models that accept interventions as explicit inputs
+alongside visual observations, extending forward simula-
+tion to hypothetical scenarios. This extension serves phys-
+ical AI evaluation, where agents must reason about alter-
+native outcomes before committing to actions. CWMDT
+demonstrates that video diffusion models can be trans-
+formed into counterfactual world models through a three-
+stage decomposition: perception constructs digital twin rep-
+resentations that make scene structure explicit, interven-
+tion reasoning through LLMs determines how modifica-
+tions propagate across time, and synthesis generates cor-
+8
+
+responding visual sequences. Digital twin representations
+function as alternative control signals for video forward
+simulation, exposing compositional scene factors that en-
+able selective modifications to specific objects and relation-
+ships rather than operating on entangled pixel distributions.
+This decomposition separates logical intervention determi-
+nation from visual generation, allowing world models to
+leverage embedded world knowledge in LLMs for reason-
+ing about counterfactual dynamics. Future work may ex-
+pand digital twin representations to capture finer-grained
+physical properties and explore how counterfactual world
+models can guide decision-making in autonomous systems
+where evaluating hypothetical scenarios is necessary for
+safe operation.
+9
+
+A. Additional Experiments
+To validate CWMDT beyond the primary benchmarks, we
+select the CausalVQA [16] debug dataset split. This choice
+aligns naturally with our counterfactual world model formu-
+lation for three reasons. First, CausalVQA explicitly tests
+counterfactual reasoning through questions that probe al-
+ternative outcomes under hypothetical modifications to ob-
+served scenes, directly matching our model’s design objec-
+tive of predicting temporal sequences under interventions.
+Second, the benchmark grounds its questions in real-world
+physical scenarios captured through egocentric videos, pro-
+viding the complex visual dynamics and object interactions
+that our digital twin representations are designed to capture.
+Third, unlike synthetic simulation benchmarks that simplify
+physical scenes, CausalVQA presents the authentic com-
+plexity of real environments while maintaining focus on
+physically grounded causal reasoning rather than purely de-
+scriptive visual understanding.
+Experimental Settings.
+We conduct our evaluation on
+the CausalVQA debug dataset split, which contains 20
+samples categorized as “easy” difficulty, with each sample
+paired with two question variants to test robustness to lan-
+guage perturbations. We select this split because it provides
+ground-truth target values for every case, enabling detailed
+analysis of model behavior. A similarly fine-grained exami-
+nation on the full test split remains infeasible as those target
+values are withheld for leaderboard purposes.
+For each question in this debug split, we first ap-
+ply CWMDT to generate the corresponding counterfactual
+video sequence based on the intervention specified in the
+question. We then construct the input to each VLM by con-
+catenating the original video with the generated counterfac-
+tual video, followed by the question text. This allows the
+VLM to compare the factual trajectory against the coun-
+terfactual trajectory predicted by CWMDT when answer-
+ing. For baseline comparisons, we feed only the original
+video and the question to the models, following the standard
+CausalVQA evaluation protocol. This comparison reveals
+whether CWMDT’s counterfactual predictions contain in-
+formation that improves model performance on counterfac-
+tual reasoning tasks, or alternatively, whether the generated
+videos introduce artifacts that degrade answer quality.
+Compared Methods.
+We evaluated the same set of mod-
+els used in the original CausalVQA paper [16] under iden-
+tical inference configurations.
+Open-source VLMs in-
+clude LLaVA-OneVision [32], Qwen2.5-VL [2], Percep-
+tionLM [11], and InternVL-2.5 [10]. Commercial closed
+VLMs consist of GPT-4o and Gemini 2.5 Flash. To estab-
+lish a human baseline, we recruit five independent anno-
+tators with no prior exposure to the dataset to answer the
+benchmark questions.
+Results and Analysis.
+Table 4 presents the results on
+the CausalVQA debug dataset across five question cate-
+gories.
+CWMDT augmentation (Qwen2.5VL+CWMDT)
+achieves the best model performance on anticipation ques-
+tions with 62.50% accuracy, exceeding the strongest base-
+line by 7.50%. For counterfactual questions, our method
+matches the top-performing closed model Gemini 2.5 Flash
+at 70.00%, while outperforming the base Qwen2.5VL
+model by 17.50%. On hypothetical questions, CWMDT
+reaches 72.50%, tying with GPT-4o for the highest score.
+These results suggest that explicit counterfactual video gen-
+eration provides the most value for question types that
+require reasoning about alternative temporal trajectories
+(anticipation, counterfactual, hypothetical), while offering
+smaller improvements for questions that primarily test fac-
+tual understanding (descriptive) or goal-oriented reasoning
+(planning).
+B. Details of Digital Twin Representations
+In this section, we describe the structure of our digital
+twin representation. Specifically, it includes a global scene
+summary, a spatial trajectory description, per-object frame-
+level captions, and numerical traces including area curves,
+depth estimates, and centroid movements.
+Formally, as
+shown in Fig. 5, each digital twin representation is rep-
+resented as a JSON object containing the following com-
+ponents: (1) a summary describing the overall scene, (2)
+a spatial summary explaining object motion and spa-
+tial behavior across the sequence, (3) a major elements
+with per-frame annotations and numerical attributes, and (4)
+a frame range denoting the temporal span.
+However, such digital twin representation is expressive
+and large. Therefore, for the diffusion model fine-tuning
+and inference, we introduce a condensed version of digi-
+tal twin representation that retains only most relevant ele-
+ments. The condensed form preserves the global summary,
+the spatial description, and a compressed set of object at-
+tributes, while removing redundant frames, long numerical
+traces, and other high-granularity metadata.
+C. Details for Editing the Digital Twin Repre-
+sentations
+In this section, we present example for the edited digital
+twin representation. Given an initial digital twin represen-
+tation as input, the LLM does more than rewrite the global
+summary and spatial summary: it also generates a
+physically coherent update to the underlying motion cues,
+object trajectories, and depth evolution. Moreover, LLM
+adjusts frame-level descriptions, modifies object deforma-
+tion patterns, and refines the numerical signals that govern
+10
+
+Original Digital Twin Representation
+{"summary": "A pink lotus flower sways gently in a pond."
+"spatial_summary":"Object 0 (pink lotus flower) stays in 
+the center foreground, drifting only slightly right as it 
+opens and closes. Its size stays constant, depth shifts are 
+mild, and the centroid barely moves. The whole pattern 
+matches a lotus gently swaying on pond water.",
+"major_elements": [
+{"object_0": "pink lotus flower",
+"frames": {"00000": {"description": "A pink lotus 
+flower blooms gracefully on a green stem against a blurred 
+natural background."},
+"00040": {"description": 
+"A pink lotus flower blooms gracefully on a green stem 
+against a blurred green leaves."},
+"area": [...],
+"depth": [...] ,
+"center": [...] }],
+"frame_range": {
+"start": 0,
+"end": 80}
+}
+Condensed Digital Twin Representation 
+"This JSON describes a video as a digital twin representation. 
+SCENE_INFO gives total frames and 3x3 grid cut-lines forming 
+regions TL,T,TR,L,C,R,BL,B,BR. Each object has: REGIONS 
+(grid cell spans), PATH (8-way compass with counts), DEPTH 
+(N=near, M=mid, F=far) spans, SCALE (^ grow, = steady, v 
+shrink) spans. summary and spatial_sum provide scene context 
+and relations. Frame indices in spans are actual frame numbers, 
+computed from the source sampling rate."
+{"summary": "A pink lotus flower sways gently in a pond."
+"spatial_summary":"Object 0 (pink lotus flower) stays in the 
+center foreground, drifting only slightly right as it opens and 
+closes. Its size stays constant, depth shifts are mild, and the 
+centroid barely moves. The whole pattern matches a lotus gently 
+swaying on pond water.",
+"major_elements": [
+{"object_0": "pink lotus flower",
+"frames": {"00000": {"description": "A pink lotus 
+flower blooms gracefully on a green stem against a blurred 
+natural background."},
+"00040": {"description": "A 
+pink lotus flower blooms gracefully on a green stem against a 
+blurred green leaves."},
+"regions": "L@0-0 > R@4-4 > BR@8-8 > L@12-12 > 
+T@16-16 > L@20-20",
+"path": "Ex1 SEx1 Wx1 NEx1 SWx1" ,
+"depth": "F@0-0 > N@4-8 > M@12-16 > F@20-20"}],
+"frame_range": {
+"start": 0,
+"end": 80}
+}
+Edited Condensed Twin Representation
+"This JSON describes a video as a digital twin representation.SCENE_INFO gives 
+total frames and 3x3 grid cut-lines forming regions TL,T,TR,L,C,R,BL,B,BR. Each 
+object has: REGIONS (grid cell spans), PATH (8-way compass with counts), DEPTH 
+(N=near, M=mid, F=far) spans, SCALE (^ grow, = steady, v shrink) spans. summary 
+and spatial_sum provide scene context and relations. Frame indices in spans are actual 
+frame numbers, computed from the source sampling rate."
+{"summary": "An hour after the snowfall, the pink lotus flower remains damp and 
+slightly wilted, surrounded by cold mist rising from the pond."
+"spatial_summary":"Object 0 (the pink lotus flower) stays near the center 
+foreground but shows a heavier, slower sway. Its area decreases slightly as petals 
+curl inward, retaining moisture from melting snow. Depth values rise marginally, 
+suggesting the flower leans closer to the water surface. The pond reflects pale light 
+under a dim sky, with thin patches of ice and lingering droplets on nearby leaves, 
+implying the temperature remains just above freezing.",
+"major_elements": [
+{"object_0": "pink lotus flower",
+"frames": {"00000": {"description": "A pink lotus flower stays near the 
+center and sways slowly, getting a bit smaller as its petals curl in and it leans closer 
+to the water. "},
+"00040": {"description": "A pink lotus flower 
+remains damp and surrounded by a frozen pond. The pond shows dim light, a few 
+thin ice patches, and droplets on the leaves, meaning the temperature is just above 
+freezing."}},
+"regions": "L@0-0 > C@4-4 > C@8-8 > R@12-12 > C@16-16 > R@20-
+20",
+"path": "Ex1 Ex1 SEx1 Ex1 Wx1" ,
+"depth": "M@0-0 > M@4-8 > M@12-16 > M@20-20"}],
+"frame_range": {
+"start": 0,
+"end": 80}
+}
+Figure 5. Evolution of digital twin representations through the CWMDT. Left: Original digital twin representation extracted from video,
+containing per-frame descriptions, numerical traces for area, depth, and centroid coordinates. Middle: Condensed representation retaining
+scene summaries and compressed spatial attributes through compact notation for regions, motion paths, and depth spans. Right: LLM-
+edited representation reflecting the counterfactual intervention. The LLM modifies not only textual descriptions but also spatial trajectories,
+depth evolution, and motion patterns to maintain physical coherence under the hypothetical condition.
+Table 4. Performance comparison on CausalVQA debug dataset. All values represent accuracy (%). Each category contains 40 question
+pairs. The best model performance in each category is shown in bold, with human performance in italics.
+Large/Closed
+Open (7-8B)
+Category
+Difficulty
+GPT-4o
+Gemini 2.5 Flash
+InternVL2.5
+LLaVA-OneVision
+PerceptionLM
+Qwen2.5VL
+Qwen2.5VL+CWMDT
+Human
+Anticipation
+Easy
+50.00
+55.00
+52.50
+27.50
+47.50
+47.50
+62.50
+86.00
+Counterfactual
+Easy
+65.00
+70.00
+50.00
+57.50
+60.00
+52.50
+70.00
+93.12
+Descriptive
+Easy
+70.00
+80.00
+50.00
+60.00
+55.00
+65.00
+67.50
+90.50
+Hypothetical
+Easy
+72.50
+67.50
+67.50
+60.00
+67.50
+40.00
+72.50
+88.75
+Planning
+Easy
+65.00
+70.00
+70.00
+52.50
+70.00
+57.50
+67.50
+93.00
+area traces, centroid drift, and depth scaling. As a result,
+the edited digital twin representation is not merely a textual
+reinterpretation of the original scene, but a fully revised spa-
+tiotemporal representation that reflects the hypothetical or
+counterfactual conditions requested by the user. This edited
+form serves as a self-consistent, semantically aligned coun-
+terpart to the input twin, enabling downstream models to
+reason about alternative scene states with accurate and co-
+herent structural detail.
+11
+
+References
+[1] Eloi Alonso, Eloi Valevski, Vincent Micheli, and Franc¸ois
+Fleuret. Statespacediffuser: Bringing long context to diffu-
+sion world models. arXiv preprint arXiv:2410.22849, 2024.
+2
+[2] Shuai Bai et al. Qwen2. 5-vl technical report. arXiv preprint
+arXiv:2502.13923, 2025. 3, 4, 10
+[3] Zhipeng Bao, Anurag Bagchi, Yu-Xiong Wang, Pavel Tok-
+makov, and Martial Hebert. Video diffusion models learn the
+structure of the dynamic world. 2024. 2
+[4] Andreas Blattmann, Robin Rombach, Huan Ling, Tim Dock-
+horn, Seung Wook Kim, Sanja Fidler, and Karsten Kreis.
+Align your latents: High-resolution video synthesis with la-
+tent diffusion models.
+In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 22563–22575, 2023. 1, 2
+[5] Tim Brooks, Aleksander Holynski, and Alexei A Efros. In-
+structpix2pix: Learning to follow image editing instructions.
+In Proceedings of the IEEE/CVF conference on computer vi-
+sion and pattern recognition, pages 18392–18402, 2023. 5,
+7, 8
+[6] Jake Bruce et al.
+Genie: Generative interactive environ-
+ments. arXiv preprint arXiv:2402.15391, 2024. 1, 2
+[7] Francesca Burgert, Vincent Sitzmann, and Jacob Steinhardt.
+Go-with-the-flow: Motion-controllable video diffusion mod-
+els. CVPR, 2025. 2
+[8] Weifeng Chen et al. Control-a-video: Controllable text-to-
+video diffusion models with motion prior and reward feed-
+back learning. arXiv preprint arXiv:2305.13840, 2023. 2
+[9] Weipu Chen et al. Storm: Efficient stochastic transformer
+based world models for reinforcement learning. Advances in
+Neural Information Processing Systems, 36, 2023. 2
+[10] Zhe Chen et al. Expanding performance boundaries of open-
+source multimodal models with model, data, and test-time
+scaling. arXiv preprint arXiv:2412.05271, 2024. 10
+[11] Jang Hyun Cho et al. Perceptionlm: Open-access data and
+models for detailed visual understanding.
+arXiv preprint
+arXiv:2504.13180, 2025. 10
+[12] Oriol Comas, Alex Pareja-Zubieta, Marc Gil-Ortin, Miquel
+Gonz’alez-Duque, Antonio Agudo, and Francesc Moreno-
+Noguer. Learning object-centric dynamic modes from video
+and emerging properties. In Conference on Lifelong Learn-
+ing Agents (CoLLAs), 2023. 1, 2
+[13] Fei Deng, Ingook Tsang, and Ran Chen. Facing off world
+model backbones: Rnns, transformers, and s4. Advances in
+Neural Information Processing Systems, 37, 2024. 2
+[14] Jingtao Ding, Yunke Zhang, Yu Shang, Yuheng Zhang, Ze-
+fang Zong, Jie Feng, Yuan Yuan, Hongyuan Su, Nian Li,
+Nicholas Sukiennik, et al. Understanding world or predict-
+ing future? a comprehensive survey of world models. ACM
+Computing Surveys, 58(3):1–38, 2025. 1
+[15] Tuo Feng, Wenguan Wang, and Yi Yang.
+A survey of
+world models for autonomous driving.
+arXiv preprint
+arXiv:2501.11260, 2025. 2
+[16] Aaron Foss, Chloe Evans, Sasha Mitts, Koustuv Sinha, Am-
+mar Rizvi, and Justine T Kao.
+Causalvqa: A physically
+grounded causal reasoning benchmark for video models.
+arXiv preprint arXiv:2506.09943, 2025. 10
+[17] Zigang Geng, Binxin Yang, Tiankai Hang, Chen Li, Shuyang
+Gu, Ting Zhang, Jianmin Bao, Zheng Zhang, Houqiang Li,
+Han Hu, et al. Instructdiffusion: A generalist modeling inter-
+face for vision tasks. In Proceedings of the IEEE/CVF Con-
+ference on computer vision and pattern recognition, pages
+12709–12720, 2024. 5, 7, 8
+[18] David Ha and J¨urgen Schmidhuber. World models. arXiv
+preprint arXiv:1803.10122, 2(3), 2018. 1, 2
+[19] Yoav HaCohen, Nisan Chiprut, Benny Brazowski, Daniel
+Shalem, Dudu Moshe, Eitan Richardson, Eran Levin, Guy
+Shiran, Nir Zabari, Ori Gordon, et al. Ltx-video: Realtime
+video latent diffusion.
+arXiv preprint arXiv:2501.00103,
+2024. 1, 2, 4
+[20] Danijar Hafner, Timothy Lillicrap, Jimmy Ba, and Moham-
+mad Norouzi. Dream to control: Learning behaviors by la-
+tent imagination. arXiv preprint arXiv:1912.01603, 2019. 1
+[21] Danijar Hafner, Jurgis Pasukonis, Jimmy Ba, and Timothy
+Lillicrap. Mastering diverse domains through world models.
+arXiv preprint arXiv:2301.04104, 2023. 2
+[22] Paul Henderson and Christoph H Lampert.
+Unsupervised
+object-centric video generation and decomposition in 3d. Ad-
+vances in Neural Information Processing Systems (NeurIPS),
+pages 3106–3117, 2020. 1, 2
+[23] Jack Hessel, Ari Holtzman, Maxwell Forbes, Ronan Le Bras,
+and Yejin Choi. Clipscore: A reference-free evaluation met-
+ric for image captioning. In Proceedings of the 2021 Confer-
+ence on Empirical Methods in Natural Language Processing,
+pages 7612–7624, 2021. 7
+[24] Jonathan Ho, Tim Salimans, Alexey Gritsenko, William
+Chan, Mohammad Norouzi, and David J Fleet. Video diffu-
+sion models. In Advances in Neural Information Processing
+Systems, 2022. 1
+[25] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-
+Zhu, Yuanzhi Li, Shean Wang, Lu Wang, Weizhu Chen, et al.
+Lora: Low-rank adaptation of large language models. ICLR,
+1(2):3, 2022. 5
+[26] Xiaofeng Hu et al. Drivedreamer: Towards real-world-driven
+world models for autonomous driving. European Conference
+on Computer Vision, pages 646–662, 2024. 2
+[27] Jianxiong Huang et al.
+Pandora: Towards general world
+model with natural language actions and video states. arXiv
+preprint arXiv:2406.09455, 2024. 2
+[28] Lukasz Kaiser,
+Mohammad Babaeizadeh,
+Piotr Milos,
+Blazej Osinski, Roy H Campbell, Konrad Czechowski,
+Dumitru Erhan, Chelsea Finn, Piotr Kozakowski, Sergey
+Levine, et al. Model-based reinforcement learning for atari.
+arXiv preprint arXiv:1903.00374, 2019. 1
+[29] Lara Kirfel, Robert J MacCoun, Thomas Icard, and Tobias
+Gerstenberg. Anticipating the risks and benefits of counter-
+factual world simulation models. In AI Meets Moral Philoso-
+phy and Moral Psychology Workshop (NeurIPS 2023), 2023.
+1
+[30] Alexander Kirillov et al. Segment anything. arXiv preprint
+arXiv:2304.02643, 2023. 3
+12
+
+[31] Max Ku et al.
+Anyv2v:
+A tuning-free framework
+for any video-to-video editing tasks.
+arXiv preprint
+arXiv:2403.14468, 2024. 5, 7, 8
+[32] Bo Li, Yuanhan Zhang, Dong Guo, Renrui Zhang, Feng Li,
+Hao Zhang, Kaichen Zhang, Peiyuan Zhang, Yanwei Li, Zi-
+wei Liu, and Chunyuan Li. Llava-onevision: Easy visual task
+transfer. arXiv preprint arXiv:2408.03326, 2024. 10
+[33] Guangzhao Li, Yanming Yang, Chenxi Song, and Chi Zhang.
+Flowdirector: Training-free flow steering for precise text-to-
+video editing. arXiv preprint arXiv:2506.05046, 2025. 5, 7,
+8
+[34] Minghan Li et al. Five-bench: A fine-grained video editing
+benchmark for evaluating emerging diffusion and rectified
+flow models. In Proceedings of the IEEE/CVF International
+Conference on Computer Vision, pages 16672–16681, 2025.
+7
+[35] Xinqing Li, Xin He, Le Zhang, and Yun Liu. A comprehen-
+sive survey on world models for embodied ai. arXiv preprint
+arXiv:2510.16732, 2025. 2
+[36] Bingzhi Liu, Dongchen Yang, Tianyi Zhang, Mingzhe Chen,
+Hao Wang, Yi Zhou, et al. How far is video generation from
+world model: A physical law perspective.
+arXiv preprint
+arXiv:2411.02385, 2024. 2
+[37] Shilong Liu, Zhaoyang Zeng, Tianhe Ren, Feng Li, Hao
+Zhang, Jie Yang, Qing Jiang, Chunyuan Li, Jianwei Yang,
+Hang Su, et al.
+Grounding dino:
+Marrying dino with
+grounded pre-training for open-set object detection. In Eu-
+ropean Conference on Computer Vision, pages 426–443.
+Springer, 2023. 7
+[38] Shenyuan Liu, Jiaxin Fan, Yihang Zhang, Dongxiang Zhang,
+et al. Vista: A generalizable driving world model with high
+fidelity and versatile controllability. Advances in Neural In-
+formation Processing Systems, 38, 2024. 2
+[39] Yu Lu, Linchao Zhu, Hehe Fan, and Yi Yang. Flowzero:
+Zero-shot text-to-video synthesis with llm-driven dynamic
+scene syntax. In arXiv preprint arXiv:2311.15813, 2023. 1
+[40] Vincent Micheli, Eloi Alonso, and Franc¸ois Fleuret. Trans-
+formers are sample-efficient world models.
+International
+Conference on Learning Representations (ICLR), 2023. 2
+[41] Matthias Minderer, Alexey Gritsenko, and Neil Houlsby.
+Scaling open-vocabulary object detection. Advances in Neu-
+ral Information Processing Systems, 36, 2024. 3
+[42] Saman Motamed et al.
+Do generative video mod-
+els understand physical principles?
+In arXiv preprint
+arXiv:2501.09038, 2025. 1, 2
+[43] Haomiao Ni, Changhao Shi, Kai Li, Sharon X. Huang, and
+Martin Renqiang Min. Conditional image-to-video gener-
+ation with latent flow diffusion models. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pages 7951–7961, 2023. 1
+[44] OpenAI. Video generation models as world simulators. Ope-
+nAI Technical Report, 2024. 2
+[45] William Peebles and Saining Xie. Scalable diffusion mod-
+els with transformers. Proceedings of the IEEE/CVF Inter-
+national Conference on Computer Vision, pages 4195–4205,
+2023. 2
+[46] Bosheng Qin, Juncheng Li, Siliang Tang, Tat-Seng Chua,
+and Yueting Zhuang.
+Instructvid2vid: Controllable video
+editing with natural language instructions.
+arXiv preprint
+arXiv:2305.12328, 2024. 5, 7, 8
+[47] Nikhila Ravi, Valentin Gabeur, Yuan-Ting Hu, et al. Sam
+2: Segment anything in images and videos. arXiv preprint
+arXiv:2408.00714, 2024. 3
+[48] Marc Rigter, Tarun Gupta, Agrin Hilmkil, and Chao Ma.
+Avid: Adapting video diffusion models to world models. Re-
+inforcement Learning Conference (RLC), 2025. 2
+[49] Julian Schrittwieser, Ioannis Antonoglou, Thomas Hubert,
+Karen Simonyan, Laurent Sifre, Simon Schmitt, Arthur
+Guez, Edward Lockhart, Demis Hassabis, Thore Graepel,
+et al. Mastering atari, go, chess and shogi by planning with
+a learned model. Nature, 588(7839):604–609, 2020. 1, 2
+[50] Yiqing Shen, Hao Ding, Lalithkumar Seenivasan, Tian-
+min Shu, and Mathias Unberath.
+Position:
+Foundation
+models need digital twin representations.
+arXiv preprint
+arXiv:2505.03798, 2025. 2
+[51] Yiqing Shen, Chenjia Li, Chenxiao Fan, and Mathias Un-
+berath. Rvtbench: A benchmark for visual reasoning tasks.
+arXiv preprint arXiv:2505.11838, 2025. 5
+[52] Yiqing Shen, Chenjia Li, and Mathias Unberath. Text-driven
+reasoning video editing via reinforcement learning on digi-
+tal twin representations. arXiv preprint arXiv:2511.14100,
+2025. 6
+[53] Yiqing Shen, Bohan Liu, Chenjia Li, Lalithkumar Seeni-
+vasan, and Mathias Unberath. Online reasoning video seg-
+mentation with just-in-time digital twins.
+arXiv preprint
+arXiv:2503.21056, 2025. 2, 3
+[54] Uriel Singer, Adam Polyak, Thomas Hayes, Xi Yin, Jie An,
+Songyang Zhang, Qiyuan Hu, Harry Yang, Oron Ashual,
+Oran Gafni, Devi Parikh, Sonal Gupta, and Yaniv Taigman.
+Make-a-video: Text-to-video generation without text-video
+data. In arXiv preprint arXiv:2209.14792, 2022. 1, 2
+[55] Eloi Valevski, Eloi Alonso, and Franc¸ois Fleuret. Diffusion
+world models. arXiv preprint arXiv:2402.03570, 2024. 2
+[56] Wan-AI. Wan2.2: Open and advanced large-scale video gen-
+erative models, 2025. 1, 2
+[57] Chen Min Wang et al. Driveworld: 4d pre-trained scene un-
+derstanding via world models for autonomous driving. arXiv
+preprint arXiv:2405.04390, 2024. 2
+[58] Chenfei Wu et al.
+Qwen-image technical report.
+arXiv
+preprint arXiv:2508.02324, 2025. 5
+[59] Philipp Wu, Alejandro Escontrela, Danijar Hafner, Pieter
+Abbeel, and Ken Goldberg. Daydreamer: World models for
+physical robot learning. In Conference on robot learning,
+pages 2226–2240. PMLR, 2023. 1
+[60] Zhangkai Wu, Xuhui Fan, Zhongyuan Xie, Kaize Shi,
+Zhidong Li,
+and Longbing Cao.
+Fame:
+Fairness-
+aware attention-modulated video editing.
+arXiv preprint
+arXiv:2510.22960, 2025. 7
+[61] Lihe Yang, Bingyi Kang, Zilong Huang, et al. Depth any-
+thing v2. arXiv preprint arXiv:2406.09414, 2024. 3
+[62] Shen Yang, Yuchen Zhang, Ziwei Liu, Chen Change Loy,
+and Bo Dai.
+Sora as an agi world model?
+a com-
+plete survey on text-to-video generation.
+arXiv preprint
+arXiv:2403.05131, 2024. 2
+13
+
+[63] Shoubin Yu et al. Veggie: Instructional editing and reasoning
+of video concepts with grounded generation. arXiv preprint
+arXiv:2503.14350, 2025. 7
+[64] Yu Yuan, Xijun Wang, Tharindu Wickremasinghe, Zeeshan
+Nadir, Bole Ma, and Stanley H Chan. Newtongen: Physics-
+consistent and controllable text-to-video generation via neu-
+ral newtonian dynamics. arXiv preprint arXiv:2509.21309,
+2025. 2
+[65] Chang Zhang, Rui Chen, Mengqi Xu, and Jian Shi. Trans-
+dreamer: Reinforcement learning with transformer world
+models. arXiv preprint arXiv:2202.09481, 2022. 2
+[66] Lianmin Zheng, Wei-Lin Chiang, Yonghao Sheng, Siyuan
+Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin, Zhuohan
+Li, Dacheng Li, Eric P Xing, et al. Judging llm-as-a-judge
+with mt-bench and chatbot arena.
+In Advances in Neural
+Information Processing Systems, pages 46595–46623, 2023.
+7
+14

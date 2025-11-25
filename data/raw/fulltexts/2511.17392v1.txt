@@ -1,0 +1,1470 @@
+MORPHSEEK: FINE-GRAINED LATENT
+REPRESENTATION-LEVEL POLICY OPTIMIZATION FOR
+DEFORMABLE IMAGE REGISTRATION
+A PREPRINT
+Runxun Zhang, Jingwei Wei, Bo XU
+Institute of Automation, Chinese Academy of Sciences
+Beijing China
+Yizhou Liu
+Fudan University
+Shanghai China
+Li Dongrui
+The second Hospital of Hebei Medical University
+Hebei China
+November 24, 2025
+ABSTRACT
+Deformable image registration (DIR) remains a fundamental yet challenging problem in medical image anal-
+ysis, largely due to the prohibitively high-dimensional deformation space of dense displacement ﬁelds and
+the scarcity of voxel-level supervision. Existing reinforcement learning frameworks often project this space
+into coarse, low-dimensional representations, limiting their ability to capture spatially variant deformations.
+We propose MorphSeek, a ﬁne-grained representation-level policy optimization paradigm that reformulates
+DIR as a spatially continuous optimization process in the latent feature space. MorphSeek introduces a
+stochastic Gaussian policy head atop the encoder to model a distribution over latent features, facilitating
+efﬁcient exploration and coarse-to-ﬁne reﬁnement. The framework integrates unsupervised warm-up with
+weakly supervised ﬁne-tuning through Group Relative Policy Optimization, where multi-trajectory sampling
+stabilizes training and improves label efﬁciency. Across three 3D registration benchmarks (OASIS brain
+MRI, LiTS liver CT, and Abdomen MRCT), MorphSeek achieves consistent Dice improvements over com-
+petitive baselines while maintaining high label efﬁciency with minimal parameter cost and low step-level
+latency overhead. Beyond optimizer speciﬁcs, MorphSeek advances a representation-level policy learning
+paradigm that achieves spatially coherent and data-efﬁcient deformation optimization, offering a principled,
+backbone-agnostic, and optimizer-agnostic solution for scalable visual alignment in high-dimensional set-
+tings.
+arXiv:2511.17392v1  [cs.CV]  21 Nov 2025
+
+arXiv Template
+A PREPRINT
+Unlabeled
+Labeled
+(a) Limited Labeled Data
+One-shot
+(b) One-shot Inference
+Figure 1: Two Major Challenges Faced by DL-based DIR
+1
+Introduction
+Deformable image registration (DIR) is a highly chal-
+lenging core task in medical image analysis[34, 49, 43].
+Its goal is to establish voxel-wise spatial correspondences
+between two three-dimensional medical images, thereby
+enabling precise anatomical alignment.
+Owing to the
+pronounced non-rigid, large-scale deformations and inter-
+subject variability of anatomical structures, DIR is sub-
+stantially more difﬁcult than generic visual recognition
+tasks: it must achieve global structural alignment while
+preserving local geometric consistency[14]. Classical reg-
+istration methods formulate DIR as a continuous optimiza-
+tion problem and solve for the deformation ﬁeld via itera-
+tive procedures[1, 2, 45, 51], but their computational cost
+is extremely high[41, 35].
+Driven by the rapid progress of deep learning[26, 52],
+recent approaches adopt end-to-end encoderdecoder ar-
+chitectures to directly map image pairs to deformation
+ﬁelds, achieving signiﬁcant gains in both efﬁciency and
+accuracy[3, 6, 63, 38, 37, 33, 8].
+Nevertheless, deep learningbased DIR still faces two
+obstacles: (i) it relies heavily on supervision signals de-
+spite extremely limited annotations in most medical sce-
+narios, and (ii) the difﬁculty of mainstream single-shot in-
+ference schemes in handling complex large-deformation
+cases, which ultimately limits registration accuracy (Fig-
+ure 1).
+The ﬁrst challenge is to reliably solve high-difﬁculty,
+large-deformation registration problems given only a very
+small number of labeled examples. Complex anatomical
+structures and large-scale non-rigid deformations often
+require ﬁne-grained voxel-level supervision to be stably
+aligned. However, segmentation annotations are exceed-
+ingly scarce in most medical settings. As a result, most
+registration models are forced to rely on unsupervised
+losses based on image similarity[20, 21, 13, 61], whose
+ability to constrain local boundaries and subtle structures
+is limited. Existing works mainly strengthen unsupervised
+registration via pseudo-label generation[30, 54, 18], ar-
+chitectural reﬁnements[58, 59, 24, 10], or new similarity
+metrics[16, 15], but comparatively little attention has been
+paid to maximizing supervision efﬁciency from a ﬁxed yet
+very limited set of labels, especially for complex large-
+deformation cases.
+The second challenge stems from the fact that most
+deep learningbased DIR models perform inference via a
+single forward pass, i.e., they predict the deformation ﬁeld
+in one shot[3, 6, 10]. In scenarios involving large-scale
+non-rigid deformations, such as thoracic or abdominal
+registration, such models often ﬁt only the global struc-
+tural differences while struggling to reliably recover local
+boundaries and ﬁne geometric details. To improve align-
+ment under complex deformations, several methods intro-
+duce step-wise registration[22, 60, 62, 57, 42], decom-
+posing a large deformation into a sequence of incremen-
+tal updates to realize coarse-to-ﬁne optimization. How-
+ever, existing step-wise frameworks typically rely on man-
+ually designed, ﬁxed cascaded structures and lack a learn-
+able multi-step decision policy. Reinforcement learning
+(RL) has been explored for image registration because its
+stochastic, Markov decision process is naturally compat-
+ible with step-wise optimization. However, most exist-
+ing RL-based registration methods are conﬁned to low-
+dimensional rigid transformations[29, 31, 32, 40, 19, 50].
+Directly treating a full 3D deformable ﬁeld as the action
+space would make memory consumption and sampling
+cost prohibitive, severely limiting the applicability of RL
+to real-world deformable registration.
+To address these issues, we propose MorphSeek, which
+reformulates deformable registration as latent-space pol-
+icy optimization by introducing a sampleable high-
+resolution latent representation at the top encoder layer
+and treating it as the policy action, thereby avoiding RL
+reasoning directly in the million-dimensional deforma-
+tion ﬁeld while preserving ﬁne spatial granularity. The
+framework ﬁrst performs unsupervised warm-up to shape
+a stable latent space and then applies Group Relative
+Policy Optimization (GRPO) with multiple trajectories
+and multiple steps under weak supervision, repeatedly
+reusing scarce labels for coarse-to-ﬁne reﬁnement.
+To
+make such high-dimensional policies trainable, we fur-
+ther propose Latent-Dimension Variance Normalization
+(LDVN), which statistically controls the variance of log-
+likelihoods and yields stable, unbiased gradients for scal-
+able 3D dense prediction.
+Our main contributions are as follows:
+• We introduce a new latent-space policy optimiza-
+tion paradigm for deformable image registration. By
+deﬁning the policy distribution in the encoder latent
+feature space instead of operating directly on the
+dense deformation ﬁeld, we realize a ﬁne-grained,
+scalable, and backbone-agnostic step-wise optimiza-
+tion mechanism.
+• We propose LDVN, the ﬁrst general statistical nor-
+malization scheme that stabilizes GRPO in high-
+dimensional dense prediction settings. We show that
+LDVN controls the variance of the log-likelihood
+without altering the gradient direction or introduc-
+ing bias, allowing GRPO to operate stably in high-
+dimensional 3D feature spaces and providing both
+2
+
+arXiv Template
+A PREPRINT
+theoretical and practical support for applying RL to
+dense prediction tasks.
+• We construct a highly label-efﬁcient multi-trajectory,
+multi-step weakly supervised framework. Through
+warm-up pre-training and GRPO-guided coarse-to-
+ﬁne reﬁnement, our framework repeatedly reuses
+supervision signals under very limited annotations,
+markedly improving large-deformation registration
+quality while maintaining a comparable parameter
+count and acceptable inference latency.
+2
+Related Work
+2.1
+DL-Based Deformable Medical Image
+Registration
+Early DL-based DIR methods were fully supervised
+using deformation vector ﬁelds (DVFs)[48, 56, 53, 25,
+47, 5]. After Hu et al. proposed using anatomical seg-
+mentations instead of DVFs for supervision[20], such
+fully supervised strategies became less common. Since
+VoxelMorph[3], a U-Net-style CNN trainable in an unsu-
+pervised manner, subsequent studies have largely evolved
+within this unsupervised U-Net-style paradigm[38, 10, 37,
+8, 6, 63].
+Meanwhile, leveraging segmentation labels to fur-
+ther improve registration has become an active re-
+search direction.
+Hu et al.
+extended the label-driven
+idea and systematically discussed the advantages of
+segmentation-supervised training over purely unsuper-
+vised objectives[21].
+Ferrante et al.
+used segmenta-
+tion labels to guide the weighting of different similar-
+ity terms during registration[13]. Zhou et al. proposed
+macJNet[61], which jointly learns two segmentation net-
+works and one registration network.
+There have also been attempts to combine unsuper-
+vised and weakly-supervised learning.
+Li et al.
+com-
+bined segmentation-labeled and unlabeled image pairs for
+registration using consistency regularization in a student-
+teacher framework[28].
+Unsupervised models such as
+VoxelMorph[3] often include hybrid objectives that com-
+bine image-similarity and label-based losses.
+Chen et
+al. proposed a training strategy that ﬁrst performs unsu-
+pervised pretraining with randomly generated images and
+then ﬁne-tunes on the target task, maintaining strong per-
+formance when domain-speciﬁc data are limited[7]. How-
+ever, these approaches still do not simultaneously exploit
+both unlabeled and labeled data from the same domain to
+maximally optimize the registration model.
+From another perspective, coarse-to-ﬁne registration
+has been extensively explored. ULAE-Net[46] performs
+step-wise registration by repeatedly applying the network.
+LapIRN[42] cascades multiple Laplacian pyramid net-
+works to implement coarse-to-ﬁne alignment. However,
+these methods use ﬁxed, deterministic schedules and lack
+adaptive exploration of optimal registration strategies.
+2.2
+Reinforcement Learning in DIR
+In recent years, reinforcement learning (RL) has ad-
+vanced rapidly in decision-making, robotics, and large-
+model reasoning[44, 11]. However, when applied to dense
+prediction tasks, the continuous and high-dimensional
+state and action spacesparticularly in 3Dlead to unstable
+training, high exploration cost, and substantial memory
+overhead; this bottleneck is especially pronounced in de-
+formable image registration (DIR).
+Krebs et al. proposed an agent-based non-rigid regis-
+tration framework that reduces the DIR action space from
+dense DVFs to a statistical deformation model (PCA over
+B-splineparameterized deformations), signiﬁcantly lower-
+ing the action dimensionality[25]. However, their method
+requires dense DVFs as supervision, which is impractical
+in contemporary settings. Luo et al. introduced SPAC[30],
+which compresses a pair into a 64-D plan and relies on an
+extra critic for stability (SAC-based), which complicates
+deployment. Moreover, the 64-D bottleneck discards spa-
+tial detail, limiting performance.
+In summary, the central challenge for applying RL to
+DIR is how to retain model generality while effectively
+shifting exploration and optimization from the dense ﬁeld
+to a low-dimensional, training-friendly space.
+3
+Method
+MorphSeek is a training paradigm that can be general-
+ized to any encoderdecoderbased registration model and
+provides a uniﬁed formulation of deformable registration
+via latent-space policy optimization. The paradigm con-
+sists of three stages: (i) an RL-friendly refactoring step
+that constructs a sampleable latent space at the top of the
+encoder and decouples the encoder and decoder, (ii) an
+unsupervised warm-up phase that shapes a stable latent-
+space structure, and (iii) a GRPO-based weakly super-
+vised ﬁne-tuning phase that performs coarse-to-ﬁne policy
+updates with multiple trajectories and multiple steps so
+that the scarce labels can be repeatedly reused (Figure 2).
+For clarity of exposition, we instantiate MorphSeek with
+a U-Net backbone.
+3.1
+Refactoring Registration Networks for Latent
+Policy Learning
+Deformable registration networks typically adopt a U-
+Net-style encoder-decoder architecture with skip connec-
+tions.
+Given a moving image Im and ﬁxed image If
+both in RH×W ×D, the network takes their concatenation
+x = [Im, If] as input. The encoder E extracts multi-scale
+features:
+{f1, f2, . . . , fL} = E(x)
+(1)
+where fl ∈RCl×Hl×Wl×Dl denotes the feature at level
+l with progressively reduced spatial resolution. The de-
+3
+
+arXiv Template
+A PREPRINT
+Skip Connected
+Gaussian Heads
+Sample
+Stochastic Encoder
+Decoder
+A. RL-Friendly Refactoring
+C.  GRPO-based Fine-tuning
+B. Warm-up Pretraining
+Iteration
+Part of Trajectory
+Loss
+Network
+Step/Iteration
+The Best in Group
+Distribution
+Figure 2: MorphSeek Registration Framework Process
+coder D then upsamples and fuses these features via skip
+connections to predict a dense deformation ﬁeld:
+Φ = D({f1, f2, . . . , fL}) ∈R3×H×W ×D
+(2)
+where Φ represents per-voxel displacement vectors,
+yielding the warped image Im ◦Φ.
+In a conventional deterministic encoder E, the top-level
+feature fL is directly fed into the decoder D. To enable RL-
+based ﬁne-tuning, we decouple the encoder and decoder
+in the U-Net-style architecture (while preserving skip con-
+nections) and introduce stochasticity at the encoder output
+via Gaussian parameterization. This allows the encoder to
+model a probability distribution over latent vectors and
+supports policy optimization with Group Relative Policy
+Optimization (GRPO).
+Speciﬁcally, we append two convolutional heads to the
+top-level feature fL ∈RCL×HL×WL×DL: a mean head
+Wµ and a log-standard-deviation head Wlog σ, both with
+kernel size 1, i.e., Wµ, Wlog σ ∈RCL×CL×1×1×1.
+These two heads take the tensor fL and parameterize
+a multivariate Gaussian N(µ, σ2). To stabilize training,
+we impose constraints and clipping on the outputs:
+µ = tanh(Wµ(fL)) · λscale ∈RCL×HL×WL×DL
+(3)
+log σ = clip(Wlog σ(fL), σmin, σmax) ∈RCL×HL×WL×DL
+(4)
+We further introduce a temperature parameter τ > 0 to
+modulate exploration. During training, the latent vector is
+sampled using the reparameterization trick:
+z = µ + τ · σ ⊙ϵ,
+ϵ ∼N(0, I)
+(5)
+Compared to Eq. 2, the inputoutput of the decoder is
+modiﬁed as:
+Φ = D({f1, f2, . . . , fL−1, z})
+(6)
+3.2
+Warm-up Priors for Stable Policy Optimization
+To ensure that the subsequent GRPO ﬁne-tuning oper-
+ates in a stable and well-conditioned latent space, we ﬁrst
+pretrain the encoder and decoder on unlabeled data. Com-
+parative analyses with and without warm-up are reported
+in Section 5.
+During warm-up, to obtain stable warping estimates,
+we adopt a deterministic latent variable by setting τ = 0,
+i.e.,
+z = µ.
+(7)
+Let θE and θD denote the trainable parameters of the
+encoder and decoder, respectively, and let θ = {θE, θD}.
+The overall warm-up objective minimizes an unsuper-
+vised loss composed of an image-similarity term, a de-
+formation regularizer, and a KL penalty on the Gaussian
+heads:
+Lwarm(θ) = Lsim(If, Im◦Φ) + λreg Lreg(Φ)
++ βKL LKL
+ qθE(z | fL) ∥N(0, I)
+
+,
+(8)
+where λreg and βKL are weighting coefﬁcients, and qθE
+denotes the factorized Gaussian parameterized by the en-
+coder. Each loss component can be instantiated in mul-
+tiple ways; for this work, we use mean squared error
+(MSE), diffusion regularization, and standard KL diver-
+gence, with exact formulations detailed in the supplement.
+4
+
+arXiv Template
+A PREPRINT
+3.3
+Multi-Trajectory GRPO for Step-Wise
+Registration
+After warm-up pretraining, we ﬁne-tune the encoderde-
+coder with segmentation labels under the GRPO frame-
+work to further improve registration accuracy.
+In this
+stage, the encoders stochastic output distribution is treated
+as a policy, denoted by π(z | fL), where the state st is the
+current registration pair {It−1
+m , If} and the action at is the
+sampled latent z. At each ﬁne-tuning step t, we generate
+a group of trajectories per sample to enable exploration
+through encoder stochasticity.
+For each trajectory j = 1, . . . , J, the decoder produces
+a single-step deformation ﬁeld ϕ(j)
+t
+from the sampled la-
+tent z(j), and we compute a scalar reward:
+R(j) = wDice · [Dice
+ Sf, Sm◦Φ(j)
+t
+
+−Dice
+ Sf, Sm◦Φt−1
+
+]
++ wNJD · NJD
+ Φ(j)
+t
+
+,
+(9)
+where Sf, Sm ∈RK×H×W ×D are the ﬁxed and mov-
+ing segmentation labels, and Φ(j)
+t
+= Φt−1 ◦ϕ(j)
+t . Here,
+NJD penalizes voxels with negative Jacobian determi-
+nants |JΦ(j)
+t | < 0, and wDice > 0, wNJD < 0 are scalar
+weights.
+To compute policy gradients, we perform group-wise
+normalization of the trajectory rewards for each sample,
+yielding the advantage
+A(j) = R(j) −¯R
+σR + ϵ ,
+(10)
+where ¯R and σR are the mean and standard deviation of
+{R(j)}J
+j=1 for the current sample, and ϵ = 10−8 pre-
+vents division by zero. We also compute the relative log-
+likelihood within the group:
+log ˜π(j) = log π
+ z(j)  µ, σ
+
+−log π,
+(11)
+where µ, σ are the encoder outputs for the current state
+(shared across the J samples), and log π is the group mean
+of log π(z(j) | µ, σ).
+However, for conventional backbones[6, 38], we ob-
+serve that the latent dimensionality z (denoted as N =
+CL × HL × WL × DL) often reaches tens of thousands,
+which is far larger than in typical GRPO applications. If
+we directly sum over all N positions when computing
+log π, the variance of log π within each group will esca-
+late rapidly with N. This leads to impaired exploration
+discriminability and unstable training.
+To address this issue, we propose Latent-Dimension
+Variance Normalization (LDVN), which introduces a scal-
+ing factor s in the computation of log π:
+log π(z|µ, σ)
+= −1
+2s
+N
+X
+i=1
+"zi −µi
+τσi
+2
++ log(2πτ 2σ2
+i )
+#
+. (12)
+Algorithm 1 GRPO-based Fine-tuning
+Initialize: Load pretrained θ = (θE, θD), set τ > 0
+for each pair {Im, If, Sm, Sf} do
+Initialize: I0
+m ←Im
+for each step t = 1, . . . , T do
+Sample ϕ(1)
+t , ϕ(2)
+t , . . . , ϕ(J)
+t
+Compute Φ(j)
+t
+= Φt−1 ◦ϕ(j)
+t
+Compute R(j), A(j), log ˜π(j), and Lgrpo
+Update θ ←θ −η∇θLgrpo
+Update Φt, It
+m via Eqs. 17 and 18
+end for
+end for
+For different image resolutions and backbone architec-
+tures, we dynamically adjust s to constrain std(log ˜π(j))
+to a constant value. In doing so, we ensure statistical con-
+sistency with Eq. 10 and 11, thereby achieving stable pol-
+icy updates while preserving ﬁne-grained stochasticity.
+We can prove the unbiasedness of LDVN through a sim-
+ple derivation. For any s > 0, b ∈R,
+(1
+s log π(j) + b) −(1
+s log π + b) = 1
+s(log π(j) −log π).
+(13)
+Hence LDVN only rescales within-group relative log-
+likelihoods without changing their ordering or the gradi-
+ent direction; when multiplied by the zero-mean advan-
+tage in Eq. 10, it is equivalent to a step-size rescaling,
+leaving the estimator unbiased. Note that LDVN is only
+applied to the statistics of log π in the policy loss, and
+does not participate in the reparameterization sampling of
+Eq. 5, thus it does not alter the sampling distribution of
+π(z|µ, σ) or the exploration temperature τ.
+Regarding the speciﬁc value of s, we denote the sum-
+mation terms in Eq. 12 as Xi.
+It can be proved that
+a. with bounded second moments and weak dependence,
+Var(PN
+i=1 Xi) = O(N), and b. choosing s ∝
+√
+N keeps
+Var( 1
+s
+PN
+i=1 Xi) = O(1) and std(log ˜π(j)) = O(1).
+Therefore, the value of s is typically set to
+√
+N. (Detailed
+derivation is provided in the Appendix.)
+In all, the policy loss is deﬁned as
+Lpolicy(θE) = −1
+J
+J
+X
+j=1
+A(j) · log ˜π(j),
+(14)
+which updates the encoder parameters θE through the gra-
+dient of log π, increasing the sampling probability of high-
+reward trajectories.
+In parallel, we compute a supervised soft-Dice loss us-
+ing differentiable warping:
+LDice(θ) = 1
+J
+J
+X
+j=1
+h
+1 −Dice
+ Sf, Sm◦Φ(j)
+t
+i
+.
+(15)
+5
+
+arXiv Template
+A PREPRINT
+Note that LDice is computed with soft labels via trilinear in-
+terpolation to ensure differentiability, whereas the reward
+in Lpolicy does not backpropagate gradients and is com-
+puted with hard labels to more faithfully reﬂect the task
+metric.
+To prevent catastrophic forgetting of the representa-
+tions learned during warm-up and to maintain smooth and
+physically plausible deformations, we retain the warm-up
+objective as a regularizer. It is computed through Eqs. 7
+and 8 rather than sample averaging. The overall loss for
+GRPO ﬁne-tuning is1
+Lgrpo(θ) = Lpolicy(θE) + λwarm Lwarm(θ) + λDice LDice(θ).
+(16)
+Unlike PPO/TRPO which bound consecutive policy ra-
+tios, we adopt a ﬁxed-prior trust region by penalizing
+KL(πθE ∥N(0, I)) with a target-KL schedule. Warm-up
+already puts πθE0 near N(0, I), so keeping this KL small
+bounds the drift to the warm-up policy while remaining
+critic-free and ratio-free in high-dimensional latents.
+At the end of each step, we greedily select the trajec-
+tory with the highest reward to update the current state.
+Speciﬁcally, letting j∗= arg maxj R(j), we update the
+deformation ﬁeld and moving image via
+Φt ←Φt−1 ◦ϕ(j∗),
+(17)
+It
+m ←Im◦Φt.
+(18)
+The process is repeated for T steps or until convergence.
+The overall procedure is summarized in Algorithm 1.
+4
+Experiments
+4.1
+Datasets
+We evaluate MorphSeek on three registration tasks
+spanning ﬁve 3D medical imaging datasets.
+OASIS. A Learn2Reg[17] task for inter-patient brain
+MRI registration[36].
+Volumes are preprocessed and
+resampled to 160 × 192 × 224.
+From 414 train-
+ing volumes, we form 400/100/20 pairs for pretrain-
+ing/GRPO/validation. Test set: 19 ofﬁcial challenge vali-
+dation pairs.
+LiTS. Contains 131 contrast-enhanced abdominal CT
+scans[4]. We use whole-liver labels only. Volumes are re-
+sampled to 160 × 192 × 224. Data split: 400/100/20/40
+pairs for pretraining/GRPO/validation/test, with no test
+volume overlap in training.
+1The
+encoder
+parameterizes
+a
+Gaussian
+distribution
+N(µ, σ2) in both stages. During warm-up, we regularize it
+toward N(0, I) via the KL term in Eq. 8. In GRPO ﬁne-tuning,
+this same KL divergence (evaluated with τ = 0 as in warm-up)
+is retained to maintain a ﬁxed-prior trust region.
+Abdomen MR-CT. A Learn2Reg[17] task for intra-
+patient abdominal MR-CT registration using 8 paired
+scans from TCIA[9] and 90 unpaired scans from BCV[55]
+and CHAOS[23]. Volumes are resampled to 160 × 192 ×
+192. From unpaired data, we construct 400/100/20 MR-
+CT pairs for pretraining/GRPO/validation. Test set: 8 of-
+ﬁcial paired scans. For this cross-modality task we use the
+MIND descriptor[16] instead of MSE as the image simi-
+larity term.
+4.2
+Baselines and Implementations
+We select three baseline algorithms for refactor-
+ing,
+namely
+VoxelMorph[3],
+TransMorph[6],
+and
+NICE-Trans[38], and we include two state-of-the-art
+frameworksCorrMLP[39],
+RIIR[57]and an RL-based
+framework SPAC[30], for comparison.
+To ensure fair-
+ness, each baseline is trained with the same weakly
+supervised setting and a Dice loss on segmentation labels.
+We also include WarpDDF+RegCut[28] which can com-
+bine segmentation labeled data and unlabeled data, as a
+comparison. Because most traditional optimization-based
+methods cannot effectively leverage label supervision
+under the same setting, we place their unsupervised
+training results in the supplementary materials.
+We additionally adopt a widened VoxelMorph vari-
+ant (VoxelMorph-L) with channels [32, 64, 128, 256,
+256] (approximately 27M parameters) to provide a suf-
+ﬁciently expressive latent space for GRPO. We also use
+VoxelMorph-L as the baseline.
+Training uses Adam (1e-4) and batch size 1; other
+hyper-parameters and hardware details are in the supple-
+ment.
+We report Dice[12] (%) for segmentation overlap and
+the percentage of voxels with negative Jacobian determi-
+nant (NJD[27], %) for deformation regularity.
+5
+Results and Analysis
+5.1
+Overall Performance Across Tasks and
+Backbones
+As summarized in Fig. 3 and Table 1, MorphSeek con-
+sistently improves Dice and reduces NJD across three 3D
+benchmarks and three backbones (VoxelMorph-L, Trans-
+Morph, and NICE-Trans).
+On OASIS, Dice increases
+by 23% while NJD decreases by roughly one-third rela-
+tive to the corresponding baselines; on the more challeng-
+ing cross-modality Abdomen MR←CT task, MorphSeek
+yields more than a 4% Dice gain and nearly halves NJD
+for TransMorph. Most gains are statistically signiﬁcant
+under the Wilcoxon signed-rank test (p < 0.05), indicating
+that latent-space policy optimization beneﬁts both small-
+deformation brain MRI registration and large-deformation
+cross-modality scenarios in terms of global alignment and
+local regularity.
+6
+
+arXiv Template
+A PREPRINT
+Figure 3: The Performance of MorphSeek Across Three Different Tasks. Labels are overlaid only for the two abdomi-
+nal datasets; OASIS is left unlabeled to avoid clutter from its 35 foreground classes.
+Table 1: Quantitative comparison on three registration tasks. All methods except afﬁne use weakly supervised train-
+ing. ↑: higher is better; ↓: lower is better. Our results are shown in bold and marked with * if there is a statistically
+signiﬁcant difference (p < 0.05) from their baselines by a Wilcoxon signed-rank test. In MorphSeek, both Trajs/Steps
+are set to 6/3. NJDs in SPAC cannot be calculated due to coupling in the deformation ﬁeld; see appendix.
+Method
+OASIS (Brain MRI)
+LiTS (Liver CT)
+Abdomen MR←CT
+Mean Dice (%) ↑
+NJD (%) ↓
+Dice (%) ↑
+NJD (%) ↓
+Mean Dice (%) ↑
+NJD (%) ↓
+Only Afﬁne
+58.52±4.08
+–
+60.21±10.04
+–
+37.82±18.11
+–
+CorrMLP [39]
+88.35±1.33
+0.08±0.03
+89.22±3.08
+0.25±0.11
+86.82±5.05
+0.49±0.41
+RIIR [57] (Steps=12)
+87.76±2.55
+0.12±0.02
+88.95±4.16
+0.33±0.11
+80.73±4.31
+1.06±0.81
+WarpDDF+RegCut [28]
+86.64±3.83
+0.26±0.06
+85.57±3.99
+0.61±0.18
+85.49±8.21
+1.11±0.57
+SPAC [30] (Steps=20)
+78.92±5.31
+N/A
+75.38±8.39
+N/A
+69.29±10.13
+N/A
+VoxelMorph-L [3]
+84.77±2.49
+0.15±0.12
+84.97±6.37
+0.73±0.16
+77.96±9.15
+1.05±0.64
++ MorphSeek (Ours)
+87.16±1.97*
+0.10±0.02*
+88.99±3.11*
+0.24±0.08*
+82.44±6.37*
+0.57±0.39*
+TransMorph [6]
+85.89±1.40
+0.16±0.09
+88.31±5.33
+0.46±0.15
+82.37±4.87
+0.84±0.47
++ MorphSeek (Ours)
+88.89±1.82*
+0.06±0.02*
+90.11±4.75*
+0.16±0.09*
+86.49±3.35*
+0.35±0.22*
+NICE-Trans [38]
+86.79±2.39
+0.02±0.01
+88.42±3.96
+0.17±0.08
+83.19±3.85
+0.36±0.14
++ MorphSeek (Ours)
+89.02±1.45*
+0.02±0.01
+90.47±3.65*
+0.16±0.09
+86.51±2.97*
+0.32±0.17*
+7
+
+arXiv Template
+A PREPRINT
+Table 2: Ablation study on trajectory number and re-
+ﬁnement steps on OASIS dataset. Using TransMorph +
+MorphSeek. Each cell shows Dice (%) ↑/ NJD (%) ↓.
+Trajs
+Steps
+1
+2
+3
+4
+2
+86.71 / 0.08
+87.13 / 0.08
+87.78 / 0.08
+87.94 / 0.08
+4
+86.89 / 0.07
+87.96 / 0.06
+88.26 / 0.06
+88.14 / 0.08
+6
+87.67 / 0.06
+88.72 / 0.05
+88.89 / 0.06
+88.51 / 0.07
+8
+OOM Error
+N/A
+N/A
+N/A
+0
+20
+40
+60
+80
+100
+78
+80
+82
+84
+86
+88
+90
+Dice Score (%)
+TransMorph (supervised)
+TransMorph w. warm-up
+TransMorph w. MorphSeek
+Figure 4: Impact of Warm-up and MorphSeek on GRPO
+Fine-tuning Performance with Limited Labeled Data (OA-
+SIS dataset)
+5.2
+Policy & Label Efﬁciency Ablation
+The ablation on trajectory number and reﬁnement steps
+on OASIS (Table 2) reveals a clear pattern. Increasing
+the number of trajectories up to six yields a steady im-
+provement in Dice and a decrease in NJD, while adding
+reﬁnement steps from one to three also brings consistent
+gains. Beyond three steps, however, the beneﬁts saturate
+and the deformation ﬁeld starts to show artifacts, reﬂected
+by degraded NJD and local distortions.
+This behavior is consistent with the intended coarse-to-
+ﬁne design: the ﬁrst step focuses on establishing coarse
+alignment, whereas subsequent steps repeatedly enforce
+local constraints under the same labels, effectively reusing
+weak supervision. When the data have already been fully
+exploited, additional steps no longer help and instead tend
+to compromise the physical plausibility of the deforma-
+tion. Moreover, attempting more than 8 trajectories leads
+to out-of-memory errors, which matches the increased
+sampling cost in a high-dimensional policy space.
+MorphSeek is particularly advantageous in weakly su-
+pervised settings with very limited labels (Fig. 4). Us-
+ing TransMorph as the backbone, MorphSeek already
+achieves strong gains with only about 16 labeled pairs
+and approaches its full-label performance with roughly
+60 pairs. Notably, MorphSeek achieves 98.5% of its full-
+label performance using only 60% of the training data,
+while the baseline TransMorph requires 80% of labels to
+reach a comparable level.
+These observations support our interpretation that the
+multi-trajectory, multi-step GRPO scheme effectively
+reuses each labeled pair multiple times along the reﬁne-
+Figure 5: Validation Dice on OASIS: Effect of Warm-up
+Before GRPO (TransMorph Backbone), where the dotted
+line marks the switch from warm-up to GRPO
+ment steps, substantially improving the label efﬁciency of
+weak supervision and raising the performance ceiling in
+complex registration tasks.
+5.3
+Computational Overhead and the Role of
+Warm-up
+Table 4 analyzes the structural and runtime overhead
+introduced by the RL-friendly refactoring. For all three
+backbones, the additional parameters are below 3% and
+single-step inference latency remains almost unchanged.
+Multi-step inference exhibits roughly linear growth in run-
+time (about threefold latency for three reﬁnement steps),
+which is expected for a cascaded scheme and enables a
+simple trade-off between accuracy and computational bud-
+get at deployment time.
+The training curves on OASIS (Figure 5) highlight the
+critical role of unsupervised warm-up. Without warm-up,
+GRPO training is prone to oscillating policy gradients,
+higher sensitivity to hyperparameters, and a greater risk
+of non-physical deformations. With warm-up, the model
+typically reaches the same target Dice in roughly half the
+ﬁne-tuning epochs and exhibits much smoother validation
+curves.
+We therefore position warm-up as a prior-shaping and
+cost-reduction stage: it does not necessarily raise the ul-
+timate performance ceiling, but substantially reduces the
+time, computational resources, and instability risks re-
+quired to reach a given accuracy level, by pre-aligning the
+latent space before policy optimization.
+5.4
+Independent and Synergistic Contributions of
+MorphSeek Components
+The component-wise ablation on OASIS (Table 3) clar-
+iﬁes the contribution of each part of MorphSeek. Adding
+only the Gaussian head barely changes performance, val-
+idating the lightweight nature of the RL-friendly refac-
+toring. Introducing weakly supervised Dice loss signif-
+icantly boosts Dice but has limited impact on NJD, indi-
+cating that, without high-dimensional policy optimization,
+the available supervision signal is not fully exploited.
+8
+
+arXiv Template
+A PREPRINT
+Table 3: Ablation analysis of MorphSeek components on OASIS dataset.
+#
+Conﬁguration
+Sample
+encoder fL?
+Weak
+Supervision?
+Step/
+Traj
+VoxelMorph-L
+TransMorph
+NICE-Trans
+Mean Dice (%) ↑
+NJD (%) ↓
+Mean Dice (%) ↑
+NJD (%) ↓
+Mean Dice (%) ↑
+NJD (%) ↓
+1
+Baseline
+%
+%
+1/–
+75.31±3.76
+0.09±0.03
+76.84±3.58
+0.12±0.04
+80.03±2.19
+0.04±0.01
+2
++ Gaussian head
+✓
+%
+1/–
+75.64±3.69
+0.09±0.02
+76.79±3.69
+0.12±0.04
+80.20±2.37
+0.04±0.01
+3
++ Dice loss
+✓
+✓
+1/–
+84.87±2.01
+0.32±0.10
+86.08±1.67
+0.29±0.14
+86.81±1.99
+0.21±0.08
+4
++ Multi-step
+✓
+✓
+3/–
+85.50±2.33
+0.37±0.13
+86.37±1.39
+0.35±0.15
+87.06±1.82
+0.23±0.09
+5
++ GRPO (full)
+✓
+✓
+3/6
+87.16±1.97
+0.10±0.02
+88.89±1.82
+0.06±0.02
+89.02±1.45
+0.02±0.01
+Table 4: Efﬁciency analysis of RL-friendly refactoring on
+OASIS task. Inference time: averaged over ﬁve runs on
+the test set.
+Baseline
+Model Parameters
+GPU Inference Time (ms)
+Original
++∆Abs
++∆Rel
+Original
++MorphSeek 1/2/3 step(s)
+VoxelMorph-L
+27.05M
++0.13M
++0.48%
+625
+685 / 1387 / 2022
+TransMorph
+46.77M
++1.18M
++2.53%
+401
+444 / 900 / 1376
+NICE-Trans
+5.71M
++0.13M
++2.27%
+406
+431 / 864 / 1295
+The
+full
+MorphSeek
+conﬁgurationGaussian
+head,
+multi-trajectory multi-step GRPO, and LDVNachieves si-
+multaneous improvements in both Dice and NJD across
+all three backbones.
+This demonstrates that GRPO is
+the key mechanism that tightly couples weak supervision
+with multi-step registration. In particular, the combination
+of latent-space policy modeling, LDVN, and multi-step
+GRPO yields a stable and efﬁcient optimization scheme
+that lifts the performance ceiling of deformable registra-
+tion.
+Across tasks, modalities, and architectures, MorphSeek
+delivers systematic quantitative gains, with Dice improve-
+ments on the order of 24% and NJD reductions of roughly
+3060%, while also exhibiting clear advantages under low-
+label and resource-constrained settings. These results es-
+tablish latent-space policy optimization as a practical and
+effective paradigm for 3D dense deformable registration.
+6
+Conclusion
+We have presented MorphSeek, which reframes de-
+formable image registration as latent-space policy opti-
+mization and stabilizes high-dimensional GRPO through
+Latent-Dimension Variance Normalization (LDVN). By
+shifting exploration from voxel-level deformation ﬁelds
+to a structured latent space, MorphSeek overcomes the
+dimensionality and computational bottlenecks that have
+limited RL-based registration to low-dimensional rigid
+transforms. Combined with unsupervised warm-up and
+multi-trajectory, multi-step GRPO reﬁnement, it consis-
+tently improves Dice while reducing NJD across three 3D
+benchmarks and multiple backbones, with only marginal
+parameter and runtime overhead, making RL-based de-
+formable registration practical under realistic memory and
+label budgets. Future work includes adaptive scheduling
+of reﬁnement depth, incorporating stronger physical pri-
+ors on deformations, and extending latent-space policy op-
+timization to other dense correspondence problems.
+References
+[1] B.B. Avants, C.L. Epstein, M. Grossman, and J.C.
+Gee. Symmetric diffeomorphic image registration
+with cross-correlation: Evaluating automated label-
+ing of elderly and neurodegenerative brain. Medical
+Image Analysis, 12(1):26–41, 2008. Special Issue
+on The Third International Workshop on Biomedi-
+cal Image Registration WBIR 2006.
+[2] Ruzena Bajcsy and Stane Kovai.
+Multiresolution
+elastic matching. Computer Vision, Graphics, and
+Image Processing, 46(1):1–21, 1989.
+[3] Guha Balakrishnan, Amy Zhao, Mert R. Sabuncu,
+John Guttag, and Adrian V. Dalca. Voxelmorph: A
+learning framework for deformable medical image
+registration. IEEE Transactions on Medical Imag-
+ing, 38(8):17881800, August 2019.
+[4] Patrick Bilic, Patrick Christ, Hongwei Bran Li, Eu-
+gene Vorontsov, Avi Ben-Cohen, Georgios Kaissis,
+Adi Szeskin, Colin Jacobs, Gabriel Efrain Humpire
+Mamani, Gabriel Chartrand, et al. The liver tumor
+segmentation benchmark (lits). Medical Image Anal-
+ysis, 84:102680, 2023.
+[5] Xiaohuan Cao, Jianhua Yang, Li Wang, Zhong Xue,
+Qian Wang, and Dinggang Shen.
+Deep learning
+based inter-modality image registration supervised
+by intra-modality similarity, 2018.
+[6] Junyu Chen, Eric C. Frey, Yufan He, William P.
+Segars, Ye Li, and Yong Du. Transmorph: Trans-
+former for unsupervised medical image registra-
+tion. Medical Image Analysis, 82:102615, Novem-
+ber 2022.
+[7] Junyu Chen, Shuwen Wei, Yihao Liu, Aaron Carass,
+and Yong Du. Pretraining deformable image regis-
+tration networks with random images, 2025.
+[8] Zeyuan Chen, Yuanjie Zheng, and James C. Gee.
+Transmatch: A transformer-based multilevel dual-
+stream feature matching network for unsupervised
+deformable image registration. IEEE Transactions
+on Medical Imaging, 43(1):15–27, 2024.
+[9] K Clark, B Vendt, K Smith, J Freymann, J Kirby,
+P Koppel, S Moore, S Phillips, D Mafﬁtt, M Pringle,
+L Tarbox, and F Prior. The cancer imaging archive
+(tcia): maintaining and operating a public informa-
+tion repository. J Digit Imaging, 26(6):1045–1057,
+Dec 2013.
+[10] Adrian V. Dalca, Guha Balakrishnan, John V. Gut-
+tag, and Mert R. Sabuncu. Unsupervised learning for
+9
+
+arXiv Template
+A PREPRINT
+fast probabilistic diffeomorphic registration. CoRR,
+abs/1805.04605, 2018.
+[11] DeepSeek-AI, Daya Guo, Dejian Yang, Haowei
+Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu,
+Qihao Zhu, Shirong Ma, Peiyi Wang, Xiao Bi, Xi-
+aokang Zhang, Xingkai Yu, Yu Wu, Z. F. Wu,
+Zhibin Gou, Zhihong Shao, Zhuoshu Li, Ziyi Gao,
+Aixin Liu, Bing Xue, Bingxuan Wang, Bochao Wu,
+Bei Feng, Chengda Lu, Chenggang Zhao, Chengqi
+Deng, Chenyu Zhang, Chong Ruan, Damai Dai,
+Deli Chen, Dongjie Ji, Erhang Li, Fangyun Lin,
+Fucong Dai, Fuli Luo, Guangbo Hao, Guanting
+Chen, Guowei Li, H. Zhang, Han Bao, Hanwei
+Xu, Haocheng Wang, Honghui Ding, Huajian Xin,
+Huazuo Gao, Hui Qu, Hui Li, Jianzhong Guo, Jiashi
+Li, Jiawei Wang, Jingchang Chen, Jingyang Yuan,
+Junjie Qiu, Junlong Li, J. L. Cai, Jiaqi Ni, Jian Liang,
+Jin Chen, Kai Dong, Kai Hu, Kaige Gao, Kang
+Guan, Kexin Huang, Kuai Yu, Lean Wang, Lecong
+Zhang, Liang Zhao, Litong Wang, Liyue Zhang, Lei
+Xu, Leyi Xia, Mingchuan Zhang, Minghua Zhang,
+Minghui Tang, Meng Li, Miaojun Wang, Ming-
+ming Li, Ning Tian, Panpan Huang, Peng Zhang,
+Qiancheng Wang, Qinyu Chen, Qiushi Du, Ruiqi
+Ge, Ruisong Zhang, Ruizhe Pan, Runji Wang, R. J.
+Chen, R. L. Jin, Ruyi Chen, Shanghao Lu, Shangyan
+Zhou, Shanhuang Chen, Shengfeng Ye, Shiyu Wang,
+Shuiping Yu, Shunfeng Zhou, Shuting Pan, S. S.
+Li, Shuang Zhou, Shaoqing Wu, Shengfeng Ye, Tao
+Yun, Tian Pei, Tianyu Sun, T. Wang, Wangding
+Zeng, Wanjia Zhao, Wen Liu, Wenfeng Liang, Wen-
+jun Gao, Wenqin Yu, Wentao Zhang, W. L. Xiao,
+Wei An, Xiaodong Liu, Xiaohan Wang, Xiaokang
+Chen, Xiaotao Nie, Xin Cheng, Xin Liu, Xin Xie,
+Xingchao Liu, Xinyu Yang, Xinyuan Li, Xuecheng
+Su, Xuheng Lin, X. Q. Li, Xiangyue Jin, Xiao-
+jin Shen, Xiaosha Chen, Xiaowen Sun, Xiaoxiang
+Wang, Xinnan Song, Xinyi Zhou, Xianzu Wang,
+Xinxia Shan, Y. K. Li, Y. Q. Wang, Y. X. Wei, Yang
+Zhang, Yanhong Xu, Yao Li, Yao Zhao, Yaofeng
+Sun, Yaohui Wang, Yi Yu, Yichao Zhang, Yifan Shi,
+Yiliang Xiong, Ying He, Yishi Piao, Yisong Wang,
+Yixuan Tan, Yiyang Ma, Yiyuan Liu, Yongqiang
+Guo, Yuan Ou, Yuduan Wang, Yue Gong, Yuheng
+Zou, Yujia He, Yunfan Xiong, Yuxiang Luo, Yux-
+iang You, Yuxuan Liu, Yuyang Zhou, Y. X. Zhu,
+Yanhong Xu, Yanping Huang, Yaohui Li, Yi Zheng,
+Yuchen Zhu, Yunxian Ma, Ying Tang, Yukun Zha,
+Yuting Yan, Z. Z. Ren, Zehui Ren, Zhangli Sha,
+Zhe Fu, Zhean Xu, Zhenda Xie, Zhengyan Zhang,
+Zhewen Hao, Zhicheng Ma, Zhigang Yan, Zhiyu
+Wu, Zihui Gu, Zijia Zhu, Zijun Liu, Zilin Li, Zi-
+wei Xie, Ziyang Song, Zizheng Pan, Zhen Huang,
+Zhipeng Xu, Zhongyu Zhang, and Zhen Zhang.
+Deepseek-r1: Incentivizing reasoning capability in
+llms via reinforcement learning, 2025.
+[12] Lee R. Dice. Measures of the amount of ecologic as-
+sociation between species. Ecology, 26(3):297–302,
+1945.
+[13] Enzo
+Ferrante,
+Puneet
+Kumar
+Dokania,
+Rafael Marini Silva, and Nikos Paragios. Weakly
+supervised learning of metric aggregations for
+deformable image registration.
+IEEE Journal of
+Biomedical and Health Informatics, 23(4):1374–
+1384, 2019.
+[14] Yabo Fu, Yang Lei, Tonghe Wang, Walter J Curran,
+Tian Liu, and Xiaofeng Yang. Deep learning in medi-
+cal image registration: a review. Physics in Medicine
+&amp; Biology, 65(20):20TR01, October 2020.
+[15] G Haskins, J Kruecker, U Kruger, S Xu, PA Pinto,
+BJ Wood, and P Yan. Learning deep similarity met-
+ric for 3d mr-trus image registration. Int J Comput
+Assist Radiol Surg, 14(3):417–425, Mar 2019.
+[16] MP Heinrich, M Jenkinson, M Bhushan, T Matin,
+FV Gleeson, SM Brady, and JA Schnabel.
+Mind:
+modality independent neighbourhood descriptor for
+multi-modal deformable registration.
+Med Image
+Anal, 16(7):1423–1435, Oct 2012.
+[17] Alessa Hering, Lasse Hansen, Tony CW Mok, Al-
+bert CS Chung, et al.
+Learn2reg:
+comprehen-
+sive multi-task medical image registration challenge,
+dataset and evaluation in the era of deep learning.
+IEEE Transactions on Medical Imaging, 42(3):697–
+712, 2022.
+[18] M Hoffmann, B Billot, DN Greve, JE Iglesias, B Fis-
+chl, and AV Dalca. Synthmorph: Learning contrast-
+invariant registration without acquired images. IEEE
+Trans Med Imaging, 41(3):543–558, Mar 2022.
+[19] Jing Hu, Ziwei Luo, Xin Wang, Shanhui Sun, Youb-
+ing Yin, Kunlin Cao, Qi Song, Siwei Lyu, and
+Xi Wu. End-to-end multimodal image registration
+via reinforcement learning. Medical Image Analysis,
+68:101878, 2021.
+[20] Yipeng Hu, Marc Modat, Eli Gibson, Nooshin
+Ghavami, Ester Bonmati, Caroline M. Moore, Mark
+Emberton, J. Alison Noble, Dean C. Barratt, and
+Tom Vercauteren. Label-driven weakly-supervised
+learning for multimodal deformable image registra-
+tion. In 2018 IEEE 15th International Symposium on
+Biomedical Imaging (ISBI 2018). IEEE, April 2018.
+[21] Yipeng Hu, Marc Modat, Eli Gibson, Wenqi Li,
+Nooshin Ghavami, Ester Bonmati, Guotai Wang,
+Steven Bandula, Caroline M. Moore, Mark Ember-
+ton, Sébastien Ourselin, J. Alison Noble, Dean C.
+Barratt, and Tom Vercauteren. Weakly-supervised
+convolutional neural networks for multimodal image
+registration. CoRR, abs/1807.03361, 2018.
+[22] Xi Jia, Alexander Thorley, Wei Chen, Huaqi Qiu,
+Linlin Shen, Iain B. Styles, Hyung Jin Chang, Ales
+Leonardis, Antonio de Marvao, Declan P. O’Regan,
+Daniel Rueckert, and Jinming Duan.
+Learning a
+model-driven variational network for deformable im-
+age registration. CoRR, abs/2105.12227, 2021.
+10
+
+arXiv Template
+A PREPRINT
+[23] A. Emre Kavur, N. Sinem Gezer, Mustafa Bar,
+Sinem Aslan, Pierre-Henri Conze, Vladimir Groza,
+Duc Duy Pham,
+Soumick Chatterjee,
+Philipp
+Ernst, Sava Özkan, Bora Baydar, Dmitry Lachinov,
+Shuo Han, Josef Pauli, Fabian Isensee, Matthias
+Perkonigg, Rachana Sathish, Ronnie Rajan, Deb-
+doot Sheet, Gurbandurdy Dovletov, Oliver Speck,
+Andreas Nürnberger, Klaus H. Maier-Hein, Gözde
+Bozda Akar, Gözde Ünal, Ouz Dicle, and M. Alper
+Selver. Chaos challenge - combined (ct-mr) healthy
+abdominal organ segmentation.
+Medical Image
+Analysis, 69:101950, April 2021.
+[24] Boah Kim, Jieun Kim, June-Goo Lee, Dong Hwan
+Kim, Seong Ho Park, and Jong Chul Ye.
+Unsu-
+pervised deformable image registration using cycle-
+consistent CNN. CoRR, abs/1907.01319, 2019.
+[25] Julian Krebs, Tommaso Mansi, Hervé Delingette,
+Li Zhang, Florin C. Ghesu, Shun Miao, Andreas K.
+Maier, Nicholas Ayache, Rui Liao, and Ali Kamen.
+Robust non-rigid registration through agent-based
+action learning. In Maxime Descoteaux, Lena Maier-
+Hein, Alfred M. Franz, Pierre Jannin, D. Louis
+Collins, and Simon Duchesne, editors, Medical Im-
+age Computing and Computer Assisted Interven-
+tion - MICCAI 2017 - 20th International Confer-
+ence, Quebec City, QC, Canada, September 11-13,
+2017, Proceedings, Part I, volume 10433 of Lec-
+ture Notes in Computer Science, pages 344–352.
+Springer, 2017.
+[26] Alex Krizhevsky, Ilya Sutskever, and Geoffrey E.
+Hinton. Imagenet classiﬁcation with deep convolu-
+tional neural networks. Commun. ACM, 60(6):8490,
+May 2017.
+[27] Dongyang Kuang. On reducing negative jacobian de-
+terminant of the deformation predicted by deep reg-
+istration networks. CoRR, abs/1907.00068, 2019.
+[28] Yiwen Li, Yunguan Fu, Iani J. M. B. Gayo, Qianye
+Yang, Zhe Min, Shaheer U. Saeed, Wen Yan, Yipei
+Wang, J. Alison Noble, Mark Emberton, Matthew J.
+Clarkson, Dean C. Barratt, Victor A. Prisacariu, and
+Yipeng Hu. Semi-weakly-supervised neural network
+training for medical image registration, 2024.
+[29] Rui Liao, Shun Miao, Pierre de Tournemire, Sasa
+Grbic, Ali Kamen, Tommaso Mansi, and Dorin Co-
+maniciu. An artiﬁcial agent for robust image regis-
+tration. CoRR, abs/1611.10336, 2016.
+[30] Ziwei Luo, Jing Hu, Xin Wang, Shu Hu, Bin Kong,
+Youbing Yin, Qi Song, Xi Wu, and Siwei Lyu.
+Stochastic planner-actor-critic for unsupervised de-
+formable image registration.
+In Proceedings of
+the AAAI Conference on Artiﬁcial Intelligence, vol-
+ume 36, pages 1917–1925, 2022.
+[31] Ziwei Luo, Xin Wang, Xi Wu, Youbing Yin, Kun-
+lin Cao, Qi Song, and Jing Hu. A spatiotemporal
+agent for robust multimodal registration. IEEE Ac-
+cess, 8:75347–75358, 2020.
+[32] Kai Ma, Jiangping Wang, Vivek Singh, Birgi Tamer-
+soy, Yao-Jen Chang, Andreas Wimmer, and Ter-
+rence Chen.
+Multimodal image registration with
+deep context reinforcement learning.
+In Maxime
+Descoteaux, Lena Maier-Hein, Alfred Franz, Pierre
+Jannin, D. Louis Collins, and Simon Duchesne, edi-
+tors, Medical Image Computing and Computer As-
+sisted Intervention 2017, pages 240–248, Cham,
+2017. Springer International Publishing.
+[33] Tai Ma,
+Xinru Dai,
+Suwei Zhang,
+and Ying
+Wen. Pivit: Large deformation image registration
+with˘apyramid-iterative vision transformer. In Hayit
+Greenspan, Anant Madabhushi, Parvin Mousavi,
+Septimiu Salcudean, James Duncan, Tanveer Syeda-
+Mahmood, and Russell Taylor, editors, Medical Im-
+age Computing and Computer Assisted Interven-
+tion – MICCAI 2023, pages 602–612, Cham, 2023.
+Springer Nature Switzerland.
+[34] J.B.Antoine Maintz and Max A. Viergever. A sur-
+vey of medical image registration. Medical Image
+Analysis, 2(1):1–36, 1998.
+[35] Lucas Mansilla, Diego H. Milone, and Enzo Fer-
+rante.
+Learning deformable registration of medi-
+cal images with anatomical constraints. Neural Net-
+works, 124:269–279, 2020.
+[36] DS Marcus, TH Wang, J Parker, JG Csernansky,
+JC Morris, and RL Buckner. Open access series of
+imaging studies (oasis): cross-sectional mri data in
+young, middle aged, nondemented, and demented
+older adults.
+J Cogn Neurosci, 19(9):1498–1507,
+Sep 2007.
+[37] Mingyuan Meng, Lei Bi, Dagan Feng, and Jin-
+man Kim.
+Non-iterative Coarse-to-Fine Registra-
+tion Based on Single-Pass Deep Cumulative Learn-
+ing, page 8897. Springer Nature Switzerland, 2022.
+[38] Mingyuan Meng, Lei Bi, Michael Fulham, Dagan
+Feng, and Jinman Kim.
+Non-iterative Coarse-to-
+Fine Transformer Networks for Joint Afﬁne and De-
+formable Image Registration, page 750760. Springer
+Nature Switzerland, 2023.
+[39] Mingyuan Meng, Dagan Feng, Lei Bi, and Jinman
+Kim. Correlation-aware coarse-to-ﬁne mlps for de-
+formable medical image registration. In IEEE/CVF
+Conference on Computer Vision and Pattern Recog-
+nition (CVPR), pages 9645–9654, 2024.
+[40] Shun Miao and Rui Liao.
+Agent-Based Methods
+for Medical Image Registration, pages 323–345.
+Springer International Publishing, Cham, 2019.
+[41] Marc Modat, Gerard R. Ridgway, Zeike A. Tay-
+lor, Manja Lehmann, Josephine Barnes, David J.
+Hawkes, Nick C. Fox, and Sébastien Ourselin.
+Fast free-form deformation using graphics process-
+ing units.
+Computer Methods and Programs in
+Biomedicine, 98(3):278–284, 2010.
+HP-MICCAI
+2008.
+11
+
+arXiv Template
+A PREPRINT
+[42] Tony C. W. Mok and Albert C. S. Chung.
+Large
+deformation diffeomorphic image registration with
+laplacian pyramid networks, 2020.
+[43] J.P.W. Pluim, J.B.A. Maintz, and M.A. Viergever.
+Mutual-information-based registration of medical
+images: a survey. IEEE Transactions on Medical
+Imaging, 22(8):986–1004, 2003.
+[44] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu,
+Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan
+Zhang, Y. K. Li, Y. Wu, and Daya Guo. Deepseek-
+math: Pushing the limits of mathematical reasoning
+in open language models, 2024.
+[45] Dinggang Shen and C. Davatzikos. Hammer: hierar-
+chical attribute matching mechanism for elastic reg-
+istration. IEEE Transactions on Medical Imaging,
+21(11):1421–1439, 2002.
+[46] Yucheng Shu, Hao Wang, Bin Xiao, Xiuli Bi, and
+Weisheng Li.
+Medical image registration based
+on˘auncoupled learning and accumulative enhance-
+ment.
+In Marleen de Bruijne, Philippe C. Cattin,
+Stéphane Cotin, Nicolas Padoy, Stefanie Speidel,
+Yefeng Zheng, and Caroline Essert, editors, Medi-
+cal Image Computing and Computer Assisted Inter-
+vention – MICCAI 2021, pages 3–13, Cham, 2021.
+Springer International Publishing.
+[47] Hessam Sokooti, Bob de Vos, Floris Berendsen,
+Mohsen Ghafoorian, Sahar Youseﬁ, Boudewijn P. F.
+Lelieveldt, Ivana Isgum, and Marius Staring. 3d con-
+volutional neural networks image registration based
+on efﬁcient supervised learning from artiﬁcial defor-
+mations, 2019.
+[48] Hessam Sokooti, Bob de Vos, Floris Berendsen,
+Boudewijn P. F. Lelieveldt, Ivana Išgum, and Mar-
+ius Staring. Nonrigid image registration using multi-
+scale 3d convolutional neural networks. In Maxime
+Descoteaux, Lena Maier-Hein, Alfred Franz, Pierre
+Jannin, D. Louis Collins, and Simon Duchesne, edi-
+tors, Medical Image Computing and Computer As-
+sisted Intervention 2017, pages 232–239, Cham,
+2017. Springer International Publishing.
+[49] Aristeidis Sotiras, Christos Davatzikos, and Nikos
+Paragios.
+Deformable medical image registration:
+A survey. IEEE Transactions on Medical Imaging,
+32(7):1153–1190, 2013.
+[50] Shanhui Sun, Jing Hu, Mingqing Yao, Jinrong Hu,
+Xiaodong Yang, Qi Song, and Xi Wu. Robust mul-
+timodal image registration using deep recurrent re-
+inforcement learning. In C. V. Jawahar, Hongdong
+Li, Greg Mori, and Konrad Schindler, editors, Com-
+puter Vision – ACCV 2018, pages 511–526, Cham,
+2019. Springer International Publishing.
+[51] Raj Varadhan, Grigorios Karangelis, Karthik Krish-
+nan, and Susanta Hui. A framework for deformable
+image registration validation in radiotherapy clinical
+applications. Journal of Applied Clinical Medical
+Physics, 14(1):192–213, 01 2013.
+[52] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz
+Kaiser, and Illia Polosukhin.
+Attention is all you
+need. CoRR, abs/1706.03762, 2017.
+[53] Jian Wang and Miaomiao Zhang.
+Deepﬂash: An
+efﬁcient network for learning-based medical image
+registration, 2020.
+[54] Yuelin Xin, Yicheng Chen, Shengxiang Ji, Kun Han,
+and Xiaohui Xie. On-the-Fly Guidance Training for
+Medical Image Registration.
+arXiv e-prints, page
+arXiv:2308.15216, August 2023.
+[55] Z Xu, CP Lee, MP Heinrich, M Modat, D Rueckert,
+S Ourselin, RG Abramson, and BA Landman. Eval-
+uation of six registration methods for the human ab-
+domen on clinically acquired ct. IEEE Trans Biomed
+Eng, 63(8):1563–1572, Aug 2016.
+[56] Xiao Yang, Roland Kwitt, and Marc Nietham-
+mer.
+Fast predictive image registration.
+In Gus-
+tavo Carneiro, Diana Mateus, Loïc Peter, Andrew
+Bradley, João Manuel R. S. Tavares, Vasileios Be-
+lagiannis, João Paulo Papa, Jacinto C. Nascimento,
+Marco Loog, Zhi Lu, Jaime S. Cardoso, and Julien
+Cornebise, editors, Deep Learning and Data Label-
+ing for Medical Applications, pages 48–57, Cham,
+2016. Springer International Publishing.
+[57] Yi Zhang, Yidong Zhao, Hui Xue, Peter Kellman,
+Stefan Klein, and Qian Tao. Recurrent inference ma-
+chine for medical image registration. Medical Image
+Analysis, 106:103748, 2025.
+[58] Shengyu Zhao, Yue Dong, Eric I-Chao Chang, and
+Yan Xu. Recursive cascaded networks for unsuper-
+vised medical image registration. In Proceedings of
+the IEEE International Conference on Computer Vi-
+sion (ICCV), 2019.
+[59] Shengyu Zhao, Tingfung Lau, Ji Luo, Eric I Chang,
+and Yan Xu. Unsupervised 3d end-to-end medical
+image registration with volume tweening network.
+IEEE Journal of Biomedical and Health Informatics,
+2019.
+[60] Yujia Zhou, Shumao Pang, Jun Cheng, Yuhang Sun,
+Yi Wu, Lei Zhao, Yaqin Liu, Zhentai Lu, Wei Yang,
+and Qianjin Feng. Unsupervised deformable medi-
+cal image registration via pyramidal residual defor-
+mation ﬁelds estimation.
+CoRR, abs/2004.07624,
+2020.
+[61] Z. Zhou, B. Hong, X. Qian, et al. macjnet: weakly-
+supervised multimodal image deformable registra-
+tion using joint learning framework and multi-
+sampling cascaded mind.
+BioMed Eng OnLine,
+22:91, 2023.
+[62] Qiaoyun Zhu, Guoye Lin, Yuhang Sun, Yi Wu,
+Yujia Zhou, and Qianjin Feng.
+Functional mag-
+netic resonance imaging progressive deformable reg-
+istration based on a cascaded convolutional neural
+network.
+Quantitative Imaging in Medicine and
+Surgery, 11(8), 2021.
+12
+
+arXiv Template
+A PREPRINT
+[63] Yongpei Zhu and Shi Lu. Swin-voxelmorph: A sym-
+metric unsupervised learning model for˘adeformable
+medical image registration using swin transformer.
+In Linwei Wang, Qi Dou, P. Thomas Fletcher, Ste-
+fanie Speidel, and Shuo Li, editors, Medical Im-
+age Computing and Computer Assisted Intervention
+– MICCAI 2022, pages 78–87, Cham, 2022. Springer
+Nature Switzerland.
+13

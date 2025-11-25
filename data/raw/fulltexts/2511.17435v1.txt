@@ -1,0 +1,2206 @@
+Multi-Agent Pointer Transformer: Seq-to-Seq Reinforcement Learning for
+Multi-Vehicle Dynamic Pickup-Delivery Problems
+Zengyu Zou1, 4, Jingyuan Wang1, 2, 3, 4, *, Yixuan Huang1, 4, Junjie Wu2, 3
+1School of Computer Science and Engineering, Beihang University, Beijing, China
+2School of Economics and Management, Beihang University, Beijing, China
+3MIIT Key Laboratory of Data Intelligence and Management, Beihang University, Beijing, China
+4MOE Engineering Research Center of Advanced Computer Application Technology, Beihang University, China
+{zzy0001213, jywang, yixuanhuang, wujj}@buaa.edu.cn
+Abstract
+This paper addresses the cooperative Multi-Vehicle Dy-
+namic Pickup and Delivery Problem with Stochastic Re-
+quests (MVDPDPSR) and proposes an end-to-end centralized
+decision-making framework based on sequence-to-sequence,
+named Multi-Agent Pointer Transformer (MAPT). MVD-
+PDPSR is an extension of the vehicle routing problem and a
+spatio-temporal system optimization problem, widely applied
+in scenarios such as on-demand delivery. Classical operations
+research methods face bottlenecks in computational complex-
+ity and time efficiency when handling large-scale dynamic
+problems. Although existing reinforcement learning meth-
+ods have achieved some progress, they still encounter several
+challenges: 1) Independent decoding across multiple vehicles
+fails to model joint action distributions; 2) The feature extrac-
+tion network struggles to capture inter-entity relationships;
+3) The joint action space is exponentially large. To address
+these issues, we designed the MAPT framework, which em-
+ploys a Transformer Encoder to extract entity representations,
+combines a Transformer Decoder with a Pointer Network to
+generate joint action sequences in an AutoRegressive manner,
+and introduces a Relation-Aware Attention module to capture
+inter-entity relationships. Additionally, we guide the model’s
+decision-making using informative priors to facilitate effec-
+tive exploration. Experiments on 8 datasets demonstrate that
+MAPT significantly outperforms existing baseline methods
+in terms of performance and exhibits substantial computa-
+tional time advantages compared to classical operations re-
+search methods.
+Code — https://github.com/wszzyer/MAPT
+1
+Introduction
+The Pickup and Delivery Problem is a type of vehicle rout-
+ing problem that has demonstrated its importance in many
+real-world applications, such as online food delivery. In real-
+world scenarios, the arrival time, origin, and destination of
+requests are often unpredictable, and there are strict require-
+ments for service response times. Therefore, efficiently plan-
+ning vehicle routes based on real-time updated informa-
+tion is particularly important in solving this problem. This
+*Corresponding author
+Copyright © 2026, Association for the Advancement of Artificial
+Intelligence (www.aaai.org). All rights reserved.
+work focuses on solving the cooperative Multi-Vehicle Dy-
+namic Pickup and Delivery Problem with Stochastic Re-
+quests (MVDPDPSR). Unlike the traditional Pickup and De-
+livery Problem, in this problem, we need to route multiple
+vehicles, and the occurrence times of all requests are un-
+known in advance. Moreover, the origin and destination of
+each request are only revealed after the request emerges.
+Existing methods for addressing dynamic vehicle rout-
+ing problems fall into three categories: heuristic meth-
+ods, classical operations research methods, and reinforce-
+ment learning-based algorithms. Heuristic methods have
+shown some success (Sheridan et al. 2013; Fikar 2018; An-
+dersson 2021) by routing vehicles through manually de-
+signed heuristic rules, such as the nearest-distance rule.
+Their strengths are simplicity and efficiency, fitting real-
+time decision scenarios, but they have clear limits as they
+depend heavily on manually designed rules and struggle
+to ensure optimality. Classical operations research meth-
+ods typically adopt the Rolling-Horizon paradigm, which
+transforms dynamic problems into static ones. These static
+subproblems are then solved using either exact algorithms
+(Lu and Dessouky 2004; Liu et al. 2018; Savelsbergh and
+Sol 1998) or metaheuristics (Schilde, Doerner, and Hartl
+2011; Geiser, Hanne, and Dornberger 2020; Cai et al.
+2022). This paradigm requires accumulating a sufficient
+number of requests before initiating planning, which fails
+to meet the needs of real-time dynamic decision-making.
+Also, both exact and metaheuristic algorithms have high
+computational complexity, greatly affecting their time effi-
+ciency in practice. With technology development, reinforce-
+ment learning-based algorithms have been used for multi-
+vehicle routing. Multi-agent reinforcement learning meth-
+ods have been proposed for the static multi-vehicle pickup
+and delivery problem (Zong et al. 2022; Berto et al. 2024).
+They encode the current state with an Encoder, decode inde-
+pendently for each vehicle with a Decoder, and use a conflict
+handler in post-processing to solve vehicle conflicts.
+However, these multi-agent methods still face the follow-
+ing issues: (1) Existing multi-agent reinforcement learning
+methods decode each agent independently, failing to model
+the joint probability distribution of agents’ actions. Further-
+more, the decisions generated by these methods may con-
+flict among agents (e.g., competing for the same request).
+(2) Existing feature extraction networks fail to capture rela-
+arXiv:2511.17435v1  [cs.LG]  21 Nov 2025
+
+tionships between entities (e.g., stations, vehicles, requests),
+which are key components of the MVDPDPSR. (3) The joint
+action space is often exponentially large, which prevents re-
+inforcement learning from exploring useful actions.
+To tackle these remaining issues, we propose the Multi-
+Agent Pointer Transformer (MAPT), an end-to-end cen-
+tralized decision-making framework based on sequence-to-
+sequence to solve MVDPDPSR. Specifically, we model the
+MVDPDPSR problem as a Markov Decision Process, use a
+Transformer Encoder to extract entity representations, and
+then combine a Transformer Decoder with a Pointer Net-
+work to convert the embedding sequence into a joint action
+sequence in an AutoRegressive manner. To extract relation-
+ships between entities, we propose a Relation-Aware Atten-
+tion module that embeds entity relationships and adds them
+to the attention matrix. To address the challenge of reinforce-
+ment learning exploring a vast joint action space, we design
+informative priors based on load balancing and station dis-
+tance, and fuse these priors with the action distribution de-
+coded by the Decoder, enabling the model to select actions
+with higher potential rewards.
+In summary, the main contributions of our work are as
+follows:
+• We formalize the MVDPDPSR problem as a Markov De-
+cision Process and design the Multi-Agent Pointer Trans-
+former (MAPT) framework to decode joint actions and
+model the joint probability.
+• We design a Relation-Aware Attention module to capture
+various relationships between entities.
+• We design informative priors and integrate them into the
+model’s decision distribution to facilitate effective explo-
+ration.
+• We validate the effectiveness of MAPT on 8 datasets, and
+experiments show that MAPT outperforms various base-
+lines and demonstrates significant computational time ad-
+vantages over classical operations research methods.
+2
+Preliminaries
+2.1
+Problem Formulation
+In this section, we formally define the Multi-Vehicle Dy-
+namic Pickup and Delivery Problem with Stochastic Re-
+quests(MVDPDPSR). A typical MVDPDPSR scenario in-
+volves a fleet of vehicles (Multi-Vehicle) tasked with picking
+up and delivering cargos among a set of stations. The pickup
+and delivery requests arise dynamically over time, reflecting
+the “Dynamic” nature of the problem. Accordingly, stations,
+vehicles, and requests constitute the three fundamental com-
+ponents of a MVDPDPSR. We provide their formal defini-
+tions below.
+Definition 1 (Stations). The stations in MVDPDPSR are
+represented as a fully connected weighted graph G
+=
+{N, E}. Here, N = {n1, . . . , ni, . . . , nI} denotes the set of
+stations, where ni represents the i-th station. E ∈R|N|×|N|
+is the distance matrix, where each element eni,nj indicates
+the travel time from station ni to station nj. In the station
+graph G, each station can serve as either an origin (pickup
+station) or a destination (delivery station) for cargos.
+Definition 2 (Vehicles). A MVDPDPSR scenario involves
+K vehicles, where each vehicle vk is represented by a tuple
+of four state variables:
+vk = ⟨capk, spak, tok, distk ⟩.
+(1)
+The meanings of these variables are as follows:
+• capk (capacity): the total capacity of vehicle vk.
+• spat
+k (space): the remaining available space of vehicle vk
+at time t. For notational brevity, we omit the superscript
+time index t when unambiguous (e.g. spak).
+• tok (destination): the current destination station of the ve-
+hicle.
+• distk (distance): the remaining distance (travel time) to
+reach the current destination.
+If distk ̸= 0, the vehicle is en route; otherwise, it is located
+at a station. Notably, the destination of a vehicle cannot be
+changed while it is en route.
+Definition 3 (Requests). The objective of MVDPDPSR is
+to fulfill M cargo delivery requests, where each request rm
+is represented by a tuple of six state variables:
+rm = ⟨fromm, tom, valm, volm, timem, statem ⟩.
+(2)
+The meanings of these variables are as follows:
+• fromm (origin): the origin station of request rm.
+• tom (destination): the destination station of request rm.
+• valm (value): the profit associated with fulfilling the re-
+quest.
+• volm (volume): the cargo volume required for the request,
+which consumes vehicle space.
+• timem (appearance time): the time at which the request
+becomes visible to the system.
+• statem (state): the current state of request rm.
+A request becomes visible only when the current time
+reaches its appearance time timem. The state vari-
+able statem ∈{unassigned, picked, delivered} indicates
+whether the request has not been picked up, has been picked
+up by a vehicle, or has been delivered.
+In the MVDPDPSR scenario, the planning horizon is dis-
+cretized into time slices t = 0, . . . , T. At the initial time
+slice t = 0, all vehicles are located at their initial origin sta-
+tions, and their available space equals their full capacity. At
+each time slice, a scheduler performs the following actions:
+1. For every visible request in the unassigned state at time
+t (i.e. timem ≤t), assign a vehicle that is currently at
+the same station and has sufficient space (spak ≥volm)
+to load the request’s cargo. Update the state of the re-
+quest to picked and reduce the vehicle’s available space
+accordingly: spak := spak −volm.
+2. For each vehicle at a station (distk = 0), select its next
+destination station and dispatch it. Set the vehicle’s travel
+distance distk to the distance between the current station
+and the selected destination.
+3. For every vehicle in transit (distk ̸= 0), decrease its re-
+maining travel distance by one unit: distk := distk −1.
+
+4. For each vehicle arriving at its destination (distk = 0),
+unload all cargos whose destination matches the cur-
+rent station. Update the state of each delivered request
+to delivered and restore the vehicle’s available space:
+spak := spak + volm for each delivered request.
+In this scenario, cargo delivery requests emerge dynamically
+over time, characterizing MVDPDPSR as a dynamic pickup-
+and-delivery problem.
+A MVDPDPSR instance terminates when the planning
+horizon reaches the upper limit T. The goal of scheduling
+is to maximize the total profit of requests completed within
+the time limit while minimizing the aggregate travel cost.
+2.2
+Markov Decision Process (MDP)
+MVDPDPSR is a sequential decision-making problem over
+time, and we model its decision process as a Markov deci-
+sion process, defined as follows:
+Definition 4 (Observation/State). Since we have a central-
+ized decision system, the system can fully observe all state
+information at the current time step. The state at time step t
+includes the distance between stations eni,nj, all vehicle in-
+formation vk, and all appeared requests rm where timem ≤
+t. Notably, within a centralized decision-making system, the
+relationship relvk,rm
+∈{unassigned, picked, delivered}
+between each vehicle vk and request rm at time t must be
+explicitly tracked. This relationship indicates the request has
+not been picked up, has been picked up by the vehicle, or has
+been delivered by the vehicle.
+Definition 5 (Action). The decision includes decisions for
+requests and decisions for vehicles.
+• Request decisions. For the set of unassigned requests
+Rt = {rm | statem = unassigned ∧timem ≤t}, we
+need to decide which vehicle to assign them to. The as-
+signed vehicle’s current location must be the same as the
+request’s origin, i.e.,
+At
+rm ∈{vk | distk = 0 ∧tok = fromm} ∪{τ},
+(3)
+where τ denotes the action of temporarily deferring the
+request assignment. The assignment must ensure that the
+vehicle’s capacity meets the requirements.
+• Vehicle decisions. For the set of vehicles that have reached
+their destinations Vt = {vk | distk = 0}, we need to
+decide their next destination station, i.e.,
+At
+vk ∈{n1, . . . , nI}.
+(4)
+The final joint action space is the Cartesian product of all
+sub-action spaces:
+At =
+Y  
+At
+rm | rm ∈Rt	
+∪
+
+At
+vk | vk ∈Vt	
+(5)
+Definition 6 (Transition). For vehicles vk ∈Vt, we need
+to update their destination station tok and remaining time to
+reach the new destination station distk based on At
+vk, and
+update their remaining space based on unloaded and newly
+loaded goods. For vehicles vk /∈Vt, the remaining time to
+reach their destination stations decreases by one unit. For
+all requests assigned to vehicles, their statem and relvk,rm
+changes to picked, and for all requests that have reached
+their destinations, their statem and relvk,rm changes to
+delivered.
+Definition 7 (Objective/Reward). The objective is to opti-
+mize the overall routing solution quality by maximizing the
+profit from completed requests while accounting for vehicle
+travel costs. Formally, we define the objective at time T as:
+objT =
+X
+t<T
+X
+k
+
+X
+m∈Dt
+k
+valm −cost · etot
+k,tot+1
+k
+
+,
+(6)
+where Dt
+k denotes the set of requests delivered by vehicle vk
+by time t, and cost represents the cost per unit distance. The
+single-step reward at each decision point is then defined as
+the incremental change in the objective value:
+rwdt = objt −objt−1.
+(7)
+3
+Methodology
+3.1
+System Overview
+We propose the Multi-Agent Pointer Transformer (MAPT),
+which is built on the Transformer (Vaswani et al. 2017)
+Encoder-Decoder architecture. At each time step of the
+MDP, the current state is fed into MAPT for decision-
+making. The Encoder processes the states of all entities and
+incorporates a Relation-Aware Attention module to capture
+inter-entity relationships. The Decoder generates actions for
+each entity in an AutoRegressive manner. To enhance ex-
+ploration during reinforcement learning, we integrate infor-
+mative priors into the action selection process. The overall
+architecture is illustrated in Figure 1.
+3.2
+Encoder
+Feature Representation with Dense Vectors
+First, we
+transform the raw input into dense vectors for unified rep-
+resentation. We compute some augmented inputs to enhance
+the model’s perception capabilities, namely orii and desti,
+which represent the number of requests originating from sta-
+tion ni, and the number of requests destined for station ni,
+respectively. Next, we concatenate the raw inputs of stations,
+requests, and vehicles and pass them through a linear layer
+to transform them into dense vectors:
+dni = [orii∥desti] W n,
+dni ∈Rhs
+(8)
+dvk = [capk∥spak∥distk] W v,
+dvk ∈Rhs
+(9)
+drm = [valm∥volm] W r,
+drm ∈Rhs
+(10)
+where ∥denotes the concatenation operation for scalars, and
+hs is the model’s hidden size. Additionally, we transform
+global information into a dense vector, where mt represents
+the current number of requests, as follows:
+dg = [t∥mt] W g,
+dg ∈Rhs.
+(11)
+Relation-Aware Attention
+Although there are some neu-
+ral network models for solving the Vehicle Routing Prob-
+lem, these models cannot effectively capture the relation-
+ships between entities. To overcome these limitations, this
+study designs a Relation-Aware Attention module aimed at
+incorporating relationship information between entities into
+the embeddings. For any two entities (stations, requests,
+
+Decode  Stage
+Informative Prior
+Environment
+Encode  Stage
+Transformer Encoder
+Relation-Aware Attention
+K
+Q
+V
+Relation
+Embedding
+Sample
+Action
+        vehicles
+requests
+stations
+from
+to
+unassigned
+picked
+destination
+dist
+dist
+dist
+calculate Informative Prior
+Dot-Product
+Softmax
+Embeddings
+Auto-
+Regressive
+Transformer
+Decoder
+Informative
+Prior
+Decoder Prob
+Fused Prob
+Input seq
+seq'
+Markov Decision Process
+Based Planning
+planning planning planning
+Observation/State at each time
+Figure 1: The framework of MAPT. The blue arrow indicates that the elements in the sequence are generated in an AutoRe-
+gressive manner. The elements marked with * are the actions that need to be decoded.
+Relation
+Vehicle
+Request
+Station
+Vehicle
+distance
+unassigned
+picked
+delivered
+is destination
+isn’t destination
+Request
+unassigned
+picked
+delivered
+distance
+from
+to
+Station
+is destination
+isn’t destination
+from
+to
+distance
+Table 1: Relation Types between Vehicle, Request and Sta-
+tion.
+vehicles), there are some relationships between them, as
+shown in Table 1. We design a relation encoding network
+Relation-Embedding(u, v) ∈R. If the relationship between
+entities u and v is a distance relationship, we use a linear
+layer to project it; for other relationships, we use a learnable
+parameter as their embedding. We denote the relationship
+matrix between entities as R ∈R|Q|×|K|, which is calcu-
+lated as follows:
+Ru,v = Relation-Embedding(qu, kv),
+(12)
+where qu represents the u-th entity in Query sequence (Q),
+and kv represents the v-th entity in Key sequence (K). Fol-
+lowing the definition of the standard Transformer (Vaswani
+et al. 2017), we represent the Query sequence as Q, the Key
+sequence as K, the Value sequence as V and the head di-
+mension as dk. The Relation-Aware Attention is expressed
+as:
+Rel-Aware-Attn(Q, K, V , R) = softmax
+QKT + R
+√dk
+
+V .
+(13)
+We incorporate relationship information into the attention
+mechanism, enabling the model to capture relationships be-
+tween entities when generating entity embeddings.
+Encode with Relation-Aware Attention
+We use a stan-
+dard Transformer Encoder and replace its attention layer
+with Relation-Aware Attention. We concatenate the dense
+vectors of all stations, requests, vehicles, and global infor-
+mation into a sequence and input them into the Encoder to
+obtain their respective embeddings:
+[or1, . . . , orM , ov1, . . . , ovK, on1, . . . , onI , og] =
+Encoder([dr1, . . . , drM , dv1, . . . , dvK, dn1, . . . , dnI , dg]).
+(14)
+3.3
+Decoder
+Decoder Model
+We use a standard Transformer Decoder
+and replace its attention layer with Relation-Aware At-
+tention. The cross-attention layer needs to perform cross-
+attention on the output of the Encoder to perceive all in-
+formation about the current problem. Additionally, we add
+learnable positional encoding before the Decoder.
+AutoRegressive Decoding
+We model the joint probabil-
+ity distribution At using chain rule decomposition, which is
+order-agnostic:
+P(At) =
+M
+Y
+m
+P(At
+rm | At
+r1...rm−1)
+×
+K
+Y
+k
+P(At
+vk | At
+v1...vk−1, At
+r1...rM ).
+(15)
+From this formula, we can see that each request needs to
+refer to the decision results of previous requests when mak-
+ing decisions; each vehicle needs to refer to the decision re-
+sults of previous vehicles and all requests when making de-
+cisions. Due to this sequential decision-making process, we
+adopt an AutoRegressive approach to generate the decision
+sequence and model it in a sequence-to-sequence frame-
+work, as also observed by Wen et al. (2022). We combine the
+Transformer’s ability to capture long-distance dependencies
+with the Pointer Network’s (Vinyals, Fortunato, and Jaitly
+2015) ability to handle entity selection, using the Trans-
+former Decoder to decode actions.
+We detail our decoding process, for notational conve-
+nience, we omit the superscript time index t when unam-
+biguous. Let our sequence be seq, initially empty. When de-
+
+coding the action for the m-th request rm, we first append it
+into the sequence, which then becomes:
+seq = [r1, Ar1, . . . , rm].
+(16)
+We first convert entities in the sequence to their correspond-
+ing embeddings to obtain seq′ (e.g., converting request rm to
+its embedding orm which is output of the Transformer En-
+coder). The Decoder(seq′) produces a hidden sequence of
+the same length as seq′. We take the last item of the hidden
+sequence, hrm, as the query vector and use the embeddings
+of all vehicles as the key vectors. By calculating the attention
+scores between them, we can quantify the request’s prefer-
+ence for each vehicle:
+P dec(Arm = vk) = softmaxk(h⊤
+rm[ov1, . . . , ovK]), (17)
+where softmaxk(·) denotes the k-th element of the softmax
+output. We determine Arm by sampling from P dec(Arm) or
+selecting the maximum probability vehicle. This decoding
+result is then placed at the end of seq, providing critical ref-
+erence information for subsequent decisions:
+seq = [r1, Ar1, . . . , rm, Arm].
+(18)
+This process can be repeated to decode all requests. We de-
+code all vehicles in the same manner:
+P dec(Avk = ni) = softmaxi(h⊤
+vk[on1, . . . , onI]).
+(19)
+After all decoding is completed, the elements in the se-
+quence are:
+seq = [r1, Ar1, . . . , v1, Av1, . . . , vK, AvK].
+(20)
+3.4
+Informative Priors
+The joint action space in MVDPDPSR is often exponen-
+tially large because of multiple vehicles, requests, and sta-
+tions, which prevents reinforcement learning from explor-
+ing useful actions. To address this, we designed manually-
+computed informative priors for vehicle selection and desti-
+nation selection. By multiplying the probabilities output by
+the Decoder with informative priors, we guide the agent to
+prioritize actions with higher potential rewards.
+Informative Priors for Vehicle Selection
+In a multi-
+vehicle scenario, the balance of vehicle load is crucial for
+overall delivery efficiency and resource utilization. Based on
+this, we design a load-balancing informative prior, which
+is inversely proportional to the current vehicle load. The
+smaller the current load of a vehicle, the higher its infor-
+mative prior weight in vehicle selection, thereby guiding the
+assignment of requests toward load balancing:
+P pri(Arm = vk) = spak
+capk
+.
+(21)
+Although temporarily deferring request assignments may
+yield positive benefits (e.g., when the current vehicle load is
+high), we aim to avoid excessive occurrences of such cases,
+as this would severely affect the exploration efficiency dur-
+ing reinforcement learning. Therefore, we set a small prob-
+ability for action τ (defined in Eq. (3)):
+P pri(Arm = τ) = β.
+(22)
+The vehicle selection probability after informative priors’
+guidance is:
+P(Arm = vk) = P dec(Arm = vk)·P pri(Arm = vk). (23)
+Informative Priors for Destination Selection
+For the
+destination station selection of vehicle vk, the informative
+prior P pri(Avk = ni) is determined as follows:
+• If station ni has requests to be delivered, P pri(Avk =
+ni) = 1.
+• If station ni has requests to be picked up, P pri(Avk =
+ni) =
+0.1×E
+etok,ni , where E denotes the average value of all
+elements in the distance matrix E. This formulation pri-
+oritizes stations that are closer in distance. Since the num-
+ber of stations with pickup requests is significantly larger
+than those with delivery requests, we use a smaller co-
+efficient (0.1) to balance the vehicle’s priorities between
+pickup and delivery tasks.
+• For stations ni that do not fall into the above two cate-
+gories, P pri(Avk = ni) = 0.
+The destination selection probability after informative pri-
+ors’ guidance is:
+P(Avk = ni) = P dec(Avk = ni) · P pri(Avk = ni). (24)
+3.5
+Optimization via PPO
+We use Proximal Policy Optimization (Schulman et al.
+2017) to train MAPT. Our value function is defined as
+V (st) = MLP(og), where MLP transforms global informa-
+tion into a scalar. We use Generalized Advantage Estimation
+(Schulman et al. 2015) to balance the bias and variance of
+advantage estimation:
+ˆAGAE
+t
+=
+∞
+X
+l=0
+(γλ)l(rwdt+l + γV (st+l+1) −V (st+l)).
+(25)
+The Actor loss is defined as
+ρt(θ) =
+πθ(At|st)
+πθold(At|st),
+(26)
+LCLIP(θ) = Et
+h
+min
+ ρt(θ) ˆAGAE
+t
+,
+CLIP(ρt(θ), 1 −ϵ, 1 + ϵ) ˆAGAE
+t
+i
+,
+(27)
+where πθ(At|st) is the joint probability defined in Eq. (15).
+The Critic loss is defined as
+LCritic = (V (st) −(rt+1 + γV (st+1)))2 .
+(28)
+The final total loss is
+L = LCLIP + αLCritic.
+(29)
+4
+Experiments
+4.1
+Experimental Scenarios
+To validate the effectiveness of the MAPT framework, we
+conducted experiments on 8 datasets, including both syn-
+thetic and real-world datasets, for comprehensive evaluation.
+A brief description of the datasets is provided below.
+• Synthetic Dataset: We generated synthetic datasets with
+different scales of stations I ∈{20, 50, 300}, correspond-
+ing to dataset suffixes -S, -L, and -XL, respectively. For
+these datasets, the number of requests and vehicles were
+
+Scenario
+synth-S
+synth-S-cost
+synth-L
+synth-L-cost
+dhrd-tpe
+dhrd-sg
+dhrd-se
+synth-XL
+Metric
+Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑
+OR Tools 182.1
+0.54
+117.4
+0.52
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+N/A
+55.3
+0.45
+N/A
+N/A
+SA
+162.5
+0.52
+108.1
+0.52
+641.1
+0.28
+339.3
+0.29
+244.9
+0.31
+136.7
+0.30
+50.4
+0.41
+1531.9
+0.31
+GA
+108.7
+0.30
+58.3
+0.29
+329.4
+0.14
+89.5
+0.12
+64.1
+0.08
+40.9
+0.13
+21.3
+0.17
+863.8
+0.17
+SA*
+133.0
+0.42
+81.2
+0.42
+563.1
+0.25
+284.8
+0.24
+223.3
+0.28
+139.6
+0.30
+56.6
+0.46
+1650.9
+0.34
+GA*
+75.2
+0.21
+39.4
+0.19
+219.9
+0.09
+88.0
+0.09
+53.8
+0.07
+39.0
+0.13
+18.4
+0.15
+543.2
+0.11
+MAPDP* 174.9
+0.53
+82.0
+0.49
+177.6
+0.08
+65.2
+0.08
+287.5
+0.36
+247.2
+0.35
+72.9
+0.56
+807.0
+0.16
+PARCO* 178.8
+0.53
+86.6
+0.52
+177.6
+0.08
+65.2
+0.08
+391.2
+0.49
+267.5
+0.46
+64.2
+0.49
+1834.7
+0.36
+Nearest
+189.2
+0.57
+124.1
+0.57
+962.6
+0.41
+592.3
+0.41
+309.2
+0.39
+194.5
+0.40
+39.8
+0.32
+2641.1
+0.53
+MAPDP 157.5
+0.41
+70.0
+0.42
+958.1
+0.37
+385.2
+0.37
+135.4
+0.17
+64.9
+0.18
+19.3
+0.16
+2543.1
+0.50
+MAPT
+275.2
+0.83
+192.1
+0.84
+1875.1
+0.80
+1348.6
+0.81
+697.2
+0.87
+376.1
+0.71
+78.9
+0.64
+3227.5
+0.65
+Table 2: Overall performance comparison on synthetic datasets and real-world datasets. The best result in each column is
+bolded. ”N/A” indicates that the algorithm cannot provide results within an acceptable time frame.
+Scenario
+synth-S
+synth-S-cost
+synth-L
+synth-L-cost
+dhrd-tpe
+dhrd-sg
+dhrd-se
+synth-XL
+Metric
+Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑Obj.↑Comp.↑
+MAPT
+275.2
+0.83
+192.1
+0.84
+1875.1
+0.80
+1348.6
+0.81
+697.2
+0.87
+376.1
+0.71
+78.9
+0.64
+3227.5
+0.65
+w/o Rel
+270.9
+0.82
+190.7
+0.83
+1869.9
+0.80
+1338.4
+0.81
+692.1
+0.87
+365.3
+0.69
+77.1
+0.63
+3136.8
+0.63
+w/o AR
+217.2
+0.65
+171.1
+0.77
+1604.0
+0.68
+1074.5
+0.69
+611.4
+0.76
+258.1
+0.50
+49.4
+0.40
+1905.8
+0.38
+w/o Priors 175.2
+0.54
+92.7
+0.54
+1089.5
+0.47
+529.1
+0.48
+511.6
+0.64
+250.9
+0.49
+56.6
+0.46
+1375.0
+0.27
+Table 3: Results of ablation studies. The best result in each column is bolded.
+set as (M, K) = (110, 5), (550, 15), and (550, 50), re-
+spectively. Vehicle capacity was fixed at 3. Travel cost per
+unit distance is set to 0 or 0.3, with the latter case marked
+by an additional suffix -cost. Requests were uniformly
+sampled from stations, with appearance times sampled
+from Uniform(1, T), where T was set to 58 or 128. The
+profit for each request was the distance between its origin
+and destination.
+• Real-World Dataset: We used the DHRD dataset (As-
+sylbekov et al. 2023), which contains food delivery re-
+quests from three cities: Taipei (tpe), Singapore (sg),
+and Stockholm (se). Each city was treated as an inde-
+pendent dataset with I = 36 stations. The correspond-
+ing numbers of requests and vehicles were (M, K) =
+(800, 20), (700, 15), and (200, 3) for the three cities, re-
+spectively. Vehicle capacity was set to 6. The dataset was
+divided into 76 days for training/validation and 14 days
+for testing.
+4.2
+Performance Evaluation
+Baselines
+We evaluate our MAPT against several base-
+lines, including Rolling-Horizon algorithms, static algo-
+rithms, rule-based algorithms, and MDP-based algorithms.
+• Rolling-Horizon
+Algorithms:
+The
+Rolling-Horizon
+paradigm addresses dynamic problems by decomposing
+them into static subproblems within a sliding time win-
+dow. For solving these static subproblems, we employ
+OR Tools, Simulated Annealing (SA), and Genetic
+Algorithm (GA).
+• Static Algorithms: These methods assume complete fore-
+knowledge of all requests (though unrealistic), solving the
+problem statically without Rolling-Horizon. MAPDP*
+(Zong et al. 2022) is a MARL approach with Encoder-
+Decoder for static problems, adapted to handle dis-
+tance matrix inputs. PARCO* (Berto et al. 2024) is a
+Transformer-based RL framework with parallel decision-
+making, modified to support distance matrix inputs.
+SA*/GA* are static versions of our Rolling-Horizon SA
+and GA with full request information.
+• Rule-Based Algorithms: These methods use predefined
+rules for scheduling decisions. Nearest is a greedy ap-
+proach that always selects the closest available request for
+pickup or delivery.
+• MDP-Based Algorithms: At each step of the MDP, we
+solve the problem statically using MAPDP (Zong et al.
+2022) as described in the Static Algorithms section, and
+only execute the first step of the solution to ensure appli-
+cability to dynamic problems.
+Overall Comparison
+The performance results on syn-
+thetic and real-world datasets are summarized in Table 2, us-
+ing the objective (Obj.) and request completion rate (Comp.)
+as metrics (higher is better). MAPT significantly outper-
+forms all baselines across all datasets. MAPT also surpasses
+the state-of-the-art MAPDP, which fails to model multi-
+vehicle joint probabilities and lacks our informative priors.
+As can be seen from Table 4, the decision time of MAPT
+is significantly shorter than that of exact and meta-heuristic
+algorithms.
+
+Scenario synth-S synth-S-cost synth-L synth-L-cost synth-XL
+OR Tools 401.727
+459.143
+N/A
+N/A
+N/A
+SA
+23.684
+23.255
+166.660
+164.102
+613.920
+GA
+16.654
+16.448
+103.147
+99.864
+354.789
+Nearest
+0.059
+0.060
+0.117
+0.119
+0.148
+MAPDP
+0.794
+0.827
+31.981
+32.544
+33.217
+MAPT
+1.420
+1.416
+8.300
+7.888
+27.434
+Table 4: Comparison of inference times on the synthetic
+dataset (in seconds), which is the average running time of
+each instance in the dataset.
+4.3
+Ablation Studies
+We conducted ablation studies on all datasets to validate the
+effectiveness of key components:
+• w/o Relation-Aware Attention (Rel): Replaces the
+Relation-Aware Attention module with the original atten-
+tion mechanism.
+• w/o AutoRegressive Decoding (AR): Decodes each ac-
+tion independently and employs a conflict handler to re-
+solve conflicts where request assignments exceed vehicle
+capacity.
+• w/o Informative Priors (Priors): Removes informative
+priors guidance for vehicle and destination selection.
+The results are shown in Table 3. As can be seen from
+the table, AutoRegressive Decoding and Informative Priors
+significantly improve performance across all datasets, and
+Relation-Aware Attention also contributes to some extent.
+The ablation experiments demonstrate that all three pro-
+posed components enhance the final performance, validating
+their effectiveness.
+4.4
+Sensitivity Analysis
+We conduct a sensitivity analysis on the hyperparameter β as
+defined in Eq. (22). We vary β from 0 to 0.3 in increments of
+0.02 and observe the resulting changes in the final objective.
+The results on the 4 representative datasets are illustrated
+in Figure 2. As shown in the figure, when β is small, the
+performance is better and more stable, while larger values of
+β lead to a gradual decline in performance. However, in the
+dhrd-tpe and dhrd-se datasets, using a small but non-zero β
+improves performance. This indicates that slightly deferring
+request allocation can be beneficial in these cases.
+5
+Related Work
+5.1
+Dynamic Pickup and Delivery Problems
+Dynamic Pickup and Delivery Problems have been studied
+through exact, heuristic, metaheuristic, and learning-based
+methods (Cai et al. 2023). Exact methods such as MILP
+can yield optimal results but are restricted to small instances
+(Liu et al. 2018; Savelsbergh and Sol 1998). Heuristic meth-
+ods (Fikar 2018; Fikar, Hirsch, and Gronalt 2018; Anders-
+son 2021) are efficient for large-scale dynamic problems but
+cannot ensure optimality. Metaheuristics (Schilde, Doerner,
+and Hartl 2011; Tirado and Hvattum 2017; Novaes et al.
+0.0
+0.1
+0.2
+β
+0
+1000
+2000
+Objective
+(a) synthetic-L
+0.0
+0.1
+0.2
+β
+0
+2000
+4000
+Objective
+(b) synthetic-XL
+0.0
+0.1
+0.2
+β
+550
+600
+650
+700
+Objective
+(c) dhrd-tpe
+0.0
+0.1
+0.2
+β
+70
+75
+80
+Objective
+(d) dhrd-se
+Figure 2: Sensitivity analysis of β across datasets.
+2015) improve scalability but still struggle in highly dy-
+namic settings. Reinforcement learning methods have been
+explored (Li et al. 2021; Yu et al. 2025), but they mainly
+focus on single-vehicle operations. Hybrid approaches first
+learn edge costs using neural networks and then apply tra-
+ditional optimization techniques (Jiang et al. 2023b; Wang,
+Wu, and Zhao 2021; Wang et al. 2019; Wang, Lin, and Li
+2025; Wu et al. 2019). Other studies have addressed ride-
+on-demand problems with dynamic pricing (Guo et al. 2019,
+2020, 2023), as well as dynamic metro scheduling (Wang
+et al. 2022). There are also entity representation learning
+methods that use GNNs, hyper-GNNs, contrastive learning,
+transfer learning, or LLM enhancement and can be applied
+to spatio-temporal system optimization (Wu et al. 2020;
+Yang et al. 2025; Han et al. 2025; Jiang et al. 2023a; Li et al.
+2025; Cheng et al. 2025; Zhang et al. 2024).
+5.2
+RL-based Methods for Vehicle Routing
+Problems
+Reinforcement Learning has been applied to both single and
+multiple Vehicle Routing Problems. For single-vehicle prob-
+lems, attention-based models (Vinyals, Fortunato, and Jaitly
+2015; Bello et al. 2016; Nazari et al. 2018; Kool, Van Hoof,
+and Welling 2018) and GNN-based variants (Fellek et al.
+2023; Heydaribeni et al. 2023) have been proposed. For
+multi-vehicle problems, multi-agent RL methods (Zhang
+et al. 2020; Zong et al. 2022; Zhang, Qi, and Guan 2023)
+have been developed but mainly for static settings. Recent
+RL studies for dynamic settings (Anuar et al. 2022; Xiang
+et al. 2024) have emerged, but they simplify the original
+problem by introducing additional assumptions.
+6
+Conclusion
+This paper presents MAPT to solve the cooperative Multi-
+Vehicle Dynamic Pickup and Delivery Problem with
+Stochastic Requests. MAPT utilizes the Transformer’s
+Encoder-Decoder architecture combining with Pointer Net-
+work to generate joint action sequences in an AutoRegres-
+sive manner. By incorporating the Relation-Aware Attention
+module and informative priors, the framework achieves a
+better performance. Experiments show that MAPT outper-
+forms existing baselines in solution quality across synthetic
+datasets and real-world datasets.
+
+7
+Acknowledgments
+This work is supported by the National Key R&D Pro-
+gram of China (2023YFC3304700). Prof. Jingyuan Wang’s
+work was partially supported by the National Natural Sci-
+ence Foundation of China (No. 72222022, 72171013) and
+the Fundamental Research Funds for the Central Uni-
+versities (JKF-2025017226182). Prof. Junjie Wu’s work
+was partially supported by the National Natural Science
+Foundation of China (72242101, 72031001), the Out-
+standing Young Scientist Program of Beijing Universities
+(JWZQ20240201002), and the Artificial Intelligence Tech-
+nology R&D Center for Exploration and Development of
+China National Petroleum Corporation (2024-KFKT-22).
+References
+Andersson, T. 2021. A Comparative Study on a Dynamic
+Pickup and Delivery Problem: Improving routing and order
+assignment in same-day courier operations.
+Anuar, W. K.; Lee, L. S.; Seow, H.-V.; and Pickl, S. 2022. A
+multi-depot dynamic vehicle routing problem with stochas-
+tic road capacity: An MDP model and dynamic policy for
+post-decision state rollout algorithm in reinforcement learn-
+ing. Mathematics, 10(15): 2699.
+Assylbekov, Y.; Bali, R.; Bovard, L.; and Klaue, C. 2023.
+Delivery Hero Recommendation Dataset: A Novel Dataset
+for Benchmarking Recommendation Algorithms.
+In Pro-
+ceedings of the 17th ACM Conference on Recommender Sys-
+tems, 1042–1044.
+Bello, I.; Pham, H.; Le, Q. V.; Norouzi, M.; and Bengio,
+S. 2016. Neural combinatorial optimization with reinforce-
+ment learning. arXiv preprint arXiv:1611.09940.
+Berto, F.; Hua, C.; Luttmann, L.; Son, J.; Park, J.; Ahn, K.;
+Kwon, C.; Xie, L.; and Park, J. 2024. PARCO: Learning Par-
+allel Autoregressive Policies for Efficient Multi-Agent Com-
+binatorial Optimization. arXiv preprint arXiv:2409.03811.
+Cai, J.; Zhu, Q.; Lin, Q.; Li, J.; Chen, J.; and Ming, Z.
+2022. An efficient multi-objective evolutionary algorithm
+for a practical dynamic pickup and delivery problem.
+In
+International conference on intelligent computing, 27–40.
+Springer.
+Cai, J.; Zhu, Q.; Lin, Q.; Ma, L.; Li, J.; and Ming, Z. 2023.
+A survey of dynamic pickup and delivery problems. Neuro-
+computing, 126631.
+Cheng, J.; Wang, J.; Zhang, Y.; Ji, J.; Zhu, Y.; Zhang, Z.;
+and Zhao, X. 2025.
+Poi-enhancer: An llm-based seman-
+tic enhancement framework for poi representation learning.
+In Proceedings of the AAAI conference on artificial intelli-
+gence, volume 39, 11509–11517.
+Fellek, G.; Farid, A.; Gebreyesus, G.; Fujimura, S.; and
+Yoshie, O. 2023. Deep Graph Representation Learning to
+Solve Vehicle Routing Problem. In 2023 International Con-
+ference on Machine Learning and Cybernetics (ICMLC),
+172–180. IEEE.
+Fikar, C. 2018.
+A decision support system to investigate
+food losses in e-grocery deliveries. Computers & Industrial
+Engineering, 117: 282–290.
+Fikar, C.; Hirsch, P.; and Gronalt, M. 2018. A decision sup-
+port system to investigate dynamic last-mile distribution fa-
+cilitating cargo-bikes. International Journal of Logistics Re-
+search and Applications, 21(3): 300–317.
+Geiser, T.; Hanne, T.; and Dornberger, R. 2020. Best-match
+in a set of single-vehicle dynamic pickup and delivery prob-
+lem using ant colony optimization. In Proceedings of the
+2020 the 3rd International Conference on Computers in
+Management and Business, 126–131.
+Guo, S.; Chen, C.; Wang, J.; Ding, Y.; Liu, Y.; Xu, K.; Yu,
+Z.; and Zhang, D. 2020. A force-directed approach to seek-
+ing route recommendation in ride-on-demand service us-
+ing multi-source urban data. IEEE Transactions on Mobile
+Computing, 21(6): 1909–1926.
+Guo, S.; Chen, C.; Wang, J.; Liu, Y.; Xu, K.; Yu, Z.; Zhang,
+D.; and Chiu, D. M. 2019. Rod-revenue: Seeking strategies
+analysis and revenue prediction in ride-on-demand service
+using multi-source urban data. IEEE Transactions on Mobile
+Computing, 19(9): 2202–2220.
+Guo, S.; Shen, Q.; Liu, Z.; Chen, C.; Chen, C.; Wang, J.;
+Li, Z.; and Xu, K. 2023. Seeking based on dynamic prices:
+Higher earnings and better strategies in ride-on-demand ser-
+vices. IEEE Transactions on Intelligent Transportation Sys-
+tems, 24(5): 5527–5542.
+Han, C.; Wang, J.; Wang, Y.; Yu, X.; Lin, H.; Li, C.; and Wu,
+J. 2025. Bridging traffic state and trajectory for dynamic
+road network and trajectory representation learning. In Pro-
+ceedings of the AAAI Conference on Artificial Intelligence,
+volume 39, 11763–11771.
+Heydaribeni, N.; Zhan, X.; Zhang, R.; Eliassi-Rad, T.; and
+Koushanfar, F. 2023. HypOp: Distributed Constrained Com-
+binatorial Optimization leveraging Hypergraph Neural Net-
+works. arXiv preprint arXiv:2311.09375.
+Jiang, J.; Pan, D.; Ren, H.; Jiang, X.; Li, C.; and Wang, J.
+2023a.
+Self-supervised trajectory representation learning
+with temporal regularities and travel semantics.
+In 2023
+IEEE 39th international conference on data engineering
+(ICDE), 843–855. IEEE.
+Jiang, W.; Zhao, W. X.; Wang, J.; and Jiang, J. 2023b. Con-
+tinuous trajectory generation based on two-stage GAN. In
+Proceedings of the AAAI conference on artificial intelli-
+gence, volume 37, 4374–4382.
+Kool, W.; Van Hoof, H.; and Welling, M. 2018.
+At-
+tention, learn to solve routing problems!
+arXiv preprint
+arXiv:1803.08475.
+Li, X.; Luo, W.; Yuan, M.; Wang, J.; Lu, J.; Wang, J.; L¨u, J.;
+and Zeng, J. 2021. Learning to optimize industry-scale dy-
+namic pickup and delivery problems. In 2021 IEEE 37th in-
+ternational conference on data engineering (ICDE), 2511–
+2522. IEEE.
+Li, Y.; Wang, J.; Yu, X.; Wang, P.; and Huang, Q. 2025.
+Cross City Traffic Flow Generation via Retrieval Aug-
+mented Diffusion Model. In The Thirty-ninth Annual Con-
+ference on Neural Information Processing Systems.
+Liu, S.; Tan, P. H.; Kurniawan, E.; Zhang, P.; and Sun, S.
+2018. Dynamic scheduling for pickup and delivery with time
+
+windows. In 2018 IEEE 4th World Forum on Internet of
+Things (WF-IoT), 767–770. IEEE.
+Lu, Q.; and Dessouky, M. 2004. An exact algorithm for the
+multiple vehicle pickup and delivery problem. Transporta-
+tion Science, 38(4): 503–514.
+Nazari, M.; Oroojlooy, A.; Snyder, L.; and Takac, M. 2018.
+Reinforcement Learning for Solving the Vehicle Routing
+Problem. In Bengio, S.; Wallach, H.; Larochelle, H.; Grau-
+man, K.; Cesa-Bianchi, N.; and Garnett, R., eds., Advances
+in Neural Information Processing Systems, volume 31. Cur-
+ran Associates, Inc.
+Novaes, A. G.; Bez, E. T.; Burin, P. J.; and Arag˜ao Jr, D. P.
+2015. Dynamic milk-run OEM operations in over-congested
+traffic conditions. Computers & Industrial Engineering, 88:
+326–340.
+Savelsbergh, M.; and Sol, M. 1998. Drive: Dynamic routing
+of independent vehicles. Operations Research, 46(4): 474–
+490.
+Schilde, M.; Doerner, K. F.; and Hartl, R. F. 2011. Meta-
+heuristics for the dynamic stochastic dial-a-ride problem
+with expected return transports. Computers & operations
+research, 38(12): 1719–1730.
+Schulman, J.; Moritz, P.; Levine, S.; Jordan, M.; and
+Abbeel, P. 2015.
+High-dimensional continuous control
+using generalized advantage estimation.
+arXiv preprint
+arXiv:1506.02438.
+Schulman, J.; Wolski, F.; Dhariwal, P.; Radford, A.; and
+Klimov, O. 2017. Proximal policy optimization algorithms.
+arXiv preprint arXiv:1707.06347.
+Sheridan, P. K.; Gluck, E.; Guan, Q.; Pickles, T.; Balcıog,
+B.; Benhabib, B.; et al. 2013. The dynamic nearest neighbor
+policy for the multi-vehicle pick-up and delivery problem.
+Transportation Research Part A: Policy and Practice, 49:
+178–194.
+Tirado, G.; and Hvattum, L. M. 2017. Improved solutions to
+dynamic and stochastic maritime pick-up and delivery prob-
+lems using local search.
+Annals of Operations Research,
+253: 825–843.
+Vaswani, A.; Shazeer, N.; Parmar, N.; Uszkoreit, J.; Jones,
+L.; Gomez, A. N.; Kaiser, L. u.; and Polosukhin, I. 2017.
+Attention is All you Need. In Guyon, I.; Luxburg, U. V.;
+Bengio, S.; Wallach, H.; Fergus, R.; Vishwanathan, S.; and
+Garnett, R., eds., Advances in Neural Information Process-
+ing Systems, volume 30. Curran Associates, Inc.
+Vinyals, O.; Fortunato, M.; and Jaitly, N. 2015. Pointer net-
+works. Advances in neural information processing systems,
+28.
+Wang, J.; Lin, Y.; and Li, Y. 2025.
+GTG: Generalizable
+Trajectory Generation Model for Urban Mobility. In Pro-
+ceedings of the AAAI Conference on Artificial Intelligence,
+volume 39, 834–842.
+Wang, J.; Wu, N.; and Zhao, W. X. 2021. Personalized route
+recommendation with neural network enhanced search al-
+gorithm. IEEE Transactions on Knowledge and Data Engi-
+neering, 34(12): 5910–5924.
+Wang, J.; Wu, N.; Zhao, W. X.; Peng, F.; and Lin, X. 2019.
+Empowering A* search algorithms with neural networks for
+personalized route recommendation. In Proceedings of the
+25th ACM SIGKDD international conference on knowledge
+discovery & data mining, 539–547.
+Wang, Z.; Pan, Z.; Chen, S.; Ji, S.; Yi, X.; Zhang, J.; Wang,
+J.; Gong, Z.; Li, T.; and Zheng, Y. 2022. Shortening pas-
+sengers’ travel time: A dynamic metro train scheduling ap-
+proach using deep reinforcement learning. IEEE Transac-
+tions on Knowledge and Data Engineering, 35(5): 5282–
+5295.
+Wen, M.; Kuba, J.; Lin, R.; Zhang, W.; Wen, Y.; Wang, J.;
+and Yang, Y. 2022. Multi-Agent Reinforcement Learning is
+a Sequence Modeling Problem. In Koyejo, S.; Mohamed,
+S.; Agarwal, A.; Belgrave, D.; Cho, K.; and Oh, A., eds.,
+Advances in Neural Information Processing Systems, vol-
+ume 35, 16509–16521. Curran Associates, Inc.
+Wu, N.; Wang, J.; Zhao, W. X.; and Jin, Y. 2019. Learn-
+ing to effectively estimate the travel time for fastest route
+recommendation. In Proceedings of the 28th ACM Interna-
+tional Conference on Information and Knowledge Manage-
+ment, 1923–1932.
+Wu, N.; Zhao, X. W.; Wang, J.; and Pan, D. 2020. Learn-
+ing effective road network representation with hierarchical
+graph neural networks.
+In Proceedings of the 26th ACM
+SIGKDD international conference on knowledge discovery
+& data mining, 6–14.
+Xiang, C.; Wu, Z.; Tu, J.; and Huang, J. 2024. Centralized
+Deep Reinforcement Learning Method for Dynamic Multi-
+Vehicle Pickup and Delivery Problem With Crowdshippers.
+IEEE Transactions on Intelligent Transportation Systems.
+Yang, Y.; Wang, J.; Yu, X.; and Tang, Y. 2025. HygMap:
+Representing All Types of Map Entities via Heterogeneous
+Hypergraph.
+In Proceedings of the Thirty-Fourth Inter-
+national Joint Conference on Artificial Intelligence, 9438–
+9446.
+Yu, X.; Wang, J.; Yang, Y.; Huang, Q.; and Qu, K. 2025.
+BIGCity: A universal spatiotemporal model for unified tra-
+jectory and traffic state data analysis. In 2025 IEEE 41st In-
+ternational Conference on Data Engineering (ICDE), 4455–
+4469. IEEE.
+Zhang, K.; He, F.; Zhang, Z.; Lin, X.; and Li, M. 2020.
+Multi-vehicle routing problems with soft time windows: A
+multi-agent reinforcement learning approach. Transporta-
+tion Research Part C: Emerging Technologies, 121: 102861.
+Zhang, W.; Wang, J.; Yang, Y.; et al. 2024.
+VecCity:
+A taxonomy-guided library for map entity representation
+learning. arXiv preprint arXiv:2411.00874.
+Zhang, Z.; Qi, G.; and Guan, W. 2023. Coordinated multi-
+agent hierarchical deep reinforcement learning to solve
+multi-trip vehicle routing problems with soft time windows.
+IET Intelligent Transport Systems, 17(10): 2034–2051.
+Zong, Z.; Zheng, M.; Li, Y.; and Jin, D. 2022. Mapdp: Co-
+operative multi-agent reinforcement learning to solve pickup
+and delivery problems. In Proceedings of the AAAI confer-
+ence on artificial intelligence, volume 36, 9980–9988.
+
+A
+Example Problem Instance
+Figure 3 presents a representative problem instance in our
+study. This instance consists of 2 pickup stations and 4 de-
+livery stations, where each request is associated with one
+pickup station and one delivery station. It also includes 2
+vehicles (yellow and blue) and 5 requests — each request
+is identified by a pair of pickup (pn) and delivery (dn) sta-
+tions (with n = 1, 2, 3, 4, 5), and has timestamps like 9:00,
+9:10, etc. The yellow vehicle follows a sequential route:
+p1 →p2 →d1 →d2 →p3 →d3 — as visualized by the
+orange arrows connecting these stations in the figure. It first
+handles early requests p1 (pickup at 9:00) and p2 (pickup
+at 9:10), then completes their deliveries (d1 at 9:20, d2 at
+9:30). When p3 (pickup at 9:40) dynamically arrives later,
+the yellow vehicle is scheduled to re-route back to the top-
+left pickup station to fulfill this new request — highlighting
+how our problem requires adapting to dynamically arriv-
+ing requests. Meanwhile, the blue vehicle executes another
+sequence: p4 →d4 →p5 →d5 — as shown by the blue
+arrows. Here, p4 (pickup at 9:00) and d4 (delivery at 9:10)
+are processed first, followed by p5 (pickup at 9:20) and d5
+(delivery at 9:30).
+When the blue vehicle reaches the upper-middle pickup
+station, Request 4 (e.g., p4, the pickup for Request 4) is as-
+signed to it, while Request 2 (e.g., p2, the pickup for Request
+2) is deferred and then assigned to the yellow vehicle upon
+its subsequent arrival — demonstrating the core challenge of
+vehicle-request assignment: we need to decide which vehi-
+cle each request should be assigned to.
+B
+Difference between Rolling Horizon and
+Markov Decision Process
+Rolling Horizon is often used in classical operations re-
+search methods. It transforms dynamic problems into static
+subproblems by accumulating a sufficient number of re-
+quests over a time window before planning begins (top of
+Fig. 4). During this accumulation already-arrived requests
+stay unprocessed causing unavoidable time waste. These
+static subproblems are then solved with exact algorithms
+or metaheuristics but their high computational complexity
+further hinders time efficiency. In contrast Markov Deci-
+sion Process (MDP) triggers planning at each time step (bot-
+tom of Fig. 4) and makes decisions right as requests arrive.
+The former fails to meet real-time dynamic decision-making
+needs due to its batch-based approach while the latter pri-
+oritizes real-time adaptation through frequent smaller-scale
+planning.
+C
+Dataset Details
+In the MVDPDPSR problem addressed in this paper, the
+problem scale is not solely determined by the number of sta-
+tions but also depends on the number of requests, as we need
+to determine the assignment relationship between requests
+and vehicles. In the largest dataset, the number of requests
+reaches 800, which already exceeds the problem scale of
+most prior studies on static pickup-and-delivery problems,
+such as (Zong et al. 2022). Below, we provide details of the
+p1 9:00
+p3 9:40
+p5 9:20
+p2 9:10
+p4 9:00
+d1 9:20
+d2 9:30
+d3 9:50
+d5 9:30
+d4 9:10
+Vehicle
+Delivery Station
+Pickup Station
+p1→p2→d1→d2→p3→d3
+p4→d4→p5→d5
+p1 pickup of request 1
+d1 delivery of request 1
+Figure 3: Schematic illustration of the MVDPDPSR prob-
+lem.
+cumulative
+requests
+planning
+planning
+cumulative
+requests
+planning planning planning planning planning planning
+Rolling
+Horizon
+Markov
+Decision
+Process
+Figure 4: Comparison between Rolling Horizon and Markov
+Decision Process paradigms. The Rolling Horizon paradigm
+requires accumulating a sufficient number of requests be-
+fore invoking a static solver for vehicle routing optimization,
+while the Markov Decision Process paradigm enables real-
+time decision-making as requests arrive.
+synthetic datasets and the real-world datasets. Their statis-
+tics are summarized in Table 5.
+• Synthetic Dataset: We first synthesize some datasets to
+validate the effectiveness of the algorithm. We gen-
+erated I
+∈
+{20, 50, 300} stations, with I
+=
+20,
+50, and 300 corresponding to dataset suffixes -S, -L,
+and -XL, respectively. The distance between stations is
+sampled from Uniform{0, 1, . . . , 10} for -S datasets,
+from Uniform{0, 1, . . . , 30} for -L datasets and from
+Uniform{0, 1, . . . , 20} for -XL datasets. Then, the short-
+est path algorithm is applied. The capacity of each vehi-
+cle was set to 3, and the number of vehicles was K ∈
+{5, 15, 50}. Travel cost per unit distance is set to 0 or 0.3,
+with the latter case marked by an additional suffix -cost.
+The origin and destination of each request were uniformly
+sampled from the I stations, and the request’s appearance
+time was sampled from Uniform{1, 2, . . . , T}, where T is
+set to 58 for -S datasets and 128 for -L and -XL datasets.
+
+The profit for each request was the distance between its
+origin and destination.
+• Real-World Dataset: We used the DHRD(Assylbekov
+et al. 2023) dataset, which consists of millions of food
+delivery requests from three cities: Taipei (tpe), Singa-
+pore (sg), and Stockholm (se). We treated each city as
+an independent dataset. In this dataset, we treated each
+geographical area as a station, with areas divided by 5-
+character geohash granularity. After excluding stations
+with almost no requests, each dataset had I = 36 stations.
+The distance between two areas was defined as the min-
+imum number of areas that needed to be traversed. The
+capacity of each vehicle was set to 6, and the number of
+vehicles for the three cities was set to K ∈{20, 15, 3}. In
+this dataset, we did not consider the cost of vehicle travel,
+only the total profit of completed requests. The origin and
+destination of each request were the stations correspond-
+ing to their respective geographical areas. We divided a
+day into T = 48 time slots, corresponding to T time steps
+in the simulation environment. The time step of a request’s
+appearance was determined by its real-time slot. The profit
+for each request is set to 1. We divided the dataset into 76
+days for training and validation, and 14 days for testing.
+D
+Computational Complexity Analysis
+The computational efficiency of MAPT is crucial for its
+practical application in dynamic vehicle routing scenar-
+ios, where real-time decision-making is essential. Our ar-
+chitecture maintains the fundamental structure of Trans-
+former models while introducing minimal additional over-
+head through the Relation-Aware Attention and Informa-
+tive Prior modules. The encoder stage processes all enti-
+ties (stations, requests, and vehicles) as a single sequence.
+For each encoder block with hidden dimension H, the com-
+plexity is dominated by the self-attention mechanism and
+feed-forward network operations. The self-attention com-
+putation scales as O((I + M + K)2H) where I, M, and
+K represent the number of stations, requests, and vehicles
+respectively, while the feed-forward network contributes
+O((I + M + K)H2) per layer.
+During decoding, we employ the KV-Cache technique
+commonly used in large language models to optimize au-
+toregressive generation. This approach caches previously
+computed key-value pairs, significantly reducing redun-
+dant computations when processing sequential decisions.
+Each decoder block involves three main components: self-
+attention over the partially constructed solution (complexity
+O((M + K)2H)), cross-attention between the decoder in-
+puts and encoder outputs (O((M + K)(I + M + K)H)),
+and the feed-forward network operations (O((M +K)H2)).
+So the overall computational complexity of MAPT is
+O(L[(I + M + K)2H + (I + M + K)H2]), where L rep-
+resents the number of transformer layers. While this demon-
+strates quadratic scaling with respect to the number of enti-
+ties, the parallel processing capabilities of modern GPUs en-
+able efficient computation even for large problem instances.
+This efficiency is particularly important for our target appli-
+cation, where the system must respond to dynamic requests
+Scenio
+Stations Reqs. Veh.
+T
+Cost
+Profit
+synthetic-S
+20
+110
+5
+58
+0
+distance
+synthetic-S-cost
+20
+110
+5
+58
+0.3 distance
+synthetic-L
+50
+550
+15
+128
+0
+distance
+synthetic-L-cost
+50
+550
+15
+128 0.3 distance
+synthetic-XL
+300
+550
+50
+128
+0
+distance
+dhrd-tpe
+36
+800
+20
+48
+0
+1
+dhrd-sg
+36
+700
+15
+48
+0
+1
+dhrd-se
+36
+200
+3
+48
+0
+1
+Table 5: Statistics of experimental datasets. cost is the cost
+per unit distance; profit is the profit per request (either
+distance-based or fixed).
+in real-time while maintaining solution quality.
+E
+Training Algorithm
+The main part of our training algorithm follows the original
+Proximal Policy Optimization (PPO) algorithm (Schulman
+et al. 2017), and we have incorporated some learning rate
+schedule strategies. We summarize our training process in
+Algorithm 1.
+F
+Implementation Details
+For the model architecture, we employ a Transformer with
+6 encoder layers and 2 decoder layers. The hidden size is
+set to 128, and the number of attention heads is 2. Regard-
+ing the optimizer configuration, we utilize the Adam opti-
+mizer with a learning rate schedule that includes a warm-up
+phase and a decay phase. Specifically, the learning rate in-
+creases linearly during the first quarter of the total training
+steps, reaching the target learning rate, and subsequently un-
+dergoes linear decay for the remaining steps. For the Prox-
+imal Policy Optimization (PPO) algorithm, we set the dis-
+count factor γ = 0.99, the clipping coefficient ϵ = 0.2,
+and the Generalized Advantage Estimation (GAE) parame-
+ter λ = 0.99. Critic loss coefficient α is set to 1. The number
+of PPO epochs is fixed at 1. The hyperparameter β is set to
+0.03. During training, we monitor the model’s performance
+on the validation set and retain the best-performing model
+as the final model. Additional dataset-specific hyperparame-
+ters are provided in Table 6. All experiments are conducted
+using Python 3.10 and PyTorch 2.5.
+G
+Difference between Non-AutoRegressive
+and AutoRegressive Decoding
+We use a simple VRP example to illustrate the difference
+between the Non-AutoRegressive method with independent
+decoding and our AutoRegressive method in terms of decod-
+ing, as shown in Figure 5. Suppose two vehicles, v1 and v2,
+are at the same location and need to collaboratively visit sta-
+tions n1 . . . n4. The optimal solution is achieved when both
+vehicles move left and right respectively, while a suboptimal
+solution is obtained when they move up and down respec-
+tively. Let the actions of the two vehicles be Av1 and Av2,
+
+1
+2
+4
+3
+1
+2
+4
+3
+1
+2
+4
+3
+Non-AutoRegressive Decoding
+sample action
+from 
+and 
+handcraft Conflict
+Handler
+(Non-differentiable)
+1
+2
+4
+3
+1
+2
+4
+3
+1
+2
+4
+3
+sample action
+from 
+ 
+(masked) sample
+action from
+Worse Solution
+Better Solution
+AutoRegressive Decoding
+Figure 5: Comparison between Non-AutoRegressive Decoding(up) and AutoRegressive Decoding(down).
+Dataset
+Total Rollout MiniBatch
+LR
+synth-S
+16K
+256
+256
+1e-4
+synth-S-cost
+16K
+256
+256
+1e-4
+synth-L
+4K
+64
+64
+2e-5
+synth-L-cost
+4K
+64
+64
+5e-5
+synth-XL
+4K
+64
+64
+2e-5
+dhrd-se
+8K
+256
+256
+2e-5
+dhrd-tpe
+2K
+64
+64
+2e-5
+dhrd-sg
+2K
+64
+64
+1e-5
+Table 6: Dataset Specific Hyper-parameters. Total indicates
+the overall training budget. Rollout specifies the experi-
+ence collection per iteration. Minibatch determines the SGD
+batch size. LR controls the policy update step size.
+representing the next station they move to at the first step,
+and π represent a scheduling policy. However, for the Non-
+AutoRegressive independent decoding method, it can only
+model the probability distribution of each vehicle’s individ-
+ual actions π(Av1 | v1, v2) and π(Av2 | v1, v2), but fails
+to model the joint probability distribution of the two vehi-
+cles’ actions π(Av1, Av2 | v1, v2). Consequently, it cannot
+guarantee that both vehicles move left and right respectively.
+Moreover, since a conflict handler is applied afterward, its
+gradient cannot be backpropagated, making it impossible to
+optimize the neural network parameters using conflict in-
+formation when conflicts occur, which limits the capability
+of such methods. For AutoRegressive decoding, we first de-
+code the action Av1 of v1 according to π(Av1 = n1 . . . n4 |
+v1, v2), then use Av1 as an additional condition to decode the
+action Av2 of v2, i.e., π(Av2 = n1 . . . n4 | v1, v2, Av1). At
+this point, the policy can determine the direction of v2 based
+on whether Av1 is left or right, thus achieving the optimal
+solution. Additionally, we can mask out Av1 when decoding
+Av2 to avoid conflicts.
+H
+Does MAPT Overly Rely on Informative
+Prior?
+To verify whether MAPT excessively relies on the Infor-
+mative Prior, we compare the experimental results between
+MAPT and using only the Informative Prior as the decision-
+making algorithm, as shown in Table 7. In synthetic datasets,
+problem instances are randomly generated, making it diffi-
+cult to form complex and realistic distributions. As a result,
+the generated problem instances tend to be simpler, lead-
+ing to cases where the difference between the Informative
+Prior and MAPT is small. However, for real-world datasets,
+our model (MAPT) shows significant improvements over
+the Informative Prior, with enhancement rates of 14% for
+dhrd-tpe, 16% for dhrd-sg, and 19% for dhrd-se. In Figure
+6, we show the distribution of request origins and destina-
+tions in the dhrd-tpe dataset, which differs significantly from
+the Uniform distribution of synthetic data. Reinforcement
+learning can learn more complex distributions based on the
+Informative Prior, which is why its improvement on real-
+world datasets is more significant than on synthetic datasets.
+Moreover, even for the large-scale synthetic-XL dataset, our
+model achieves a notable 37% improvement over the Infor-
+mative Prior. These results demonstrate that our model does
+not overly rely on Informative Priors.
+I
+Generalization
+Since our decision-making does not strictly depend on the
+number of vehicles and requests, we expect our model to
+
+Scenario
+synth-S
+synth-S-cost
+synth-L
+synth-L-cost
+dhrd-tpe
+dhrd-sg
+dhrd-se
+synth-XL
+Metric
+Obj. ↑Comp. ↑Obj. ↑Comp. ↑Obj. ↑Comp. ↑Obj. ↑Comp. ↑Obj. ↑Comp. ↑Obj. ↑Comp. ↑Obj. ↑Comp. ↑Obj. ↑Comp. ↑
+Infor Prior 267.1
+0.81
+185.0
+0.81
+1858.9
+0.79
+1305.5
+0.79
+614.1
+0.77
+323.7
+0.62
+66.1
+0.54
+2340.7
+0.47
+MAPT
+275.2
+0.83
+192.1
+0.84
+1875.1
+0.80
+1348.6
+0.81
+697.2
+0.87
+376.1
+0.71
+78.9
+0.64
+3227.5
+0.65
+Table 7: Performance comparison between Informative Prior and MAPT.
+Algorithm 1: PPO Training Algorithm for MAPT
+1: Initialize:
+2:
+Policy network πθ with parameters θ.
+3:
+Replay buffer B.
+4:
+Environment E, episode length T.
+5:
+Learning rate scheduler with warmup and linear de-
+cay.
+6:
+Rollout iterations K, rollout threads N.
+7: for iteration k = 1, 2, . . . , K do
+8:
+for thread n = 1, 2, . . . , N do
+9:
+Reset environment E and initialize observations s0.
+10:
+for step t = 0, 1, 2, . . . , T −1 do
+11:
+Collect Data:
+12:
+Sample actions at from policy πθ(at|st).
+13:
+Execute actions at in environment E.
+14:
+Observe next state st+1 and reward rt.
+15:
+Store transition (st, at, rt, st+1) in buffer B.
+16:
+end for
+17:
+end for
+18:
+Compute Advantages:
+19:
+Compute advantages using Generalized Advantage
+Estimation (25).
+20:
+for epoch e = 1, 2, . . . , E do
+21:
+Optimize Surrogate Objective:
+22:
+Sample mini-batch of transitions from buffer B.
+23:
+Compute critic loss by (28) and policy loss by
+(27).
+24:
+Update policy πθ using gradient descent on joint
+loss (29).
+25:
+end for
+26:
+Update Old Policy:
+27:
+θold ←θ
+28:
+update learning rate through scheduler.
+29: end for
+have some generalization ability. To this end, we conducted
+a series of experiments:
+• synthetic-S →synthetic-XL represents the validation of
+whether a model trained on small-scale data can be used
+on large-scale problems.
+• synthetic-S →dhrd-se represents the validation of
+whether a model trained on data from one distribution can
+generalize to other distributions.
+The generalization results are shown in Table 8. The exper-
+iments show that models trained on small synthetic dataset
+can generalize to real-world dataset and large-scale dataset
+to some extent. This is due to two reasons: first, the use of
+Transformer, a model structure with good generalization ca-
+(a)
+(b)
+Figure 6: Heatmap of the distribution of request origins(a)
+and destinations(b) in the dhrd-tpe dataset, where darker col-
+ors indicate higher quantities.
+Scenario
+synth-S
+dhrd-se
+synth-XL
+Metric
+Obj. ↑Comp. ↑Obj. ↑Comp. ↑Obj. ↑Comp. ↑
+synth-S 275.2
+0.83
+74.4
+0.61
+2470.2
+0.50
+dhrd-se
+117.4
+0.36
+78.9
+0.64
+1480.0
+0.30
+synth-XL 109.8
+0.34
+52.6
+0.42
+3227.5
+0.65
+Table 8: Generalization of MAPT. The row index indicates
+that the model is trained on the corresponding dataset, and
+the column index indicates that the model is evaluated on the
+corresponding dataset.
+pabilities, and second, the inclusion of informative priors in
+the model, which provides guidance in unseen distributions.
+It is worth noting that when tested on real-world datasets
+and large-scale datasets, our method still outperforms the
+pure Informative Priors approach (see Tables 7 and 8), prov-
+ing that our deep model has also learned some transferable
+knowledge, rather than relying solely on the Informative Pri-
+ors for generalization. Although the model trained on the
+dhrd-se dataset performed best on this dataset, it performed
+poorly when generalized to synthetic datasets. We speculate
+that this is because the request OD distribution and station
+embeddings learned from the dhrd-se dataset are not suitable
+for synthetic datasets. However, there is still much to explore
+in the field of generalization as part of our future research.
+J
+Baselines Implementation
+Rolling Horizon
+The Rolling Horizon Policy addresses
+the dynamic nature of the Multi-Vehicle Dynamic Pickup
+and Delivery Problem by breaking it into smaller, static sub-
+problems within a sliding time window, enabling the use
+of traditional optimization methods. At each decision point,
+the policy determines a planning horizon based on the re-
+maining time frames and the maximum allowable planning
+horizon, ensuring computational tractability. The maximum
+
+Dataset
+Horizon Replan
+synth-S
+20
+10
+synth-S-cost
+20
+10
+synth-L
+60
+30
+synth-L-cost
+60
+30
+synth-XL
+40
+20
+dhrd-se
+30
+15
+dhrd-tpe
+30
+15
+dhrd-sg
+30
+15
+Table 9: Rolling Horizon Hyper-parameters. Horizon in-
+dicates the maximum allowable planning horizon. Replan
+specifies the re-planning interval.
+allowable planning horizon used for each dataset is shown
+in Table 9, column Horizon. The problem within this win-
+dow is formulated as a static instance, where vehicles, re-
+quests, and constraints (e.g., vehicle capacity, request ap-
+pearance times, and preloaded requests) are fixed for the du-
+ration of the window. A solver, chosen from a set of avail-
+able methods (e.g., OR-Tools, Genetic Algorithm(GA), or
+Simulated Annealing(SA)), is then applied to optimize the
+assignment of requests to vehicles and their routes within
+the window. The solver’s solution is translated into action-
+able decisions, such as assigning requests to vehicles and
+determining the next hop for each vehicle, while ensuring
+feasibility with respect to constraints like vehicle capacity
+and request uniqueness. The policy periodically re-evaluates
+and re-plans at predefined intervals to adapt to new informa-
+tion and changing conditions. The re-planning interval used
+for each dataset is shown in Table 9, column Replan. By it-
+eratively solving these static subproblems and updating the
+solution as the horizon shifts, the Rolling Horizon Policy ef-
+fectively handles the dynamic and stochastic nature of the
+problem, balancing computational efficiency with solution
+quality.
+OR-Tools
+We address the Multi-Vehicle Dynamic Pickup
+and Delivery Problem with Stochastic Requests using the
+Google OR-Tools CP-SAT solver. The problem involves a
+fleet of vehicles K, a set of requests M, and a set of stations
+N over a time horizon T. Each vehicle k ∈K has a start-
+ing location startk, a capacity capacityk, and a join time
+jointimek indicating when it becomes available for the first
+decision-making. Requests m ∈M appear at time appearm
+and must be picked up from fromm and delivered to tom.
+Some requests may be pre-loaded on vehicles, denoted by
+preloadk,m, and vehicles are en route until their join time,
+during which they cannot perform any actions. For the con-
+venience of modeling, we assume that the volume of each
+request is 1.
+Decision Variables:
+• pickupk,m,t: Binary variable indicating whether vehicle k
+picks up request m at time t.
+• deliveryk,m,t: Binary variable indicating whether vehicle
+k delivers request m at time t.
+• loadk,t: Integer variable representing the load of vehicle k
+at time t.
+• lock,t: Integer variable representing the location of vehicle
+k at time t.
+• noactk,t: (No Action) Binary variable indicating whether
+vehicle k is not performing any action at time t, e.g. the
+vehicle is en route.
+Constraints:
+• Pre-Loaded Requests: For pre-loaded requests, the
+pickup action is enforced at t = −1:
+pickupk,m,−1 = preloadk,m
+∀k ∈K, m ∈M
+(30)
+loadk,−1 =
+X
+m
+preloadk,m
+∀k ∈K
+(31)
+• Load Dynamics: The load of each vehicle is updated
+based on pickup and delivery actions:
+loadk,t = loadk,t−1 +
+X
+m∈M
+pickupk,m,t−
+X
+m∈M
+deliveryk,m,t∀k ∈K, t ∈[0, T]
+(32)
+• Location Dynamics: The location of each vehicle is up-
+dated based on pickup, delivery, and no-action variables:
+lock,t =
+
+
+
+
+
+
+
+startk
+if t ≤jointimek
+lock,t−1
+if noactk,t−1 = 1
+tom
+if deliveryk,m,t = 1
+fromm
+if pickupk,m,t = 1
+∀k ∈K, t ∈[0, T], m ∈M
+(33)
+• No-Action Constraints: If no pickup or delivery occurs
+at time t, the no-action variable is set to 1:
+noactk,t = 1 ⇐⇒
+X
+m∈M
+pickupk,m,t +
+X
+m∈M
+deliveryk,m,t = 0
+∀k ∈K, t ∈[0, T]
+(34)
+• Request Assignment: Each request must be picked up
+and delivered by at most one vehicle:
+X
+k∈K
+X
+t∈[−1,T ]
+pickupk,m,t ≤1
+∀m ∈M
+(35)
+X
+k∈K
+X
+t∈[−1,T ]
+deliveryk,m,t ≤1
+∀m ∈M
+(36)
+• Pickup-Delivery Sequence: A request must be picked up
+before it can be delivered:
+X
+t′∈[−1,t]
+pickupk,m,t′ = 1 =⇒deliveryk,m,t = 1
+∀k ∈K, m ∈M, t ∈[−1, T]
+(37)
+• Capacity Constraints: The load of each vehicle must not
+exceed its capacity:
+loadk,t ≤capacityk
+∀k ∈K, t ∈[0, T]
+(38)
+
+• Time-Distance Constraints: The time between consecu-
+tive actions must be sufficient to travel between locations:
+t1 −t0 ≥distlock,t0,lock,t1
+∀k ∈K, t0, t1 ∈[0, T], t0 < t1
+(39)
+• Join Time Constraints: Vehicles cannot perform any ac-
+tions before their join time:
+noactk,t = 1
+∀k ∈K, t ∈[0, jointimek −1]
+(40)
+Objective Function: The objective is to maximize the total
+profit of delivered requests while minimizing travel costs:
+Maximize
+X
+m∈M
+X
+k∈K
+X
+t∈[0,T ]
+deliveryk,m,t · valuem
+−
+X
+k∈K
+X
+t∈[0,T −1]
+costlock,t,lock,t+1
+(41)
+Simulated Annealing
+The Simulated Annealing (SA) al-
+gorithm for solving the Multi-Vehicle Dynamic Pickup and
+Delivery Problem with Stochastic Requests starts by gener-
+ating an initial solution through random request assignments
+to vehicles, ensuring constraints such as initial positions,
+displacement, location consistency, request uniqueness, ca-
+pacity, request appearance times, and vehicle start times are
+satisfied. To construct a neighbor solution, the algorithm ran-
+domly selects a request and removes its current assignment
+from the vehicle’s path. Then the selected request is reas-
+signed to a new vehicle, and both pickup and delivery times
+are randomly selected within their respective feasible win-
+dows, ensuring the pickup occurs after the request’s appear-
+ance time and the delivery occurs after the pickup plus the
+travel time. The annealing process iteratively explores the
+solution space by accepting better solutions or probabilisti-
+cally accepting worse solutions based on the current temper-
+ature, which gradually decreases according to a predefined
+cooling rate. The initial temperature is set to 1000, the final
+temperature is set to 1, the cooling rate is set to 0.99, and the
+maximum number of iterations is set to 5000.
+Genetic Algorithm
+The Genetic Algorithm (GA) for
+solving the Multi-Vehicle Dynamic Pickup and Delivery
+Problem with Stochastic Requests begins by generating an
+initial population of feasible solutions, where requests are
+randomly assigned to vehicles while ensuring constraints
+such as initial positions, displacement, location consistency,
+request uniqueness, capacity, request appearance times, and
+vehicle start times are satisfied. Each individual in the pop-
+ulation represents a solution, and its fitness is evaluated us-
+ing an exponential transformation of the objective function,
+which combines the total profit of served requests and the
+cost of vehicle movements. The algorithm evolves the pop-
+ulation through selection, crossover, and mutation opera-
+tions. During selection, individuals are chosen probabilis-
+tically based on their fitness, favoring better solutions. The
+crossover operation randomly selects a request and swaps
+its assignment between two parent solutions, ensuring fea-
+sibility by updating vehicle locations and loads. The muta-
+tion operation randomly selects a request and reallocates it
+to a different vehicle or adjusts its pickup and delivery times,
+maintaining feasibility through constraint checks. The pop-
+ulation iteratively evolves over a predefined number of gen-
+erations, with the best solution being tracked and updated
+based on fitness. The population size is set to 10, and the
+number of generations is set to 500.

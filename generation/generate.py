@@ -1,29 +1,83 @@
 # generation/generate.py
 
 from google import genai
+from google.genai import types
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
 if API_KEY is None:
-    raise ValueError("Missing GEMINI_API_KEY env var")
+    raise ValueError("Missing GEMINI_API_KEY environment variable. Please set it in your .env file.")
 
-# Instantiate Gemini client
 client = genai.Client(api_key=API_KEY)
 
-def llm_generate(prompt: str, model: str = "gemini-2.0-flash") -> str:
+def llm_generate(
+    prompt: str,
+    model: str = "gemini-2.0-flash",
+    max_tokens: int = 800, #512 earlier
+    temperature: float = 0.2
+) -> str:
     """
     Generate an answer for the given prompt using Gemini API.
+    The prompt is expected to include context from research papers only.
     """
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-        # temperature=temperature,
-        # max_tokens=max_tokens
-    )
-    # response 
-    return response.text
+    try:
+        config = types.GenerateContentConfig(
+            max_output_tokens=max_tokens,
+            temperature=temperature
+        )
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config = config
+        )
+        return response.text
+    except Exception as e:
+        print("Error during generation:", e)
+        raise
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# right working code for genai
+# from google import genai
+# import os
+# from dotenv import load_dotenv
+
+# load_dotenv()
+# API_KEY = os.getenv("GEMINI_API_KEY")
+# if API_KEY is None:
+#     raise ValueError("Missing GEMINI_API_KEY env var")
+
+# # Instantiate Gemini client
+# client = genai.Client(api_key=API_KEY)
+
+# def llm_generate(prompt: str, model: str = "gemini-2.0-flash") -> str:
+#     """
+#     Generate an answer for the given prompt using Gemini API.
+#     """
+#     response = client.models.generate_content(
+#         model=model,
+#         contents=prompt,
+#         # temperature=temperature,
+#         # max_tokens=max_tokens
+#     )
+#     # response 
+#     return response.text
 
 
 

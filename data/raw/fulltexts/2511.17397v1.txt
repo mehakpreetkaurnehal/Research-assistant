@@ -1,0 +1,3250 @@
+MCMoE: Completing Missing Modalities with Mixture of Experts for
+Incomplete Multimodal Action Quality Assessment
+Huangbiao Xu1,2, Huanqi Wu1,2, Xiao Ke1,2*, Junyi Wu1,2, Rui Xu1,2, Jinglin Xu3
+1Fujian Provincial Key Laboratory of Networking Computing and Intelligent Information Processing, College of Computer
+and Data Science, Fuzhou University, Fuzhou 350116, China
+2Engineering Research Center of Big Data Intelligence, Ministry of Education, Fuzhou 350116, China
+3School of Intelligence Science and Technology, University of Science and Technology Beijing, Beijing 100083, China
+kex@fzu.edu.cn,{huangbiaoxu.chn, wuhuanqi135, xurui.ryan.chn, xujinglinlove}@gmail.com, junyi.wu-1@outlook.com
+Abstract
+Multimodal Action Quality Assessment (AQA) has recently
+emerged as a promising paradigm. By leveraging comple-
+mentary information across shared contextual cues, it en-
+hances the discriminative evaluation of subtle intra-class vari-
+ations in highly similar action sequences. However, partial
+modalities are frequently unavailable at the inference stage
+in reality. The absence of any modality often renders exist-
+ing multimodal models inoperable. Furthermore, it triggers
+catastrophic performance degradation due to interruptions in
+cross-modal interactions. To address this issue, we propose a
+novel Missing Completion Framework with Mixture of Ex-
+perts (MCMoE) that unifies unimodal and joint representa-
+tion learning in single-stage training. Specifically, we propose
+an adaptive gated modality generator that dynamically fuses
+available information to reconstruct missing modalities. We
+then design modality experts to learn unimodal knowledge
+and dynamically mix the knowledge of all experts to extract
+cross-modal joint representations. With a mixture of experts,
+missing modalities are further refined and complemented. Fi-
+nally, in the training phase, we mine the complete multimodal
+features and unimodal expert knowledge to guide modality
+generation and generation-based joint representation extrac-
+tion. Extensive experiments demonstrate that our MCMoE
+achieves state-of-the-art results in both complete and incom-
+plete multimodal learning on three public AQA benchmarks.
+Code — https://github.com/XuHuangbiao/MCMoE
+Introduction
+Action quality assessment (AQA) has gained attention for
+its objective evaluation of action execution proficiency, with
+wide applications in sports, rehabilitation (Ding, Xu, and Li
+2023; Bruce et al. 2024), and skill determination (Xu et al.
+2025b). Multimodal AQA (Xu et al. 2024a, 2025c; Zeng and
+Zheng 2024) has emerged as a promising paradigm beyond
+skeleton-based (Pan, Gao, and Zheng 2019; Bruce et al.
+2024) and vision-based (Ke et al. 2024; Xu et al. 2024c,b;
+Xu, Yin, and Peng 2025) methods. By leveraging comple-
+mentary information from temporally aligned modalities, it
+*Corresponding author.
+Copyright © 2026, Association for the Advancement of Artificial
+Intelligence (www.aaai.org). All rights reserved.
+(a) General Two-stage Complete/Incomplete Multimodal Learning
+(b) Our MCMoE: Missing Completion Framework with Mixture of Experts
+Expert 
+e1
+Expert 
+e2
+Expert 
+e3
+recon
+recon
+Modality 
+Generator
+Soft 
+Router r
+Regressor/
+Classifier
+Cross-modal 
+Interaction 
+Cross-modal 
+Interaction 
+ˆY
+task
+Y
+MoE
+MMC
+MoE
+MMC
+Missing Modality 
+Completion
+Mixture of Experts
+Bridge 
+Missing 
+Data
+Reduce
+Parameter
+Reliance 
+Stage I: Unimodal Knowledge Learning 
+Stage II: Cross-modal Joint Representation Learning
+Encoder
+E1
+Encoder
+E2
+Encoder
+E3
+1Y
+2
+Y
+3Y
+ˆY
+ˆY
+ˆY
+task
+task
+task
+Regressor/
+Classifier
+Regressor/
+Classifier
+Encoder
+E1
+Encoder
+E2
+Encoder
+E3
+Cross-modal 
+Interaction 
+Cross-modal 
+Interaction 
+ˆY
+task
+Y
+Available in Complete Multimodality
+Missing in Incomplete Multimodality
+Figure 1: (a) Existing two-stage methods first learn uni-
+modal features from complete multimodal data and then
+model cross-modal representations to address missing data,
+leading to higher training cost and complexity. (b) Our MC-
+MoE unifies unimodal and joint representation learning in
+a single stage by exploiting the complementarity between
+modality completion and mixture of experts.
+better discriminates subtle intra-class variations in highly
+similar actions through enriched contextual cues.
+However, existing multimodal models often assume full
+modality availability during training and inference. Yet, real-
+world inference faces inevitable missing modalities due to
+sensor failures (Liu et al. 2021), environmental constraints
+(Wang et al. 2021), or privacy concerns (Jaiswal and Provost
+2020). Prior works (Wei, Luo, and Luo 2023; Park et al.
+2023) show that such incompleteness severely degrades per-
+formance by disrupting cross-modal interactions. Moreover,
+diverse AQA applications require distinct modalities (e.g.,
+audio in sports (Xia et al. 2023), text in action feedback
+(Zhang et al. 2024a), and pose in rehabilitation (Bruce et al.
+2024; Zhou et al. 2023a)), challenging the generalizability of
+fixed-architecture multimodal models. Therefore, a flexible
+framework for incomplete multimodal scenarios is crucial.
+Prior solutions address incomplete modalities problems
+arXiv:2511.17397v1  [cs.CV]  21 Nov 2025
+
+by modality completion or cross-modal joint representation
+learning. The former reconstructs missing data using avail-
+able ones with complex generators like diffusion models
+(Wang, Li, and Cui 2023; Meng et al. 2024), variational
+autoencoders (Shi et al. 2019; Wu and Goodman 2018),
+and generative adversarial networks (Cai et al. 2018; Yoon,
+Jordon, and Schaar 2018), which incur high computational
+costs unsuitable for real-time scenes. In contrast, the latter
+extracts joint cross-modal features (Xu, Jiang, and Liang
+2024; Park et al. 2023) at a lower cost. This joint learning is
+also widely used for multimodal learning (Zeng and Zheng
+2024; Xu et al. 2024a) and has received more attention.
+However, state-of-the-art methods (Zeng and Zheng 2024;
+Xu, Jiang, and Liang 2024; Park et al. 2023) often adopt
+costly two-stage pipelines that sequentially learn unimodal
+and cross-modal representations (Fig. 1 (a)). This inevitably
+increases training and optimization costs. Thus, efficiently
+integrating specific and shared modality knowledge to com-
+pensate for missing modalities is of great significance.
+While seeking efficient solutions, we identify an indis-
+pensable element: the capability to adaptively model corre-
+lations between available and missing modalities. Adaptive
+cross-modal fusion reduces reliance on high-fidelity recon-
+struction, minimizing dependence on heavyweight genera-
+tors. Also, specific unimodal knowledge drives precise inte-
+gration of reconstructed and available modalities. Thus, we
+naturally turn to the prevalent Mixture of Experts (MoE) (Li
+et al. 2025), which flexibly employs experts specialized in
+processing diverse modal inputs. Based on the benefits of
+MoE, unimodal experts facilitate accurate modality comple-
+tion, while selective collaboration specializes in diverse in-
+complete combinations. By exploiting complementarity be-
+tween Missing Modality Completion (MMC) and MoE,
+cross-modal knowledge dynamically refines features gener-
+ated by MMC, enhancing incomplete multimodal learning.
+To achieve this, we propose a novel Missing Completion
+Framework with Mixture of Experts (MCMoE), unifying
+unimodal and joint learning in single-stage training. Specif-
+ically, we adaptively generate missing modalities from
+all available ones to preserve modality-specific knowledge
+modeling despite incompleteness. Then, we learn unimodal
+experts for each modality and design a soft router to dynam-
+ically fuse semantics, compensating for generated features
+and reducing reliance on heavyweight generators. By align-
+ing the complete modality-specific and generated cross-
+modal representations, the model is motivated to focus on
+both specific and shared knowledge modeling. As shown in
+Fig. 1 (b), our MCMoE leverages the complementarity be-
+tween MMC and MoE, achieving a balanced learning of uni-
+modal and joint representations within single-stage training.
+To bridge cross-modal semantic gaps, we further de-
+sign a shared temporal enhancement module that allevi-
+ates the difficulty of completing missing data from available
+ones. Then, we propose a novel Adaptive Gated Modality
+Generator (AGMG) that cost-effectively adapts to various
+incomplete combinations. AGMG dynamically processes
+existing modalities to iteratively complete missing ones and
+employs gating layers for selective fusion. Finally, a cross-
+modal fusion module integrates the modality features pro-
+cessed by MoE for quality assessment. Extensive experi-
+ments on three public AQA benchmarks (Rhythmic Gym-
+nastics (Zeng et al. 2020), Fis-V (Xu et al. 2019), and
+FS1000 (Xia et al. 2023)) show that our MCMoE outper-
+forms state-of-the-art methods in both complete and incom-
+plete multimodal scenarios. Abundant ablations validate the
+contribution of each component. To our knowledge, this is
+the first work to explore incomplete multimodal action qual-
+ity assessment. The main contributions are:
+• We propose a novel missing completion framework with
+mixture of experts for incomplete multimodal action
+quality assessment, reducing the reliance on heavyweight
+generative architectures with unified unimodal and joint
+representation learning in single-stage training.
+• We propose the adaptive gated modality generator to
+selectively complete missing modalities from available
+ones, and design shared temporal enhancement and
+cross-modal fusion modules to fill the semantic gaps be-
+tween modalities and fuse cross-modal semantics.
+• We conduct extensive experiments and ablation studies
+to reveal the complementarity between missing modality
+generation and mixture of experts and the state-of-the-art
+performance of our method in both complete and incom-
+plete multimodal scenarios on three public benchmarks.
+Related Work
+Multimodal Action Quality Assessment
+Multimodal learning (Lai et al. 2025; Cai et al. 2024, 2025;
+Wu et al. 2025a; Huang et al. 2025a) has achieved notable
+success recently. Similarly, multimodal AQA aims to eval-
+uate action execution by integrating complementary cues
+(e.g., RGB, flow, audio, text), offering finer semantic un-
+derstanding than unimodal methods (Xu et al. 2022; Zhou
+et al. 2023b). Recent works (Xu et al. 2024a; Majeedi et al.
+2024; Xia et al. 2023; Zeng and Zheng 2024) have ex-
+plored multi-granular semantic alignment, temporal visual-
+audio fusion, and adaptive modality integration. However,
+they assume full modality availability during both training
+and inference, which rarely holds in real-world scenarios
+due to sensor failure (Liu et al. 2021), environment (Wang
+et al. 2021), privacy concerns (Jaiswal and Provost 2020)
+or upper-layer algorithm failure (Wu et al. 2025b, 2024a,b;
+Chen et al. 2025). Moreover, modality importance varies
+across domains, e.g., audio in sports (Xia et al. 2023), text
+in feedback (Zhang et al. 2024a), and gesture in rehabilita-
+tion (Bruce et al. 2024). This poses higher challenges to the
+modal adaptability of models. Thus, we address this gap by
+introducing the first framework for incomplete multimodal
+AQA, adaptable to diverse missing-modality conditions.
+Incomplete Multimodal Learning
+Incomplete multimodal learning has become important for
+real-world tasks such as emotion recognition, action recog-
+nition, and medical analysis (Xu, Jiang, and Liang 2024;
+Park et al. 2023; Shi et al. 2024). Existing solutions mainly
+rely on (1) modality completion via generative models (e.g.,
+VAE (Shi et al. 2019), GAN (Yoon, Jordon, and Schaar
+
+Rf
+Rv
+Input Video
+Current Setting: RGB+Flow+Audio Learning
+Random
+Mask
+Complete Multimodal
+Expert 
+ev
+Expert 
+ef
+Expert 
+ea
+1
+0
+1
+1
+0
+1
+1
+1
+0
+1
+1
+0
+0
+1
+1
+0
+1
+1
+1
+0
+0
+1
+0
+0
+0
+0
+1
+0
+0
+1
+0
+1
+0
+0
+1
+0
+Incomplete 
+Multimodal
+Generated
+Complete
+Multimodal
+Adaptive Gated 
+Modality Generator
+Soft 
+Router r
+recon
+wv
+Softmax
+
+Fv
+Ff
+Fa
+Ra
+Cross-modal 
+Fusion Module
+Initial Grade Prototypes
+Positional
+Encoding
+Grade-based 
+Regression Network
+Predicted
+Score
+task
+Multimodal Feature
+Shared Temporal 
+Enhancement
+3×d
+Batch Norm
+Conv1d
+ReLU
+Batch Norm
+Conv1d
+2×d
+1×d
+2×d
+1×d
+Grade 
+Quantification
+div
+align
+Fa
+Ff
+Fv
+Rv
+Rf
+Ra
+align
+align
+Flow
+RGB
+Xv
+Audio
+Missing 
+Modality
+Element-Wise 
+Product
+Freeze Parameters
+Loss Function
+Xf
+Xa
+Multimodal Data
+(RGB/Flow/Audio/···)
+x1
+xm
+···
+Specific Feature 
+Extractor
+Specific Feature 
+Extractor
+All Available
+in Training
+Partly Missing
+in Inference
+···
+···
+Used only during 
+the training phase
+Figure 2: Overview of our missing completion framework with mixture of experts (MCMoE). Following the SOTA multimodal
+AQA method PAMFN, we use RGB, Flow, and Audio inputs. All modalities are visible during training, and the missing inputs
+during inference are zero-vector initialized. Frozen modality-specific extractors extract features, enhanced by a shared temporal
+enhancement module to bridge cross-modal gaps. Random masking simulates modality incompleteness during training and an
+adaptive gated modality generator completes missing representations. Then, unimodal experts and a soft router enable dynamic
+fusion, followed by cross-modal integration and grade-based regression for score prediction. (Best viewed in color.)
+2018), Diffusion (Meng et al. 2024)) or (2) joint represen-
+tation learning through cross-modal consistency (Lian et al.
+2023; Park et al. 2023; Xu, Jiang, and Liang 2024). Yet the
+former depends on heavy generative models, and the latter
+often requires two-stage training, both increasing cost and
+complexity. In contrast, our method exploits the complemen-
+tarity between modality completion and mixture of experts to
+unify unimodal and joint learning in a single stage.
+Method
+In this section, we detail our MCMoE, which combines
+modality completion with MoE to jointly learn unimodal
+and joint representations in single-stage training (Fig. 2).
+Overview
+Our framework accepts multimodal inputs. Its flexible archi-
+tecture readily extends to arbitrary modality counts. Follow-
+ing mainstream incomplete multimodal research (Xu, Jiang,
+and Liang 2024; Lian et al. 2023; Woo et al. 2023) and the
+SOTA multimodal AQA method (Zeng and Zheng 2024),
+we focus on three modalities: RGB visual (v), optical flow
+(f), and audio (a). Following convention, videos are divided
+into T segments, which are fed into pre-trained modality-
+specific extractors to obtain features. These features are pro-
+cessed by a shared temporal enhancement module to bridge
+cross-modal semantic gaps, yielding a multimodal feature
+set XM ={Xm|m ∈{v, f, a}}. For each modality, the uni-
+modal set is Xm = {xm
+t }T
+t=1. Under incomplete modali-
+ties, XM partitions into available (X ˜
+M = {X ˜m| ˜m ∈˜
+M})
+and missing (X ¯
+M = {X ¯m| ¯m ∈¯
+M}) subsets, where M =
+˜
+M ∪¯
+M ={v, f, a} and ˜
+M ∩¯
+M =∅.
+We propose an adaptive gated modality generator G to
+dynamically complete missing features X ¯
+M using avail-
+able features X ˜
+M, optimized via reconstruction loss Lrecon.
+Generated features ˆX ¯
+M combine with X ˜
+M to form a new
+complete feature set ˆXM = { ˆXm|m ∈M}. We design a
+mixture-of-experts EM = {em|m ∈M} to dynamically ex-
+tract both unimodal and joint representations: expert em
+mines modality-specific knowledge from ˆXm, while others
+assist in capturing cross-modal joint patterns. Then, a shared
+soft router r selectively fuses these features. Formally,
+ˆXM = X
+˜
+M ∪ˆX
+¯
+M, ˆX
+¯
+M = G
+
+X
+¯
+M, X
+˜
+M
+|ψ
+
+,
+(1)
+Fm =
+X
+k∈{v,f,a}
+r
+
+ˆXm|σ
+
+ek 
+ˆXm|τ k
+,
+(2)
+where ψ, σ, and τ k denote the learnable parameters of G, r,
+and expert ek of modality k. Fm is the feature of modality
+m that fuses modality-specific and shared information.
+During training, we obtain the unimodal feature Rm =
+em( ˆXm|τ m) using the modality expert em. An alignment
+loss Lalign between Rm and Fm motivates joint learning of
+unimodal and joint representations. Then, all FM are con-
+catenated and processed by the cross-modal fusion module
+C to capture complementary patterns, yielding multimodal
+features H. Finally, a grade-based regression network R
+models performance quality patterns PN from H, which a
+fully connected layer regresses to rank weights sN. The final
+score s combines sN with grade quantifications GN, where
+N is the number of grades. Formally,
+H = C
+
+Concat
+
+FM
+|ϕ
+
+,
+(3)
+
+s =
+N
+X
+n=1
+sn⊗Gn, PN = R (H|φ) ,
+(4)
+where ϕ, φ are learnable parameters of C and R, and ⊗
+denotes element-wise product in a batch. A diversity loss
+Ldiv ensures grade patterns focus on distinct performance
+aspects, while task-specific loss Ltask fits quality assess-
+ment. With score label ˆs, the final objective J is:
+min J = λ1Lrecon( ˆXM, XM) + λ2Lalign(RM, FM)
++ λ3Ldiv(PN) + λ4Ltask(s, ˆs),
+(5)
+where λ1, λ2, λ3, and λ4 are the balancing weights.
+Feature Extraction
+For fairness, we follow preprocessing pipelines from exist-
+ing multimodal AQA works (Zeng and Zheng 2024; Xia
+et al. 2023). On Rhythmic Gymnastics and Fis-V, videos are
+split into T non-overlapping 32-frame segments IT . Within
+each segment, frozen pre-trained extractors—VST (Liu et al.
+2022) for RGB, I3D (Carreira and Zisserman 2017) for flow,
+and AST (Gong, Chung, and Glass 2021) for audio—extract
+temporally aligned features Iv
+T , If
+T , and Ia
+T of dimension
+1024, 1024, and 768, respectively. For FS1000, segments
+are 5 seconds long with 3 seconds overlap, and TimeS-
+former (Bertasius, Wang, and Torresani 2021), I3D, and
+AST process non-overlapping 8-frame clips in each segment
+with dimensions 768, 1024, and 768. Formally,
+Iv
+T = V (IT ) , If
+T = F (IT ) , Ia
+T = A (IT ) ,
+(6)
+where V, F, and A are the frozen specific feature extractors.
+For cross-modal interactions, inputs are projected to a
+shared latent space of dimension d via modality-specific
+modules PM with parameters ωM. We then design a Shared
+Temporal Enhancement Module (STEM) T to bridge se-
+mantic gaps. Implemented as stackable Transformer en-
+coders (Vaswani et al. 2017), T ’s shared parameters ϑ cap-
+ture cross-modal commonalities while enhancing modalities
+separately. This avoids direct multimodal feature interaction,
+facilitating subsequent unimodal learning. Formally,
+XM = T
+
+PM 
+IM
+T |ωM
+|ϑ
+
+.
+(7)
+Adaptive Gated Modality Generator
+To complete the missing modalities, we propose a novel
+Adaptive Gated Modality Generator (AGMG), which adap-
+tively generates absent features iteratively based on available
+ones (Fig. 3). Inspired by (Vaswani et al. 2017), AGMG first
+applies multi-head cross-attention: the concatenated avail-
+able modality features X ˜
+M serve as keys/values, while zero-
+initialized missing features X ¯
+M act as queries. Outputs be-
+come subsequent layer queries for iterative refinement over
+L layers (l denotes the current l-th layer). Thus, for the miss-
+ing modality ¯m, Xl
+Q = W ¯m
+QX ¯m,
+XK = W ¯
+m
+KConcat
+
+X
+˜
+M
+, XV = W ¯
+m
+V Concat
+
+X
+˜
+M
+,
+(8)
+Xl+1
+Q
+= Softmax
+
+Xl
+Q(XK)T/
+√
+d
+
+XV ,
+(9)
+Query
+Key
+Value
+×L
+T
+d
+
+M T
+d
+
+M T
+d
+
+MatMul
+T
+M T
+
+T
+M T
+
+MatMul
+Available
+Modality Features
+Concat
+Softmax
+T
+d
+
+Concat
+1 d
+
+1 d
+
+Avg
+Avg
+1 2d
+
+FC+Sigmoid
+1 d
+
+MatMul
+T
+d
+
+(Zero-Initialized)
+Missing Modality 
+Features
+···
+m
+X
+M
+X
+l
+Q
+X
+K
+X
+V
+X
+1
+l
+Q
++
+X
+ˆ m
+X
+Figure 3: The illustration of our proposed Adaptive Gated
+Modality Generator (AGMG).
+where
+√
+d is a normalization factor, W ¯m
+Q, W ¯m
+K, and W ¯m
+V
+are modality-specific learnable weights. The final layer
+yields X ¯m
+new. AGMG then employs gating layers g to dy-
+namically weight fusions based on current input complete-
+ness, mitigating potential error propagation from imperfect
+generation:
+ˆX ¯
+m = X ¯
+m
+new·g
+
+Avg
+
+Concat
+
+X
+˜
+M
+, Avg
+ X ¯
+m
+new
+
+.
+(10)
+In inference, missing modalities are zero-initialized with-
+out any information leakage, as in (Xu, Jiang, and Liang
+2024; Woo et al. 2023). In training, we simulate incomplete-
+ness via random masking of complete modalities.
+Complementarity between MMC and MoE
+This work exploits the complementarity between Missing
+Modality Completion (MMC) and Mixture of Experts
+(MoE) to avoid heavy generative models and unify uni-
+modal/joint learning in one stage. We detail this in two parts:
+Benefits of MMC for MoE. Inspired by prior works (Xu,
+Jiang, and Liang 2024; Zhang et al. 2024b), we employ
+a MoE to dynamically mix expert knowledge for cross-
+modal representation in incomplete multimodal scenarios.
+However, missing modalities limit or mislead cross-modal
+semantic extraction, and existing two-stage solutions (Xu,
+Jiang, and Liang 2024; Park et al. 2023) increase training
+cost and optimization complexity. In contrast, MMC gen-
+erates higher-confidence features instead of zero matrices
+based on available modalities. Guided by the reconstruction
+loss Lrecon with real-modality supervision, these features
+carry reliable unimodal knowledge and cross-modal cues,
+benefiting both unimodal and joint learning for modality ex-
+perts and enabling experts with fewer parameters.
+Benefits of MoE for MMC. Existing MMC methods of-
+ten rely on heavyweight generative models (Cai et al. 2018;
+Wang, Li, and Cui 2023; Meng et al. 2024) to complete miss-
+ing modalities. In contrast, our MoE dynamically selects and
+fuses modality knowledge to handle generated features. It
+adaptively balances real available and generated features to
+prevent error propagation from imperfect generation. When
+processing missing modality ¯m, MoE further refines miss-
+ing data via inter-modal correlations from available ones,
+boosting robustness and accuracy of joint representations.
+These advantages reduce reliance on high-fidelity generators
+in MMC and lower parameter costs.
+
+Datasets
+Methods
+Year
+Testing Condition (Spearman Correlation (↑)/Mean Square Error (↓))
+{v, f}
+{v, a}
+{f, a}
+{v}
+{f}
+{a}
+Average
+{v, f, a}
+FS1000
+(7-class)
+♡MLP-Mixer* 2023 0.722/25.56 0.542/60.57 0.474/87.20 0.623/101.35 0.472/87.59
+0.177/68.43 0.520/71.78 0.819/14.56
+♡PAMFN*
+2024 0.727/59.96 0.644/62.80 0.561/56.36
+0.713/92.10 0.486/117.63 0.145/62.13 0.571/75.16 0.855/13.02
+♣ActionMAE* 2023 0.775/24.66 0.766/64.13 0.556/26.51
+0.761/50.64
+0.462/21.47
+0.458/41.66 0.651/38.18 0.809/17.96
+♠GCNet*
+2023 0.730/25.56 0.740/23.86 0.507/24.97
+0.696/26.67 0.447/31.27
+0.442/39.40 0.610/28.62 0.764/21.82
+♠IMDer*
+2023 0.760/22.34 0.745/28.46 0.573/24.86
+0.724/35.99
+0.424/22.92
+0.488/32.56 0.636/27.86 0.788/25.95
+♠MoMKE*
+2024 0.798/18.86 0.805/23.88 0.541/24.96
+0.785/37.96
+0.398/23.31
+0.499/27.53 0.668/26.08 0.819/16.85
+♠SDR-GNN*
+2025 0.789/17.50 0.785/25.08 0.564/22.29 0.749/28.47
+0.504/29.96
+0.477/25.46 0.665/24.79 0.817/15.91
+MCMoE (Ours)
+-
+0.845/12.66 0.882/11.85 0.738/14.88
+0.845/13.64
+0.650/22.47 0.615/16.72 0.782/15.37 0.881/11.53
+Fis-V
+(2-class)
+♡MLP-Mixer* 2023 0.732/30.34 0.651/46.70 0.572/26.96
+0.618/48.46
+0.546/27.18
+0.325/67.25 0.586/41.15 0.772/13.97
+♡PAMFN
+2024 0.801/33.49 0.661/54.34 0.622/110.50 0.644/84.93 0.616/110.42 0.141/86.16 0.610/79.97 0.822/15.33
+♣ActionMAE* 2023 0.704/33.54 0.678/27.61 0.575/25.55
+0.616/40.07
+0.484/24.87
+0.486/29.29 0.597/30.16 0.698/17.34
+♠GCNet*
+2023 0.738/19.86 0.656/21.32 0.594/21.72
+0.667/20.87
+0.602/19.61 0.455/34.77 0.626/23.03 0.698/16.93
+♠IMDer*
+2023 0.748/15.19 0.658/22.66 0.568/23.99
+0.675/25.45
+0.618/26.38
+0.405/31.96 0.622/24.27 0.703/17.02
+♠MoMKE*
+2024 0.754/14.84 0.689/20.60 0.646/19.62 0.684/23.16
+0.654/22.46
+0.497/29.09 0.660/21.63 0.747/17.30
+♠SDR-GNN*
+2025 0.752/14.99 0.680/20.62 0.619/20.89
+0.689/20.26 0.648/21.50
+0.479/32.13 0.651/21.73 0.733/16.45
+MCMoE (Ours)
+-
+0.813/11.02 0.787/14.64 0.727/17.41
+0.765/15.14
+0.698/15.39
+0.557/28.54 0.734/17.02 0.829/12.15
+RG
+(4-class)
+♡MLP-Mixer* 2023 0.733/7.23 0.614/14.09 0.485/10.18
+0.655/9.67
+0.566/11.45
+0.244/16.01 0.567/11.44 0.754/7.48
+♡PAMFN
+2024 0.764/6.78 0.616/38.87 0.448/122.11 0.658/39.86 0.483/123.44 0.131/151.69 0.543/80.46 0.819/6.64
+♣ActionMAE* 2023 0.724/7.30
+0.621/8.76
+0.545/10.39
+0.689/12.41
+0.521/11.29
+0.251/16.84 0.575/11.16 0.709/7.01
+♠GCNet*
+2023 0.738/6.69
+0.638/7.95
+0.556/11.75
+0.701/8.12
+0.568/36.01
+0.225/15.20 0.591/14.29 0.716/6.45
+♠IMDer*
+2023 0.746/6.03
+0.646/7.55
+0.569/8.80
+0.699/7.59
+0.596/9.35
+0.206/14.19
+0.598/8.92
+0.724/6.37
+♠MoMKE*
+2024 0.762/5.69
+0.656/7.97
+0.629/9.39
+0.693/8.42
+0.621/10.08
+0.264/13.25 0.623/9.13 0.747/6.18
+♠SDR-GNN*
+2025 0.758/6.08
+0.655/7.38
+0.612/9.40
+0.727/7.77
+0.591/9.80
+0.264/13.53
+0.621/8.99 0.742/6.35
+MCMoE (Ours)
+-
+0.822/5.33
+0.781/5.83
+0.699/8.15
+0.767/6.25
+0.662/8.59
+0.278/13.20
+0.697/7.89 0.842/4.85
+Table 1: Comparisons of performance on three benchmarks with incomplete modalities. v, f, and a refer to the RGB, flow, and
+audio modalities. “Average” denotes the average result of all six incomplete multimodal combinations. The bold / underline
+indicate the best / second-best results. * indicates our reimplementation. ♡, ♣, and ♠mean the evaluated method sources for
+multimodal AQA, incomplete multimodal action recognition, and incomplete multimodal emotion recognition.
+Building on the above complementarity, our MoE adopts
+a lightweight two-layer multilayer perceptron (MLP) for
+each expert. We aggregate all experts’ outputs to derive both
+unimodal and joint representations for a given modality. For
+example, the unimodal (Fv
+v) and joint representations (Fv
+f
+and Fv
+a) of visual modality v can be obtained as follows:
+Fv
+m = em 
+ˆXv
+= MLPτm
+
+ˆXv
+, m ∈{v, f, a} .
+(11)
+To handle diverse missing-modality scenarios, we employ
+a two-layer MLP soft router r to dynamically estimates the
+importance of unimodal and joint representations based on
+the input ˆXv. The final visual feature Fv is obtained by
+weighting based on the importance weights wv
+m:
+
+wv
+v, wv
+f, wv
+a
+	
+= r
+
+ˆXv
+= Softmax
+
+MLPσ
+
+ˆXv
+,
+(12)
+Fv =
+X
+m∈{v,f,a}
+wv
+m·Fv
+m.
+(13)
+The flow (Ff) and audio (Fa) features are obtained sim-
+ilarly. We also apply the alignment loss Lalign to align Fm
+with true unimodal features Rm = em( ˆXm). This moti-
+vates both unimodal and joint learning within single-stage
+training, and also indirectly promotes AGMG to generate
+more faithful information. Finally, we design a Cross-modal
+Fusion Module (CFM) to capture inter-modal correlations
+and map features into a task-specific latent space. Our CFM
+can rely on a simple convolutional block (Fig. 2) to leverage
+the MoE’s cross-modal semantics for efficient fusion.
+Score Generation and Optimization
+As shown in Eq. 3, we extract multimodal features H via
+CFM. For scoring, we employ state-of-the-art grade-based
+regression (Xu, Zeng, and Zheng 2022; Xu et al. 2025a;
+Liu et al. 2025). We initialize N learnable grade prototypes
+with sine–cosine positional encodings, then use a three-layer
+Transformer decoder to implement regressor R to aggregate
+H into grade patterns PN. The final score s is computed by
+Eq. 4, where the grade quantification Gn = n−1
+N−1.
+As shown in Eq. 5, our method uses four losses: re-
+construction loss Lrecon, alignment loss Lalign, diversity
+loss Ldiv, and task-specific loss Ltask. Specifically, Lrecon
+uses Mean Square Error (MSE) to train AGMG for high-
+fidelity features. Lalign minimizes Kullback-Leibler (KL)
+divergence between FM and RM for unified unimodal and
+joint learning. Ldiv applies triplet loss to separate grade pat-
+terns. For quality assessment, Ltask uses MSE to fit predic-
+tions to expert scores. Hence, Eq. 5 can be rewritten as:
+MSE (y, ˆy) = ∥y −ˆy∥2,
+(14)
+Lrecon
+
+ˆXM, XM
+= MSE
+
+ˆXM, XM
+, Ltask(s, ˆs) = MSE (s, ˆs) , (15)
+Lalign(RM, FM) = KL
+ RM ∥FM
+= P
+t RM
+t log
+
+RM
+t
+FM
+t
+
+, (16)
+Ldiv(PN) = P
+n
+
+max
+ sim
+ Pn, Pi
+−min
+ sim
+ Pn, Pi
++ δ
+
++, (17)
+where i ̸= n, δ is a margin parameter, which is set to 1. The
+sim (·, ·) denotes cosine similarity, [·]+ means max (0, ·).
+
+Figure 4: Comparisons of performance with complete modalities. * indicates our reimplementation based on the official code.
+Experiments
+Datasets and Metrics. We evaluate our method on three
+public AQA benchmarks: FS1000 (Xia et al. 2023), Fis-
+V (Xu et al. 2019), and Rhythmic Gymnastics (RG) (Zeng
+et al. 2020), which provide RGB, flow, and audio modali-
+ties. Following standard protocols (Xia et al. 2023; Du et al.
+2024), we report Spearman’s Rank Correlation (ρ) and Mean
+Square Error (MSE). MSE measures the numerical error
+(Eq. 14), while ρ assesses the rank agreement between pre-
+dictions and ground truth.
+Implementation Details. All experiments use a single RTX
+3090 GPU (PyTorch 1.12.0) and 2.40GHz CPU. We evaluate
+incomplete modalities using the common fixed-missing pro-
+tocol (Xu, Jiang, and Liang 2024; Wang, Li, and Cui 2023),
+covering the full set {v, f, a} and six subsets ({v, f}, {v, a},
+{f, a}, {v}, {f}, {a}). For FS1000/Fis-V/RG, we randomly
+sample 95/124/68 continuous clips. The λ1, λ2, λ3, and λ4
+in Eq. 5 are 1, 1, 1/0.5/1, and 10. The grade N is 4. We set
+a dropout of 0.3 to avoid over-fitting. The batch size is 32
+and learning rate is 1e-4/2e-4/2e-4. We optimize with Adam
+(weight decay 1e-4) and cosine annealing (decay 0.01). For
+better convergence, we train different models with different
+epochs as in (Xu, Zeng, and Zheng 2022; Zeng and Zheng
+2024; Zhou et al. 2024).
+Comparison with State-of-the-art
+Incomplete
+Multimodal
+Scenarios.
+To
+evaluate
+our
+method under incomplete modalities, we test all modal
+combinations on three datasets (Tab. 1). Comparisons in-
+clude SOTA methods from multimodal AQA (Xia et al.
+2023; Zeng and Zheng 2024), incomplete multimodal ac-
+tion recognition (Woo et al. 2023), and incomplete multi-
+modal emotion recognition (Lian et al. 2023; Wang, Li, and
+Cui 2023; Xu, Jiang, and Liang 2024; Fu et al. 2025). We
+extend the bimodal MLP-Mixer (Xia et al. 2023) to sup-
+port trimodal inputs via secondary bimodal interactions. Our
+MCMoE outperforms all baselines on nearly all metrics and
+incomplete configurations. Averaged over six combinations,
+it improves SP. Corr./MSE by 17.1%/38.0%, 11.2%/21.3%,
+and 11.9%/11.5% on the three datasets. Existing SOTA mul-
+timodal AQA methods degrade notably with missing modal-
+ities, especially on MSE, likely due to disrupted cross-
+modal interactions. Incomplete multimodal baselines from
+Methods
+Year 1-stage #Params #FLOPs
+Average {v, f, a}
+MLP-Mixer 2023
+✓
+14.32M
+49.90G 0.52/71.8 0.82/14.6
+PAMFN
+2024
+×
+18.06M
+2.56G
+0.57/75.2 0.86/13.0
+ActionMAE 2023
+✓
+14.05M
+62.12G 0.65/38.2 0.81/18.0
+GCNet
+2023
+✓
+8.78M 1191.39G 0.61/28.6 0.76/21.8
+IMDer
+2023
+×
+7.97M
+23.53G 0.61/27.9 0.79/26.0
+MoMKE
+2024
+×
+5.39M
+2.60G
+0.67/26.1 0.82/16.9
+SDR-GNN 2025
+✓
+22.63M
+24.35G 0.67/24.8 0.82/15.9
+Ours
+-
+✓
+4.90M
+1.34 G
+0.78/15.4 0.88/11.5
+Table 2: Compare the computational costs with the SOTA.
+other domains lack tailored modeling for action seman-
+tics and assessment patterns, resulting in poor AQA perfor-
+mance. Our MCMoE maintains strong performance under
+both complete and incomplete settings, with average gains
+of 2.23%/15.3% under full modalities. This highlights the
+benefit of jointly leveraging MMC and MoE to compensate
+for missing modality interference.
+Complete Modality Scenarios. Fig. 4 compares our method
+with unimodal(Ke et al. 2024; Zhou et al. 2024; Liu et al.
+2025) and multimodal (Xia et al. 2023; Zeng and Zheng
+2024; Gedamu et al. 2025; Du et al. 2024) SOTA AQA
+models under full-modality settings. Our method achieves
+the best or second-best results across all categories and
+consistently superior averages, with SP. Corr./MSE gains
+of 3.0%/9.7%, 0.9%/10.1%, and 2.8%/15.4% on the three
+datasets. This validates the effectiveness of MMC+MoE
+synergy, which enhances adaptive multimodal fusion and
+mitigates the impact of missing data. In addition, our single-
+stage learning avoids knowledge forgetting and complexity
+issues common in two-stage training.
+As shown in Tab. 1 and Fig. 4, our MCMoE achieves bal-
+anced and state-of-the-art performance in both complete and
+incomplete scenarios. Moreover, Tab. 2 shows it offers a bet-
+ter performance–efficiency trade-off compared to SOTA in-
+complete multimodal methods on FS1000.
+Ablation Study
+To validate the effectiveness of our components, we build
+a Baseline that extracts and projects multimodal features,
+directly summed and fed into a grade-based regressor with
+Ldiv and Ltask. As shown in Tab. 3, performance im-
+
+Settings
+RG
+Fis-V
+Average
+{v, f, a}
+Average
+{v, f, a}
+Baseline
+0.532/25.79 0.718/7.05 0.577/61.45 0.724/16.38
++ STEM
+0.573/19.92 0.744/6.83 0.637/39.72 0.748/14.30
++ AGMG
+0.647/9.45
+0.779/6.04 0.678/21.36 0.773/13.26
++ MoE (w/o CFM) 0.675/7.91
+0.817/5.30 0.701/18.07 0.790/13.10
++ CFM (Ours) 0.697/7.89
+0.842/4.85 0.734/17.02 0.829/12.15
+w/o AGMG
+0.635/16.54 0.724/6.44 0.609/50.45 0.742/14.37
+w/o MoE
+0.658/7.97
+0.777/5.48 0.684/19.20 0.767/13.32
+w/o STEM
+0.585/10.96 0.735/7.62 0.643/19.34 0.739/14.16
+w/o Lrecon
+0.617/9.30
+0.771/5.50 0.699/18.45 0.813/12.47
+w/o Lalign
+0.648/8.56
+0.797/5.16 0.708/19.25 0.790/12.59
+w/o Ldiv
+0.624/8.13
+0.791/4.93 0.693/17.54 0.795/12.29
+Table 3: Ablation results on the RG and Fis-V. The top half
+adds our components in order, and the bottom half individu-
+ally removes one. Results are shown by ρ(↑)/MSE(↓).
+MCMoE
+(Ours)
+w/o
+AGMG
+w/o
+MoE
+(a) Available: v, Missing: f, a
+(b) Available: f, Missing: v, a
+(c) Available: a, Missing: v, f
+Figure 5: The t-SNE grade distributions in the three extreme
+unimodal scenes contrasting without AGMG and MoE.
+proves as components are incrementally added. Notably,
+adding AGMG significantly boosts accuracy, showing that
+dynamic modality completion effectively bridges semantic
+gaps of missing data. Adding MoE further improves results,
+especially under incomplete settings, with average gains of
+3.9%/15.9%. This is likely due to its adaptive fusion of uni-
+modal and cross-modal knowledge. Removing any compo-
+nent from the full model leads to clear performance drops.
+Notably, STEM is critical for capturing temporal context and
+cross-modal semantics, essential in long video understand-
+ing (Xu, Zeng, and Zheng 2022; Zhou et al. 2024) and mul-
+timodal learning (Zeng and Zheng 2024; Woo et al. 2023).
+We also ablate the loss terms. Beyond the core Ltask, re-
+moving Lrecon, Lalign, or Ldiv each harms performance.
+Lrecon provides key supervision for reliable modality com-
+pletion, avoiding generating misleading misinformation.
+Lalign motivates MoE to jointly learn unimodal and cross-
+modal features within single-stage training. Ldiv enforces
+diversity across grade patterns, aiding accurate AQA.
+Visualization Analysis
+To visualize the complementary effects of our emphasized
+MMC and MoE, Fig. 5 presents t-SNE distributions of grade
+(g) Quantitative analysis of the 
+generation quality of our AGMG
+MMD(↓)
+KL(↓)
+COS(↑)
+L1(↓)
+Miss.
+Avail.
+Dataset
+0.0176
+0.0078
+0.9998
+0.0093
+F
+V, A
+FS1000
+0.0088
+0.0092
+0.9998
+0.0107
+A
+V, F
+0.0415
+0.0154
+0.9997
+0.0143
+V
+A, F
+0.0132
+0.0085
+0.9998
+0.0100
+A, F
+V
+0.0289
+0.0116
+0.9998
+0.0118
+V, F
+A
+0.0259
+0.0124
+0.9998
+0.0125
+V, A
+F
+0.0215
+0.0126
+0.9998
+0.0110
+F
+V, A
+Fis-V
+0.0137
+0.0126
+0.9998
+0.0111
+A
+V, F
+0.0166
+0.0122
+0.9998
+0.0108
+V
+A, F
+0.0176
+0.0128
+0.9998
+0.0111
+A, F
+V
+0.0198
+0.0127
+0.9998
+0.0110
+V, F
+A
+0.0155
+0.0124
+0.9998
+0.0110
+V, A
+F
+0.2332
+0.1139
+0.9980
+0.0465
+F
+V, A
+RG
+0.2709
+0.1333
+0.9975
+0.0510
+A
+V, F
+0.2529
+0.1116
+0.9979
+0.0464
+V
+A, F
+0.2448
+0.1253
+0.9977
+0.0489
+A, F
+V
+0.2386
+0.1175
+0.9979
+0.0472
+V, F
+A
+0.2651
+0.1228
+0.9977
+0.0488
+V, A
+F
+(e) Avail.: a, Miss.: v, f
+(f) Avail.: f, Miss.: v, a
+(d) Avail.: v, Miss.: a, f
+(c) Avail.: a, f, Miss.: v
+(b) Avail.: v, f, Miss.: a
+(a) Avail.: v, a, Miss.: f
+Figure 6: (a-f) t-SNE distributions of our generated and true
+features; (g) Generation quality analysis on four metrics.
+patterns on FS1000. Each point is a grade feature. Our
+MCMoE effectively distinguishes action qualities, yielding
+compact clusters with clear inter-grade boundaries. In con-
+trast, omitting AGMG or MoE leads to scattered distri-
+butions and weaker separability. Without AGMG’s modal-
+ity completion, MoE fails to maintain intra-grade consis-
+tency, resulting in dispersed features. Without MoE’s dy-
+namic cross-modal fusion, unimodal semantics cannot col-
+laborate effectively, splitting quality grades into two clusters
+due to modality divergence. This visualization highlights the
+critical roles of MMC and MoE in quality space modeling.
+Moreover, Fig. 6 qualitatively and quantitatively shows
+the quality of features generated by AGMG. The generated
+and real features are well mixed in the t-SNE space in all in-
+complete combinations on FS1000, indicating high seman-
+tic similarity that makes them hard to distinguish. We con-
+duct a comprehensive quantitative analysis using four sim-
+ilarity metrics—L1 Distance, Cosine Similarity, KL Diver-
+gence, and Maximum Mean Discrepancy. Even on the small-
+est RG with limited multimodal training data, AGMG pro-
+duces high-quality features. These results show that AGMG
+generates semantically aligned features at a low cost, effec-
+tively mitigating the limitations caused by missing data.
+Conclusion
+In this paper, we introduce MCMoE, a framework for in-
+complete multimodal action quality assessment that lever-
+ages the complementarity between Missing Modality Com-
+pletion (MMC) and Mixture of Experts (MoE). MCMoE
+uses an adaptive gated modality generator to reconstruct
+missing modalities and a MoE architecture with unimodal
+experts and a soft router to fuse modality-specific and cross-
+modal information. This design mitigates the impact of
+missing data, reduces dependence on heavy generative mod-
+els, and enables unified unimodal and joint representation
+learning in a single stage. As a result, MCMoE achieves su-
+perior performance on three public AQA benchmarks under
+both complete and incomplete settings, striking a balance
+between performance and cost.
+
+Acknowledgments
+This work was supported in part by the National Key
+Research and Development Plan of China under Grant
+2021YFB3600503, in part by the National Natural Science
+Foundation of China under Grant 61972097, U21A20472,
+62522102, and 62373043, in part by the Major Scientific
+Research Project for Technology Promotes Police under
+Grant 2025YZ040003, 2024YZ040001, in part by the Nat-
+ural Science Foundation of Fujian Province under Grant
+2025J01536.
+Appendix
+Datasets
+To fully validate the effectiveness of our method, we conduct
+extensive experiments on three public action quality assess-
+ment (AQA) benchmarks. These datasets include two types
+of sports competitions: figure skating (FS1000 (Xia et al.
+2023)) and Fis-V (Xu et al. 2019)) and artistic gymnastics
+(rhythmic gymnastics (RG) (Zeng et al. 2020)).
+FS1000. The FS1000 dataset contains 1,000 training videos
+and 247 validation videos, representing eight categories of
+figure skating competitions: men’s/ladies’/pairs’ short pro-
+grams, men’s/ladies’/ pairs’ free skating, and ice dance
+rhythm/free dances. Each video is recorded at 25 frames
+per second and contains approximately 5,000 frames. The
+dataset provides detailed scoring annotations, including To-
+tal Element Score (TES), Total Program Component Score
+(PCS), and five sub-components: Skating Skills (SS), Tran-
+sitions (TR), Performance (PE), Composition (CO), and In-
+terpretation of Music (IN). As the first figure skating dataset
+to incorporate audio-visual learning, FS1000 supports rule-
+compliant multimodal training. Following prior works (Xia
+et al. 2023; Du et al. 2024), we train dedicated models for
+each scoring category.
+Figure Skating Video (Fis-V). The Fis-V dataset consists
+of 500 videos of ladies’ singles short program performances
+in figure skating, each approximately 2.9 minutes long and
+recorded at 25 frames per second. Following the standard
+split, 400 videos are used for training and 100 for testing.
+Each video includes official annotations for Total Element
+Score (TES) and Total Program Component Score (PCS),
+aligned with competition regulations. Consistent with pre-
+vious methodologies (Xu et al. 2019; Xu, Zeng, and Zheng
+2022; Xia et al. 2023; Du et al. 2024; Zhou et al. 2024; Zeng
+and Zheng 2024), we train separate models to predict each
+score category.
+Rhythmic Gymnastics (RG). The RG dataset contains
+1,000 videos of rhythmic gymnastics performances across
+four apparatus types: ball, clubs, hoop, and ribbon. Each
+video is approximately 1.6 minutes long and recorded at
+25 frames per second. The dataset follows a 4:1 training-
+evaluation split, with 200 training videos and 50 evalua-
+tion videos per apparatus type. Following established pro-
+tocols (Zeng et al. 2020; Xu, Zeng, and Zheng 2022; Zhou
+et al. 2024; Zeng and Zheng 2024), we train apparatus-
+specific models using standardized scoring annotations.
+Loss Settings
+RG
+Fis-V
+Lrecon Lalign Ldiv
+Average
+{v, f, a}
+Average
+{v, f, a}
+✓
+0.620 / 9.08 0.785 / 5.81 0.677 / 18.71 0.791 / 15.08
+✓
+0.616 / 10.84 0.748 / 7.26 0.652 / 18.96 0.788 / 15.77
+✓
+0.613 / 12.47 0.762 / 6.37 0.682 / 20.09 0.781 / 14.86
+✓
+✓
+0.624 / 8.13 0.791 / 4.93 0.693 / 17.54 0.795 / 12.29
+✓
+✓
+0.648 / 8.56 0.797 / 5.16 0.708 / 19.25 0.790 / 12.59
+✓
+✓
+0.617 / 9.30 0.771 / 5.50 0.699 / 18.45 0.813 / 12.47
+✓
+✓
+✓
+0.697 / 7.89 0.842 / 4.85 0.734 / 17.02 0.829 / 12.15
+Table 4: Effects of different loss functions. ✓represents the
+use of the loss. Results are shown by Sp. Corr.(↑) / MSE(↓).
+#N
+RG
+Fis-V
+Average
+{v, f, a}
+Average
+{v, f, a}
+2
+0.673 / 8.51
+0.821 / 5.44
+0.720 / 18.56
+0.811 / 14.67
+3
+0.686 / 7.95
+0.828 / 5.31
+0.729 / 17.73
+0.821 / 14.06
+4
+0.697 / 7.89
+0.842 / 4.85
+0.734 / 17.02
+0.829 / 12.15
+5
+0.700 / 7.93
+0.838 / 4.88
+0.730 / 17.18
+0.823 / 12.43
+6
+0.692 / 8.02
+0.835 / 4.92
+0.731 / 17.26
+0.820 / 12.66
+Table 5: Effects of the number of grade patterns N.
+More Ablation Studies
+In this section, we will further conduct some ablation stud-
+ies to determine the experimental details. Unless otherwise
+stated, all ablation studies are performed on the RG and Fis-
+V datasets, containing two types of action scenarios.
+Effects of different loss functions. We supplement the main
+manuscript with a more comprehensive ablation study of the
+effects of losses. The basic Ltask is retained and all combi-
+nations of Lrecon, Lalign, and Ldiv are verified. As shown
+in Table 4, all losses have a significant effect, especially
+for performance in incomplete multimodal scenarios. This
+shows the rationality and effectiveness of our design of loss
+functions. Specifically, Lrecon provides important supervi-
+sion for missing modality completion, avoiding generating
+misinformation that can mislead learning. Lalign motivates
+the MoE to focus on both unimodal and cross-modal joint
+representation learning in single-stage training. While Ldiv
+ensures that each grade pattern focuses on different actions,
+facilitating accurate AQA.
+Effects of the number of grade patterns N. We follow the
+priori works (Xu, Zeng, and Zheng 2022; Zhou et al. 2024;
+Liu et al. 2025; Huang et al. 2025b) using state-of-the-art
+grade-based regression networks. Each grade pattern repre-
+sents focusing on actions of a certain performance quality.
+As shown in Table 5, the performance improves significantly
+when N is raised from 2 to 4, indicating that fine-grained
+modeling is important for AQA. And when N ¿ 4, the perfor-
+mance tends to decrease. This may be due to excessive grade
+patterns, which makes it difficult f2or neighboring grade pat-
+terns to recognize similar information.
+Effects of the cross-modal fusion module. We design a
+Cross-modal Fusion Module (CFM), implemented as a
+two-layer convolutional block, to capture inter-modal cor-
+relations. Since the features processed by the MoE contain
+cross-modal joint semantics, our CFM can rely on the sim-
+ple architecture to achieve effective multimodal fusion. As
+shown in Table 6, we compare our CFM against common fu-
+
+MCMoE
+(Ours)
+w/o
+AGMG
+w/o
+MoE
+(e) Available: v, a
+Missing: f
+(f) Available: f, a
+Missing: v
+(d) Available: v, f
+Missing: a
+(c) Available: a
+Missing: v, f
+(b) Available: f
+Missing: v, a
+(a) Available: v
+Missing: f, a
+Figure 7: The t-SNE grade feature distribution plots on the FS1000 (PCS) in all incomplete multimodal combinations contrast-
+ing with and without our AGMG and MoE. (a), (b), (c), (d), (e) and (f) correspond to incomplete multimodal scenarios for {v},
+{f}, {a}, {v, f}, {v, a}, and {f, a}, respectively. (Best viewed in color.)
+Methods
+RG
+Fis-V
+Average
+{v, f, a}
+Average
+{v, f, a}
+Summation
+0.675 / 7.91 0.817 / 5.30 0.701 / 18.07 0.790 / 13.10
+Weighted Average
+0.684 / 7.98 0.830 / 5.08 0.724 / 17.61 0.811 / 12.76
+Full-connection Layer 0.690 / 7.90 0.834 / 5.00 0.728 / 17.19 0.819 / 12.66
+CFM (Ours)
+0.697 / 7.89 0.842 / 4.85 0.734 / 17.02 0.829 / 12.15
+Table 6: Effects of the cross-modal fusion module.
+sion strategies like summation, weighted average, and fully-
+connected layers. The results demonstrate that our CFM sig-
+nificantly improves performance. This may be because the
+poorly intra-class discriminative AQA task requires a high
+degree of fine-grained discriminative ability from the model.
+This challenge is exacerbated by complex semantic learning
+for incomplete multimodal scenarios, resulting in simple fu-
+sion strategies that cannot effectively map multimodal se-
+mantics to the quality-aware semantic space.
+More Visualizations
+In this section, we provide more visualizations to illustrate
+the contribution of our proposed designs to incomplete mul-
+timodal learning and action quality assessment.
+Effects of AGMG and MoE. To visualize the impact of the
+complementarity between MMC and MoE that we empha-
+size, Figure 7 presents the t-SNE distributions of grade pat-
+terns on FS1000 (PCS) after removing the AGMG and MoE
+components. Each point is a grade feature. Our MCMoE
+effectively discriminates between varying action qualities,
+producing compact clusters and clearly defined inter-grade
+boundaries. In contrast, omitting AGMG or MoE leads to
+more dispersed distributions and blurred class distinctions.
+Without AGMG’s missing modality completion, MoE strug-
+gles to capture intra-class modality consistency, resulting in
+dispersed intra-grade features. Meanwhile, the absence of
+MoE’s dynamic cross-modal fusion prevents effective col-
+laboration of unimodal semantics, splitting quality grades
+into two clusters due to modality divergence. This visualiza-
+tion underscores the significant contributions of MMC and
+MoE to quality space modeling.
+Visualization of predicted scores. To visually compare the
+quality assessment performance of our method with existing
+methods, we visualize scatter plots of the prediction scores
+in Figure 8. Each point represents the prediction score of
+one video sample. It can be seen that our method has sig-
+nificantly better AQA performance. Our MCMoE predicts
+more accurate scores with tighter correlations in both com-
+plete and incomplete multimodal scenarios.
+More Experiment Settings
+Metrics. We adopt the widely used metrics in AQA, includ-
+ing Spearman’s Rank Correlation Coefficient (SRCC/ρ) and
+Mean Square Error (MSE). MSE measure the numerical dif-
+ference between the ground-truth score y and the predicted
+score ˆy. While ρ measure the difference between the ground-
+truth series ˆq and the predicted series q:
+MSE (y, ˆy) = ∥y −ˆy∥2,
+(18)
+ρ =
+P
+i (qi −¯q)
+ ˆqi −¯ˆq
+
+qP
+i (qi −¯q)2 P
+i
+ ˆqi −¯ˆq
+2 .
+(19)
+Compute resources. All experiments are performed on one
+RTX 3090 GPU equipped with PyTorch 1.12.0 and a CPU
+at 2.40GHz. The version of CUDA is 11.3. For example, it
+takes about four and a half hours to train the RG dataset
+with a batch size of 32 and 500 epochs using visual, flow,
+and audio features extracted from the pre-trained backbone.
+Label normalization. Existing datasets often have different
+ranges of score labels, increasing the challenge of robust-
+ness of the regression network. To address this, following
+established methodologies (Zeng et al. 2020; Xu, Zeng, and
+
+Datasets
+Methods
+Year
+Assessment Category (Spearman Correlation (↑) / Mean Square Error (↓))
+TES
+PCS
+SS
+TR
+PE
+CO
+IN
+Average
+FS1000
+♡MLP-Mixer
+2023
+0.880 / 81.24
+0.820 / 9.47
+0.800 / 0.35
+0.810 / 0.35
+0.800 / 0.62
+0.810 / 0.37
+0.810 / 0.39
+0.821 / 13.26
+♢T²CR*
+2024 0.863 / 107.59
+0.794 / 15.26
+0.833 / 0.61
+0.837 / 0.48
+0.823 / 0.69
+0.843 / 0.57
+0.804 / 0.42
+0.829 / 17.95
+♢CoFInAl*
+2024
+0.835 / 81.65
+0.830 / 16.05
+0.838 / 0.56
+0.836 / 0.63
+0.814 / 0.71
+0.829 / 0.41
+0.819 / 0.54
+0.829 / 14.36
+♡SGN
+2024
+0.890 / 79.08
+0.850 / 8.40
+0.840 / 0.31
+0.850 / 0.32
+0.820 / 0.61
+0.850 / 0.33
+0.830 / 0.37
+0.849 / 12.77
+♡PAMFN*
+2024
+0.874 / 78.42
+0.854 / 9.72
+0.848 / 0.54
+0.866 / 0.58
+0.857 / 0.69
+0.834 / 0.53
+0.846 / 0.64
+0.855 / 13.02
+♢ASGTN*
+2025
+0.873 / 94.83
+0.849 / 14.58
+0.858 / 0.35
+0.856 / 0.38
+0.832 / 0.68
+0.846 / 0.39
+0.835 / 0.47
+0.850 / 15.95
+MCMoE(Ours)
+-
+0.900 / 71.69
+0.872 / 7.43
+0.876 / 0.26
+0.882 / 0.26
+0.872 / 0.52
+0.886 / 0.26
+0.874 / 0.29
+0.881 / 11.53
+∆SOT A
+-
+↑1.1% / ↓8.6% ↑2.1% / ↓11.5% ↑2.1% / ↓16.1% ↑1.8% / ↓18.8% ↑1.8% / ↓14.8% ↑4.2% / ↓21.2% ↑3.3% / ↓21.6% ↑3.0% / ↓9.7%
+Fis-V
+♡MLP-Mixer
+2023
+0.680 / 19.57
+0.820 / 7.96
+†
+†
+†
+†
+†
+0.759 / 13.77
+♢T²CR*
+2024
+0.702 / 20.84
+0.811 / 8.10
+†
+†
+†
+†
+†
+0.762 / 14.47
+♢CoFInAl
+2024
+0.716 / 20.76
+0.843 / 7.91
+†
+†
+†
+†
+†
+0.788 / 14.34
+♡SGN
+2024
+0.700 / 19.05
+0.830 / 7.96
+†
+†
+†
+†
+†
+0.773 / 13.51
+♡PAMFN
+2024
+0.754 / 22.50
+0.872 / 8.16
+†
+†
+†
+†
+†
+0.822 / 15.33
+♡VATP-Net
+2025
+0.702 / -
+0.863 / -
+†
+†
+†
+†
+†
+0.796 / -
+♢ASGTN*
+2025
+0.703 / 21.37
+0.845 / 10.75
+†
+†
+†
+†
+†
+0.784 / 16.06
+MCMoE(Ours)
+-
+0.759 / 18.50
+0.880 / 5.81
+†
+†
+†
+†
+†
+0.829 / 12.15
+∆SOT A
+-
+↑0.7% / ↓2.9% ↑0.9% / ↓26.5%
+†
+†
+†
+†
+†
+↑0.9% / ↓10.1%
+Ball
+Clubs
+Hoop
+Ribbon
+†
+†
+†
+Average
+RG
+♡MLP-Mixer* 2023
+0.677 / 6.75
+0.708 / 5.81
+0.778 / 5.94
+0.706 / 6.87
+†
+†
+†
+0.719 / 6.34
+♢T²CR*
+2024
+0.750 / 7.18
+0.800 / 5.63
+0.794 / 5.88
+0.827 / 5.81
+†
+†
+†
+0.794 / 6.13
+♢CoFInAl
+2024
+0.809 / 5.07
+0.806 / 5.19
+0.804 / 6.37
+0.810 / 6.30
+†
+†
+†
+0.807 / 5.73
+♡PAMFN
+2024
+0.757 / 6.24
+0.825 / 7.45
+0.836 / 5.21
+0.846 / 7.67
+†
+†
+†
+0.819 / 6.64
+♡VATP-Net
+2025
+0.800 / -
+0.810 / -
+0.780 / -
+0.769 / -
+†
+†
+†
+0.790 / -
+♢ASGTN*
+2025
+0.792 / 6.60
+0.825 / 5.66
+0.784 / 5.21
+0.793 / 6.75
+†
+†
+†
+0.799 / 6.06
+MCMoE(Ours)
+-
+0.806 / 5.66
+0.815 / 4.22
+0.845 / 5.62
+0.890 / 3.89
+†
+†
+†
+0.842 / 4.85
+∆SOT A
+-
+↓0.4% / ↑11.6% ↓1.2% / ↓18.7% ↑1.1% / ↑7.9% ↑5.2% / ↓33.0%
+†
+†
+†
+↑2.8% / ↓15.4%
+Table 7: Comparisons of performance with the state-of-the-art (SOTA) on three benchmarks with complete modalities. The red
+bold / black bold indicate the best / second-best results. † means the dataset does not include this category. * indicates our
+reimplementation based on the official code. ∆SOT A means the performance increase or decrease of our MCMoE compared to
+the best competing methods. ♢and ♡represent unimodal and multimodal AQA methods.
+Zheng 2022; Zeng and Zheng 2024; Zhou et al. 2024), we
+normalize score labels to a unified [0,1] range using a scal-
+ing factor ξ. Specifically, for real-valued score labels si in
+a dataset, normalized labels ˆsi are computed as si/ξ, where
+ξ is determined by the maximum score in the training set.
+In our experiments, ξ is set to 130, 60, and 10 for FS1000’s
+TES, PCS, and the remaining sub-classes (SS, TR, PE, CO,
+IN), respectively. For Fis-V(TES), Fis-V(PCS), and RG, ξ
+is set to 45, 40, and 25, respectively. To ensure fair compar-
+isons with existing methods, our predicted scores are scaled
+back to their original ranges by multiplying with ξ when
+computing the MSE metric.
+Learning strategies and epoch settings. We implement a
+cosine annealing strategy to dynamically adjust the learning
+rate during training, following established practices. To opti-
+mize convergence, we adopt dataset-specific epoch settings
+across models, as done in prior works (Zeng et al. 2020; Xu,
+Zeng, and Zheng 2022; Zeng and Zheng 2024; Zhou et al.
+2024). For the FS1000 dataset, epoch settings are as follows:
+TES (360), PCS (460), SS (360), TR (210), PE (520), CO
+(520), and IN (390). For Fis-V, the epochs are set to 460
+for TES and 510 for PCS. The RG dataset uses 410 epochs
+for Ball, 560 for Clubs, 270 for Hoop, and 300 for Ribbon.
+These settings ensure effective model training and alignment
+with the unique characteristics of each dataset.
+Implementation details of the architecture. Here, we
+give the specific details of each component in the pro-
+posed MCMoE. Our shared temporal enhancement module
+(STEM) is implemented by a three-layer Transformer en-
+coder with two-head self-attention. The proposed adaptive
+gated modality generator (AGMG) is implemented by two-
+layer four-head cross-attention and one gating layer. The
+two-layer MLP constituting the unimodal expert contains
+3×3 convolution, batch normalization and GELU nonlinear-
+ity. The two-layer MLP implementing the soft router is fully
+connected layers with GELU nonlinearity.
+More Comparisons of the SOTA Methods
+In the main manuscript, extensive experiments show that
+our approach achieves state-of-the-art performance on three
+long-term AQA benchmarks in both complete and incom-
+plete multimodal scenarios. In this section, we provide more
+detailed comparisons with state-of-the-art (SOTA) methods
+on the three benchmarks.
+Firstly, for a more detailed comparison, Table 7 presents
+the complete results under full-modality settings, which
+were visualized as bar charts in the main manuscript. We
+compare our method with SOTA unimodal (T²CR (Ke et al.
+2024), CoFInAl (Zhou et al. 2024), and ASGTN (Liu
+et al. 2025)) and multimodal (MLP-Mixer (Xia et al. 2023),
+SGN (Du et al. 2024), VATP-Net (Gedamu et al. 2025), and
+PAMFN (Zeng and Zheng 2024)) AQA methods. The re-
+sults show that our MCMoE achieves the best performance
+on all three datasets, outperforming the second-best method
+by 2.2% of SP. Corr. and 11.7% of MSE on average. This
+demonstrates the effectiveness of our proposed MCMoE in
+multimodal AQA.
+Secondly, due to space constraints, we mainly show
+the average metrics for all action/score categories under a
+given experimental setting in the main manuscript. Here, we
+present the complete comparisons with existing state-of-the-
+art methods on incomplete multimodal AQA on the three
+datasets. The experimental results in Tables 8, 9, and 10 cor-
+respond to the FS1000, Fis-V, and RG datasets, respectively.
+
+MCMoE
+(Ours)
+MoMKE
+PAMFN
+(a) Avail.:
+v
+Miss.:
+f, a
+(a) Avail.:
+v
+Miss.:
+f, a
+(b) Avail.:
+f
+Miss.:
+v, a
+(b) Avail.:
+f
+Miss.:
+v, a
+(c) Avail.:
+a
+Miss.:
+v, f
+(c) Avail.:
+a
+Miss.:
+v, f
+(d) Avail.:
+v, f
+Miss.:
+a
+(d) Avail.:
+v, f
+Miss.:
+a
+(e) Avail.:
+v, a
+Miss.:
+f
+(e) Avail.:
+v, a
+Miss.:
+f
+(f) Avail.:
+ f, a
+Miss.:
+v
+(f) Avail.:
+ f, a
+Miss.:
+v
+(g) Avail.:
+v, f, a
+(g) Avail.:
+v, f, a
+Figure 8: Comparison of scatter plots with the state-of-the-
+art multimodal AQA method PAMFN (Zeng and Zheng
+2024) and the incomplete multimodal learning method
+MoMKE (Xu, Jiang, and Liang 2024) for all modal com-
+binations on FS1000 (TES). The horizontal axis of each plot
+represents the true score and the vertical axis is the predicted
+score. The color of the scatter represents the degree of dif-
+ference between the predicted and true values.
+Please refer to the experimental results on the page fol-
+lowing the references.
+References
+Bertasius, G.; Wang, H.; and Torresani, L. 2021. Is Space-
+Time Attention All You Need for Video Understanding? In
+ICML, volume 139, 813–824.
+Bruce, X.; Liu, Y.; Chan, K. C.; and Chen, C. W. 2024.
+EGCN++: A new fusion strategy for ensemble learning in
+skeleton-based rehabilitation exercise assessment.
+IEEE
+TPAMI.
+Cai, J.; Li, Q.; Shen, Y.; Pan, J.; and Liu, W. 2024. Efficient
+Semantic Segmentation for Compressed Video. In ICRA,
+4266–4272.
+Cai, J.; Su, J.; Li, Q.; Yang, W.; Wang, S.; Zhao, T.; He, S.;
+and Liu, W. 2025. Keep the Balance: A Parameter-Efficient
+Symmetrical Framework for RGB+ X Semantic Segmenta-
+tion. In CVPR, 10587–10598.
+Cai, L.; Wang, Z.; Gao, H.; Shen, D.; and Ji, S. 2018. Deep
+adversarial learning for multi-modality missing data com-
+pletion. In ACM SIGKDD, 1158–1166.
+Carreira, J.; and Zisserman, A. 2017.
+Quo vadis, action
+recognition? a new model and the kinetics dataset. In CVPR,
+6299–6308.
+Chen, H.; Wu, S.; Wang, Z.; Yin, Y.; Jiao, Y.; Lyu, Y.; and
+Liu, Z. 2025. Causal-Inspired Multitask Learning for Video-
+Based Human Pose Estimation. In AAAI, 2052–2060.
+Ding, X.; Xu, X.; and Li, X. 2023.
+SEDSkill: Surgical
+Events Driven Method for Skill Assessment from Thoraco-
+scopic Surgical Videos. In MICCAI, 35–45.
+Du, Z.; He, D.; Wang, X.; and Wang, Q. 2024. Learning
+Semantics-Guided Representations for Scoring Figure Skat-
+ing. IEEE TMM, 26: 4987–4997.
+Fu, F.; Ai, W.; Yang, F.; Shou, Y.; Meng, T.; and Li, K.
+2025.
+SDR-GNN: spectral domain reconstruction graph
+neural network for incomplete multimodal learning in con-
+versational emotion recognition. KBS, 309: 112825.
+Gedamu, K.; Ji, Y.; Yang, Y.; Shao, J.; and Shen, H. T.
+2025. Visual-semantic Alignment Temporal Parsing for Ac-
+tion Quality Assessment. IEEE TCSVT, 35(3): 2436–2449.
+Gong, Y.; Chung, Y.-A.; and Glass, J. 2021.
+Ast: Audio
+spectrogram transformer. arXiv preprint arXiv:2104.01778.
+Huang, C.; Su, Y.; Xu, H.; and Ke, X. 2025a. Progressive
+Modality-Adaptive Interactive Network for Multi-Modality
+Image Fusion. In IJCAI, 1161–1169.
+Huang, K.; Tian, Y.; Yu, C.; and Huang, Y. 2025b. Dual-
+referenced assistive network for action quality assessment.
+Neurocomputing, 614: 128786.
+Jaiswal, M.; and Provost, E. M. 2020.
+Privacy enhanced
+multimodal neural representations for emotion recognition.
+In AAAI, 7985–7993.
+Ke, X.; Xu, H.; Lin, X.; and Guo, W. 2024. Two-path target-
+aware contrastive regression for action quality assessment.
+Inf. Sci., 664: 120347.
+Lai, X.; Ke, X.; Xu, H.; Wu, S.; and Guo, W. 2025. MSP:
+Multimodal Self-Attention Prompt Learning. IEEE TIP, 34:
+5978–5988.
+Li, Y.; Niu, Y.; Xu, H.; Da, H.; Xu, R.; and Liu, W.
+2025. IPCMoE: Integrating Perceptual Cues with Mixture-
+of-Experts for Joint Low-Light Image Enhancement and De-
+blurring. In ACM MM, 7644–7652.
+Lian, Z.; Chen, L.; Sun, L.; Liu, B.; and Tao, J. 2023. Gc-
+net: Graph completion network for incomplete multimodal
+learning in conversation. IEEE TPAMI, 45(7): 8419–8432.
+Liu, A.; Tan, Z.; Wan, J.; Liang, Y.; Lei, Z.; Guo, G.; and
+Li, S. Z. 2021.
+Face anti-spoofing via adversarial cross-
+modality translation. IEEE TIFS, 16: 2759–2772.
+
+Liu, J.; Wang, H.; Zhou, W.; Stawarz, K.; Corcoran, P.;
+Chen, Y.; and Liu, H. 2025. Adaptive Spatiotemporal Graph
+Transformer Network for Action Quality Assessment. IEEE
+TCSVT, 1–1.
+Liu, Z.; Ning, J.; Cao, Y.; Wei, Y.; Zhang, Z.; Lin, S.; and Hu,
+H. 2022. Video swin transformer. In CVPR, 3202–3211.
+Majeedi, A.; Gajjala, V. R.; GNVV, S. S. S. N.; and Li, Y.
+2024. RICAˆ 2: Rubric-Informed, Calibrated Assessment of
+Actions. In ECCV, 143–161.
+Meng, X.; Sun, K.; Xu, J.; He, X.; and Shen, D. 2024. Multi-
+modal modality-masked diffusion network for brain MRI
+synthesis with random modality missing. IEEE TMI, 43(7):
+2587–2598.
+Pan, J.-H.; Gao, J.; and Zheng, W.-S. 2019. Action assess-
+ment by joint relation graphs. In ICCV, 6331–6340.
+Park, Y.; Woo, S.; Lee, S.; Nugroho, M. A.; and Kim, C.
+2023. Cross-modal alignment and translation for missing
+modality action recognition. CVIU, 236: 103805.
+Shi, J.; Shang, C.; Sun, Z.; Yu, L.; Yang, X.; and Yan,
+Z. 2024. PASSION: Towards Effective Incomplete Multi-
+Modal Medical Image Segmentation with Imbalanced Miss-
+ing Rates. In ACM MM, 456–465.
+Shi, Y.; Paige, B.; Torr, P.; et al. 2019. Variational mixture-
+of-experts autoencoders for multi-modal deep generative
+models. In NeurIPS, 15692–15703.
+Vaswani, A.; Shazeer, N.; Parmar, N.; Uszkoreit, J.; Jones,
+L.; Gomez, A. N.; Kaiser, Ł.; and Polosukhin, I. 2017. At-
+tention is all you need. In NeurIPS, 5998–6008.
+Wang, S.; Yang, D.; Zhai, P.; Chen, C.; and Zhang, L. 2021.
+Tsa-net: Tube self-attention network for action quality as-
+sessment. In ACM MM, 4902–4910.
+Wang, Y.; Li, Y.; and Cui, Z. 2023.
+Incomplete
+multimodality-diffused emotion recognition.
+In NeurIPS,
+17117–17128.
+Wei, S.; Luo, C.; and Luo, Y. 2023.
+MMANet: Margin-
+aware distillation and modality-aware regularization for in-
+complete multimodal learning. In CVPR, 20039–20049.
+Woo, S.; Lee, S.; Park, Y.; Nugroho, M. A.; and Kim, C.
+2023. Towards good practices for missing modality robust
+action recognition. In AAAI, 2776–2784.
+Wu, J.; Huang, Y.; Gao, M.; Niu, Y.; Chen, Y.; and Wu, Q.
+2025a. Enhanced Visual-Semantic Interaction with Tailored
+Prompts for Pedestrian Attribute Recognition.
+In CVPR,
+9570–9579.
+Wu, M.; and Goodman, N. 2018.
+Multimodal genera-
+tive models for scalable weakly-supervised learning.
+In
+NeurIPS, 5580–5590.
+Wu, S.; Chen, H.; Yin, Y.; Hu, S.; Feng, R.; Jiao, Y.; Yang,
+Z.; and Liu, Z. 2024a. Joint-Motion Mutual Learning for
+Pose Estimation in Video. In ACM MM, 8962–8971.
+Wu, S.; Liu, Z.; Zhang, B.; Zimmermann, R.; Ba, Z.; Zhang,
+X.; and Ren, K. 2024b. Do as I Do: Pose Guided Human
+Motion Copy. IEEE TDSC, 21(6): 5293–5307.
+Wu, S.; Zhang, H.; Liu, Z.; Chen, H.; and Jiao, Y. 2025b.
+Enhancing Human Pose Estimation in Internet of Things
+via Diffusion Generative Models. IEEE Internet Things J.,
+12(10): 13556–13567.
+Xia, J.; Zhuge, M.; Geng, T.; Fan, S.; Wei, Y.; He, Z.; and
+Zheng, F. 2023.
+Skating-mixer: Long-term sport audio-
+visual modeling with mlps. In AAAI, 2901–2909.
+Xu, A.; Zeng, L.-A.; and Zheng, W.-S. 2022. Likert scoring
+with grade decoupling for long-term action assessment. In
+CVPR, 3232–3241.
+Xu, C.; Fu, Y.; Zhang, B.; Chen, Z.; Jiang, Y.-G.; and Xue,
+X. 2019. Learning to score figure skating sport videos. IEEE
+TCSVT, 30(12): 4578–4590.
+Xu, H.; Ke, X.; Li, Y.; Xu, R.; Wu, H.; Lin, X.; and Guo,
+W. 2024a. Vision-Language Action Knowledge Learning
+for Semantic-Aware Action Quality Assessment. In ECCV,
+423–440.
+Xu, H.; Ke, X.; Wu, H.; Xu, R.; Li, Y.; and Guo, W. 2025a.
+Language-Guided Audio-Visual Learning for Long-Term
+Sports Assessment. In CVPR, 23967–23977.
+Xu, H.; Ke, X.; Wu, H.; Xu, R.; Li, Y.; Xu, P.; and Guo, W.
+2025b. DanceFix: An Exploration in Group Dance Neat-
+ness Assessment Through Fixing Abnormal Challenges of
+Human Pose. In AAAI, 8869–8877.
+Xu, H.; Wu, H.; Ke, X.; Li, Y.; Xu, R.; and Guo, W. 2025c.
+Quality-Guided Vision-Language Learning for Long-Term
+Action Quality Assessment. IEEE Transactions on Multi-
+media, 27: 7326–7339.
+Xu, J.; Rao, Y.; Yu, X.; Chen, G.; Zhou, J.; and Lu, J. 2022.
+Finediving: A fine-grained dataset for procedure-aware ac-
+tion quality assessment. In CVPR, 2949–2958.
+Xu, J.; Rao, Y.; Zhou, J.; and Lu, J. 2024b. Procedure-aware
+action quality assessment: Datasets and performance evalu-
+ation. IJCV, 132(12): 6069–6090.
+Xu, J.; Yin, S.; and Peng, Y. 2025. Human-Centric Fine-
+Grained Action Quality Assessment. IEEE TPAMI, 47(8):
+6242–6255.
+Xu, J.; Yin, S.; Zhao, G.; Wang, Z.; and Peng, Y. 2024c.
+FineParser: A Fine-grained Spatio-temporal Action Parser
+for Human-centric Action Quality Assessment. In CVPR,
+14628–14637.
+Xu, W.; Jiang, H.; and Liang, X. 2024. Leveraging Knowl-
+edge of Modality Experts for Incomplete Multimodal Learn-
+ing. In ACM MM, 438–446.
+Yoon, J.; Jordon, J.; and Schaar, M. 2018. Gain: Missing
+data imputation using generative adversarial nets. In ICML,
+5689–5698.
+Zeng, L.; and Zheng, W. 2024. Multimodal Action Quality
+Assessment. IEEE TIP, 33: 1600–1613.
+Zeng, L.-A.; Hong, F.-T.; Zheng, W.-S.; Yu, Q.-Z.; Zeng,
+W.; Wang, Y.-W.; and Lai, J.-H. 2020.
+Hybrid dynamic-
+static context-aware attention network for action assessment
+in long videos. In ACM MM, 2526–2534.
+Zhang, S.; Bai, S.; Chen, G.; Chen, L.; Lu, J.; Wang, J.; and
+Tang, Y. 2024a. Narrative Action Evaluation with Prompt-
+Guided Multimodal Interaction. In CVPR, 18430–18439.
+
+Zhang, Y.; Chen, Z.; Guo, L.; Xu, Y.; Hu, B.; Liu, Z.; Zhang,
+W.; and Chen, H. 2024b. Mixture of modality knowledge ex-
+perts for robust multi-modal knowledge graph completion.
+CoRR, abs/2405.16869.
+Zhou, K.; Cai, R.; Ma, Y.; Tan, Q.; Wang, X.; Li, J.; Shum,
+H. P. H.; Li, F. W. B.; Jin, S.; and Liang, X. 2023a. A Video-
+Based Augmented Reality System for Human-in-the-Loop
+Muscle Strength Assessment of Juvenile Dermatomyositis.
+IEEE TVCG, 29(5): 2456–2466.
+Zhou, K.; Li, J.; Cai, R.; Wang, L.; Zhang, X.; and Liang,
+X. 2024. CoFInAl: Enhancing Action Quality Assessment
+with Coarse-to-Fine Instruction Alignment. In IJCAI, 1771–
+1779.
+Zhou, K.; Ma, Y.; Shum, H. P.; and Liang, X. 2023b. Hi-
+erarchical graph convolutional networks for action quality
+assessment. IEEE TCSVT, 33(12): 7749–7763.
+
+Testing Condition (Spearman Correlation (↑) / Mean Square Error (↓))
+Types
+Methods
+{v, f}
+{v, a}
+{f, a}
+{v}
+{f}
+{a}
+Average
+{v, f, a}
+♡MLP-Mixer*
+0.749 / 156.74
+0.366 / 380.63
+0.015 / 573.44
+0.286 / 675.68
+0.276 / 578.91
+0.457 / 429.42
+0.386 / 465.80
+0.877 / 86.54
+♡PAMFN*
+0.827 / 388.21
+0.351 / 397.58
+0.434 / 360.58
+0.677 / 607.79
+0.011 / 788.74
+0.241 / 372.50
+0.474 / 485.90
+0.874 / 78.42
+♣ActionMAE*
+0.853 / 144.66
+0.833 / 410.45
+0.862 / 138.01
+0.800 / 328.56
+0.778 / 118.02
+0.762 / 256.94
+0.818 / 232.77
+0.881 / 107.07
+♠GCNet*
+0.813 / 152.23
+0.776 / 142.94
+0.801 / 138.07
+0.763 / 152.35
+0.785 / 183.14
+0.741 / 233.26
+0.781 / 167.00
+0.820 / 129.12
+♠IMDer*
+0.847 / 122.66
+0.827 / 179.14
+0.833 / 137.80
+0.737 / 213.77
+0.742 / 123.89
+0.805 / 194.01
+0.802 / 161.88
+0.853 / 159.36
+♠MoMKE*
+0.843 / 108.53
+0.853 / 146.50
+0.854 / 141.05
+0.813 / 234.39
+0.788 / 126.05
+0.798 / 158.86
+0.827 / 152.56
+0.876 / 97.97
+♠SDR-GNN*
+0.861 / 98.49
+0.807 / 153.41
+0.856 / 120.34
+0.810 / 164.88
+0.811 / 177.01
+0.778 / 141.63
+0.823 / 142.63
+0.872 / 88.89
+MCMoE(Ours)
+0.883 / 77.76
+0.901 / 73.64
+0.878 / 81.65
+0.879 / 84.11
+0.835 / 129.01
+0.858 / 91.90
+0.874 / 89.68
+0.900 / 71.69
+TES
+∆SOT A
+↑2.6% / ↓21.0% ↑5.6% / ↓48.5%
+↑1.9% / ↓32.2%
+↑8.1% / ↓44.8%
+↑3.0% / ↑9.3%
+↑6.6% / ↓42.2%
+↑5.7% / ↓37.1%
+↑2.2% / ↓8.6%
+♡MLP-Mixer*
+0.714 / 17.95
+0.571 / 32.46
+0.609 / 26.25
+0.717 / 24.71
+0.595 / 26.09
+0.005 / 37.12
+0.565 / 27.43
+0.799 / 12.47
+♡PAMFN*
+0.720 / 25.49
+0.496 / 26.08
+0.612 / 26.54
+0.722 / 24.39
+0.618 / 24.98
+0.266 / 42.26
+0.590 / 28.29
+0.854 / 9.72
+♣ActionMAE*
+0.734 / 25.13
+0.530 / 35.87
+0.613 / 42.83
+0.745 / 23.18
+0.440 / 26.44
+0.314 / 28.72
+0.583 / 30.36
+0.784 / 16.04
+♠GCNet*
+0.674 / 21.87
+0.691 / 20.68
+0.477 / 28.16
+0.675 / 26.05
+0.476 / 28.68
+0.401 / 34.32
+0.577 / 26.63
+0.692 / 20.61
+♠IMDer*
+0.688 / 28.16
+0.602 / 16.55
+0.608 / 30.15
+0.594 / 34.39
+0.592 / 29.67
+0.466 / 27.89
+0.595 / 27.80
+0.725 / 19.53
+♠MoMKE*
+0.784 / 20.65
+0.791 / 17.68
+0.528 / 27.83
+0.745 / 27.95
+0.314 / 30.86
+0.481 / 28.28
+0.638 / 25.54
+0.800 / 17.61
+♠SDR-GNN*
+0.794 / 20.83
+0.773 / 19.07
+0.614 / 28.77
+0.694 / 30.18
+0.491 / 26.84
+0.479 / 30.43
+0.658 / 26.02
+0.801 / 19.73
+MCMoE(Ours)
+0.836 / 8.92
+0.866 / 7.72
+0.699 / 18.99
+0.830 / 9.49
+0.619 / 24.03
+0.584 / 20.66
+0.759 / 14.97
+0.872 / 7.43
+PCS
+∆SOT A
+↑5.3% / ↓50.3% ↑9.5% / ↓53.4% ↑13.8% / ↓27.7% ↑11.4% / ↓59.1% ↑0.2% / ↓3.8% ↑21.4% / ↓25.9% ↑15.3% / ↓41.4% ↑2.1% / ↓23.6%
+♡MLP-Mixer*
+0.711 / 0.64
+0.313 / 3.59
+0.678 / 0.88
+0.545 / 2.39
+0.530 / 0.96
+0.041 / 3.97
+0.498 / 2.07
+0.803 / 0.68
+♡PAMFN*
+0.533 / 0.82
+0.664 / 11.80
+0.624 / 0.74
+0.746 / 5.45
+0.448 / 0.91
+0.040 / 12.31
+0.538 / 5.34
+0.848 / 0.54
+♣ActionMAE*
+0.694 / 0.52
+0.750 / 0.47
+0.474 / 0.88
+0.689 / 0.55
+0.491 / 1.06
+0.449 / 0.92
+0.605 / 0.73
+0.788 / 0.46
+♠GCNet*
+0.723 / 1.45
+0.577 / 0.87
+0.449 / 1.76
+0.670 / 1.15
+0.304 / 1.11
+0.322 / 1.46
+0.527 / 1.30
+0.727 / 0.61
+♠IMDer*
+0.761 / 2.48
+0.640 / 0.82
+0.548 / 2.20
+0.752 / 0.54
+0.279 / 2.40
+0.282 / 1.23
+0.575 / 1.61
+0.776 / 0.53
+♠MoMKE*
+0.789 / 0.43
+0.702 / 0.99
+0.392 / 1.87
+0.767 / 0.97
+0.288 / 1.17
+0.335 / 1.50
+0.584 / 1.16
+0.794 / 0.40
+♠SDR-GNN*
+0.777 / 0.40
+0.760 / 0.80
+0.418 / 2.07
+0.759 / 0.68
+0.488 / 1.33
+0.308 / 1.74
+0.617 / 1.17
+0.799 / 0.44
+MCMoE(Ours)
+0.844 / 0.32
+0.876 / 0.27
+0.687 / 0.63
+0.841 / 0.31
+0.563 / 0.76
+0.541 / 0.82
+0.755 / 0.52
+0.876 / 0.26
+SS
+∆SOT A
+↑7.0% / ↓20.0% ↑15.3% / ↓42.6% ↑1.3% / ↓14.9%
+↑9.6% / ↓42.6% ↑6.2% / ↓16.5% ↑20.5% / ↓10.9% ↑22.4% / ↓28.8% ↑3.3% / ↓35.0%
+♡MLP-Mixer*
+0.689 / 0.89
+0.252 / 1.11
+0.578 / 1.65
+0.590 / 0.91
+0.555 / 1.19
+0.056 / 1.40
+0.478 / 1.19
+0.805 / 0.38
+♡PAMFN*
+0.615 / 1.25
+0.565 / 1.08
+0.545 / 1.18
+0.677 / 1.04
+0.600 / 0.86
+0.116 / 1.32
+0.537 / 1.12
+0.866 / 0.58
+♣ActionMAE*
+0.778 / 0.64
+0.787 / 0.56
+0.456 / 0.94
+0.746 / 0.61
+0.412 / 1.18
+0.442 / 1.07
+0.632 / 0.83
+0.798 / 0.48
+♠GCNet*
+0.661 / 0.92
+0.742 / 0.77
+0.394 / 1.97
+0.691 / 0.80
+0.293 / 1.76
+0.459 / 1.02
+0.562 / 1.21
+0.748 / 0.46
+♠IMDer*
+0.759 / 0.76
+0.797 / 0.53
+0.492 / 0.87
+0.760 / 0.59
+0.308 / 1.02
+0.461 / 0.92
+0.629 / 0.78
+0.792 / 0.44
+♠MoMKE*
+0.779 / 0.45
+0.799 / 0.42
+0.443 / 1.01
+0.781 / 0.45
+0.302 / 1.27
+0.413 / 0.99
+0.626 / 0.77
+0.795 / 0.41
+♠SDR-GNN*
+0.774 / 0.83
+0.758 / 0.67
+0.414 / 1.61
+0.728 / 0.76
+0.323 / 1.08
+0.445 / 0.99
+0.604 / 0.99
+0.807 / 0.57
+MCMoE(Ours)
+0.841 / 0.33
+0.891 / 0.26
+0.702 / 0.56
+0.850 / 0.31
+0.629 / 0.70
+0.513 / 0.85
+0.767 / 0.50
+0.882 / 0.26
+TR
+∆SOT A
+↑8.0% / ↓26.7% ↑11.5% / ↓38.1% ↑21.5% / ↓35.6% ↑8.8% / ↓31.1% ↑4.8% / ↓18.6% ↑11.3% / ↓7.6% ↑21.4% / ↓35.1% ↑1.8% / ↓31.6%
+♡MLP-Mixer*
+0.687 / 1.02
+0.677 / 3.13
+0.396 / 1.94
+0.468 / 4.09
+0.459 / 1.84
+0.217 / 1.87
+0.502 / 2.31
+0.838 / 0.79
+♡PAMFN*
+0.780 / 1.26
+0.742 / 1.02
+0.524 / 3.00
+0.764 / 1.08
+0.496 / 3.16
+0.034 / 1.61
+0.601 / 1.85
+0.857 / 0.69
+♣ActionMAE*
+0.784 / 0.64
+0.781 / 0.72
+0.378 / 1.19
+0.783 / 0.65
+0.292 / 1.34
+0.255 / 2.02
+0.595 / 1.09
+0.790 / 0.72
+♠GCNet*
+0.774 / 0.66
+0.796 / 0.68
+0.406 / 1.17
+0.752 / 1.67
+0.388 / 1.12
+0.367 / 1.24
+0.617 / 1.09
+0.793 / 0.83
+♠IMDer*
+0.743 / 1.03
+0.803 / 0.62
+0.459 / 1.16
+0.764 / 0.72
+0.306 / 1.37
+0.427 / 1.15
+0.619 / 1.01
+0.800 / 0.75
+♠MoMKE*
+0.774 / 0.79
+0.809 / 0.62
+0.451 / 1.09
+0.777 / 0.74
+0.282 / 1.35
+0.416 / 1.14
+0.626 / 0.95
+0.803 / 0.67
+♠SDR-GNN*
+0.805 / 0.67
+0.794 / 0.69
+0.428 / 1.13
+0.775 / 1.51
+0.403 / 1.19
+0.374 / 1.20
+0.636 / 1.06
+0.817 / 0.79
+MCMoE(Ours)
+0.828 / 0.59
+0.871 / 0.52
+0.703 / 0.94
+0.830 / 0.59
+0.616 / 1.01
+0.536 / 1.13
+0.754 / 0.80
+0.872 / 0.52
+PE
+∆SOT A
+↑2.9% / ↓7.8%
+↑7.7% / ↓16.1% ↑34.2% / ↓13.8%
+↑6.0% / ↓9.2%
+↑24.2% / ↓9.8% ↑25.5% / ↓0.9% ↑18.6% / ↓15.8% ↑1.8% / ↓22.4%
+♡MLP-Mixer*
+0.732 / 0.72
+0.660 / 1.96
+0.452 / 2.93
+0.779 / 1.03
+0.511 / 1.24
+0.153 / 2.18
+0.580 / 1.68
+0.784 / 0.36
+♡PAMFN*
+0.802 / 0.57
+0.763 / 1.42
+0.606 / 1.68
+0.773 / 1.39
+0.506 / 1.81
+0.233 / 1.40
+0.648 / 1.38
+0.834 / 0.53
+♣ActionMAE*
+0.768 / 0.45
+0.805 / 0.44
+0.442 / 0.88
+0.770 / 0.46
+0.397 / 1.13
+0.412 / 1.03
+0.633 / 0.73
+0.803 / 0.49
+♠GCNet*
+0.729 / 0.47
+0.775 / 0.48
+0.486 / 1.25
+0.729 / 0.49
+0.279 / 1.50
+0.361 / 1.64
+0.592 / 0.97
+0.764 / 0.58
+♠IMDer*
+0.745 / 0.58
+0.782 / 0.43
+0.440 / 0.91
+0.753 / 0.67
+0.288 / 1.14
+0.408 / 0.95
+0.604 / 0.78
+0.774 / 0.45
+♠MoMKE*
+0.821 / 0.48
+0.841 / 0.45
+0.439 / 0.93
+0.819 / 0.54
+0.312 / 1.17
+0.433 / 0.95
+0.664 / 0.75
+0.841 / 0.39
+♠SDR-GNN*
+0.758 / 0.45
+0.798 / 0.35
+0.515 / 1.03
+0.769 / 0.51
+0.401 / 1.21
+0.389 / 0.93
+0.636 / 0.75
+0.789 / 0.55
+MCMoE(Ours)
+0.850 / 0.31
+0.887 / 0.26
+0.710 / 0.81
+0.848 / 0.34
+0.610 / 1.03
+0.575 / 0.85
+0.773 / 0.60
+0.886 / 0.26
+CO
+∆SOT A
+↑3.5% / ↓31.1% ↑5.5% / ↓25.7%
+↑17.2% / ↓8.0%
+↑3.5% / ↓26.1% ↑19.4% / ↓8.8% ↑32.8% / ↓8.6% ↑16.4% / ↓17.8% ↑5.4% / ↓27.8%
+♡MLP-Mixer*
+0.766 / 0.96
+0.769 / 1.12
+0.459 / 3.31
+0.790 / 0.65
+0.332 / 2.88
+0.272 / 3.02
+0.606 / 1.99
+0.809 / 0.70
+♡PAMFN*
+0.721 / 2.09
+0.780 / 0.65
+0.561 / 0.80
+0.600 / 3.57
+0.606 / 2.97
+0.077 / 3.51
+0.590 / 2.27
+0.846 / 0.64
+♣ActionMAE*
+0.783 / 0.57
+0.795 / 0.43
+0.461 / 0.87
+0.779 / 0.49
+0.286 / 1.13
+0.446 / 0.92
+0.630 / 0.73
+0.798 / 0.45
+♠GCNet*
+0.709 / 1.33
+0.777 / 0.59
+0.408 / 2.44
+0.557 / 4.18
+0.442 / 1.57
+0.337 / 2.85
+0.561 / 2.16
+0.787 / 0.53
+♠IMDer*
+0.751 / 0.74
+0.690 / 1.10
+0.493 / 0.93
+0.674 / 1.28
+0.304 / 0.96
+0.414 / 1.76
+0.576 / 1.13
+0.776 / 0.60
+♠MoMKE*
+0.784 / 0.66
+0.810 / 0.53
+0.485 / 0.96
+0.783 / 0.67
+0.327 / 1.28
+0.479 / 0.97
+0.648 / 0.84
+0.811 / 0.51
+♠SDR-GNN*
+0.732 / 0.86
+0.800 / 0.57
+0.508 / 1.09
+0.685 / 0.79
+0.458 / 1.08
+0.440 / 1.27
+0.625 / 0.94
+0.822 / 0.43
+MCMoE(Ours)
+0.823 / 0.37
+0.877 / 0.29
+0.724 / 0.61
+0.831 / 0.35
+0.602 / 0.74
+0.562 / 0.80
+0.759 / 0.53
+0.874 / 0.29
+IN
+∆SOT A
+↑5.0% / ↓35.1% ↑8.3% / ↓32.6% ↑29.1% / ↓23.8% ↑5.2% / ↓28.6% ↓0.7% / ↓22.9% ↑17.3% / ↓13.0% ↑17.1% / ↓27.4% ↑3.3% / ↓32.6%
+Table 8: omparisons with the state-of-the-art on the FS1000 under incomplete multimodal scenarios. v, f, and a refer to the
+RGB, flow, and audio modalities. “Average” denotes the average result of all six incomplete multimodal combinations. The red
+bold / black bold indicate the best / second-best results. * indicates our reimplementation. ∆SOT A means the performance
+increase or decrease of our MCMoE compared to the best competing methods. ♡, ♣, and ♠mean the evaluated method sources
+for multimodal AQA, incomplete multimodal action recognition, and incomplete multimodal emotion recognition.
+
+Testing Condition (Spearman Correlation (↑) / Mean Square Error (↓))
+Types
+Methods
+{v, f}
+{v, a}
+{f, a}
+{v}
+{f}
+{a}
+Average
+{v, f, a}
+♡MLP-Mixer*
+0.662 / 52.37
+0.547 / 81.73
+0.533 / 38.49
+0.445 / 86.26
+0.471 / 40.38
+0.143 / 113.84
+0.480 / 68.85
+0.707 / 20.06
+♡PAMFN
+0.717 / 58.53
+0.429 / 79.98
+0.666 / 169.36
+0.382 / 140.72
+0.647 / 162.33
+0.202 / 89.21
+0.530 / 116.69
+0.754 / 22.50
+♣ActionMAE*
+0.627 / 43.24
+0.652 / 39.91
+0.482 / 32.07
+0.590 / 61.39
+0.387 / 30.51
+0.456 / 37.13
+0.539 / 40.71
+0.645 / 23.60
+♠GCNet*
+0.678 / 19.67
+0.601 / 28.03
+0.553 / 27.16
+0.601 / 27.20
+0.619 / 24.50
+0.390 / 43.17
+0.580 / 28.29
+0.656 / 21.43
+♠IMDer*
+0.689 / 21.80
+0.589 / 28.30
+0.510 / 30.28
+0.576 / 30.45
+0.549 / 23.06
+0.345 / 41.30
+0.551 / 29.20
+0.632 / 23.04
+♠MoMKE*
+0.680 / 19.88
+0.620 / 26.70
+0.554 / 25.58
+0.600 / 32.74
+0.555 / 33.12
+0.455 / 38.65
+0.581 / 29.45
+0.676 / 21.87
+♠SDR-GNN*
+0.678 / 19.01
+0.618 / 27.21
+0.569 / 26.26
+0.619 / 26.41
+0.579 / 30.84
+0.417 / 40.16
+0.585 / 28.31
+0.672 / 20.83
+MCMoE(Ours)
+0.719 / 16.54
+0.708 / 21.51
+0.677 / 23.38
+0.677 / 21.09
+0.633 / 19.99
+0.508 / 38.24
+0.659 / 23.46
+0.759 / 18.50
+TES
+∆SOT A
+↑0.3% / ↓13.0% ↑8.6% / ↓19.4% ↑1.7% / ↓8.6% ↑9.4% / ↓20.1% ↓2.2% / ↓13.3% ↑11.4% / ↑3.0% ↑12.6% / ↓17.1% ↑0.7% / ↓7.8%
+♡MLP-Mixer*
+0.789 / 8.31
+0.736 / 11.67
+0.608 / 15.43
+0.747 / 10.66
+0.614 / 13.97
+0.486 / 20.67
+0.676 / 13.45
+0.824 / 7.88
+♡PAMFN
+0.862 / 8.45
+0.811 / 28.71
+0.574 / 51.63
+0.810 / 29.14
+0.584 / 58.51
+0.079 / 83.12
+0.679 / 43.26
+0.872 / 8.16
+♣ActionMAE*
+0.768 / 23.84
+0.702 / 15.32
+0.655 / 19.04
+0.641 / 18.75
+0.570 / 19.22
+0.514 / 21.44
+0.649 / 19.60
+0.745 / 11.07
+♠GCNet*
+0.788 / 20.05
+0.705 / 14.61
+0.632 / 16.28
+0.724 / 14.54
+0.584 / 14.71
+0.516 / 26.37
+0.668 / 17.76
+0.735 / 12.43
+♠IMDer*
+0.797 / 8.58
+0.718 / 17.01
+0.621 / 17.70
+0.755 / 20.44
+0.679 / 29.71
+0.462 / 22.63
+0.685 / 19.34
+0.762 / 11.00
+♠MoMKE*
+0.813 / 9.81
+0.747 / 14.50
+0.723 / 13.66
+0.753 / 13.57
+0.734 / 11.81
+0.537 / 19.54
+0.727 / 13.81
+0.805 / 12.74
+♠SDR-GNN*
+0.811 / 10.97
+0.733 / 14.04
+0.664 / 15.51
+0.748 / 14.11
+0.707 / 12.15
+0.536 / 24.11
+0.709 / 15.15
+0.784 / 12.06
+MCMoE(Ours)
+0.878 / 5.49
+0.847 / 7.76
+0.770 / 11.44
+0.831 / 9.19
+0.753 / 10.79
+0.603 / 18.84
+0.795 / 10.58
+0.880 / 5.81
+PCS
+∆SOT A
+↑1.9% / ↓33.9% ↑4.4% / ↓33.5% ↑6.5% / ↓16.3% ↑2.6% / ↓13.8% ↑2.6% / ↓8.6% ↑12.3% / ↓3.6% ↑9.4% / ↓21.3% ↑0.9% / ↓26.3%
+Table 9: omparisons with the state-of-the-art on the Fis-V under incomplete multimodal scenarios. v, f, and a refer to the RGB,
+flow, and audio modalities. “Average” denotes the average result of all six incomplete multimodal combinations. The red bold
+/ black bold indicate the best / second-best results. * indicates our reimplementation. ∆SOT A means the performance increase
+or decrease of our MCMoE compared to the best competing methods. ♡, ♣, and ♠mean the evaluated method sources for
+multimodal AQA, incomplete multimodal action recognition, and incomplete multimodal emotion recognition.
+Testing Condition (Spearman Correlation (↑) / Mean Square Error (↓))
+Types
+Methods
+{v, f}
+{v, a}
+{f, a}
+{v}
+{f}
+{a}
+Average
+{v, f, a}
+♡MLP-Mixer*
+0.662 / 9.52
+0.618 / 9.78
+0.464 / 11.33
+0.561 / 13.76
+0.439 / 14.81
+0.359 / 18.33
+0.525 / 12.92
+0.694 / 8.09
+♡PAMFN
+0.739 / 6.90
+0.702 / 8.24
+0.236 / 149.42
+0.624 / 8.77
+0.343 / 144.22
+0.157 / 144.63
+0.501 / 77.03
+0.757 / 6.24
+♣ActionMAE*
+0.650 / 8.13
+0.554 / 10.30
+0.530 / 10.50
+0.615 / 9.91
+0.471 / 9.45
+0.367 / 12.37
+0.537 / 10.11
+0.613 / 8.77
+♠GCNet*
+0.627 / 8.02
+0.621 / 7.70
+0.485 / 9.21
+0.598 / 8.39
+0.446 / 10.37
+0.422 / 15.44
+0.539 / 9.85
+0.616 / 7.31
+♠IMDer*
+0.646 / 7.80
+0.596 / 8.27
+0.527 / 8.36
+0.623 / 9.10
+0.532 / 8.53
+0.333 / 12.33
+0.550 / 9.06
+0.654 / 7.30
+♠MoMKE*
+0.652 / 7.74
+0.592 / 9.09
+0.603 / 7.30
+0.524 / 10.75
+0.564 / 7.83
+0.442 / 11.75
+0.566 / 9.08
+0.670 / 7.47
+♠SDR-GNN*
+0.646 / 6.94
+0.611 / 8.49
+0.624 / 8.11
+0.631 / 9.01
+0.473 / 8.48
+0.439 / 12.08
+0.576 / 8.85
+0.643 / 7.64
+MCMoE(Ours)
+0.803 / 6.05
+0.732 / 7.45
+0.643 / 7.96
+0.719 / 8.28
+0.639 / 8.22
+0.327 / 11.70
+0.664 / 8.28
+0.806 / 5.66
+Ball
+∆SOT A
+↑8.7% / ↓12.3% ↑4.3% / ↓3.2%
+↑3.0% / ↑9.0%
+↑13.9% / ↓1.3% ↑13.3% / ↑5.0% ↓26.0% / ↓0.4% ↑15.3% / ↓6.4% ↑6.5% / ↓9.3%
+♡MLP-Mixer*
+0.768 / 4.96
+0.468 / 9.86
+0.331 / 10.91
+0.714 / 5.96
+0.599 / 7.15
+0.131 / 17.82
+0.535 / 9.44
+0.736 / 6.13
+♡PAMFN
+0.747 / 5.36
+0.582 / 8.48
+0.362 / 115.32
+0.703 / 8.01
+0.519 / 127.63
+0.320 / 118.72
+0.559 / 63.92
+0.825 / 7.45
+♣ActionMAE*
+0.778 / 5.25
+0.590 / 8.36
+0.433 / 9.43
+0.734 / 16.29
+0.436 / 14.37
+0.117 / 8.49
+0.549 / 10.37
+0.668 / 6.35
+♠GCNet*
+0.781 / 5.51
+0.628 / 7.36
+0.477 / 10.43
+0.729 / 6.36
+0.622 / 8.68
+0.026 / 11.96
+0.581 / 8.38
+0.709 / 7.11
+♠IMDer*
+0.792 / 5.43
+0.615 / 7.61
+0.405 / 9.66
+0.729 / 5.43
+0.634 / 8.05
+0.069 / 12.34
+0.579 / 8.09
+0.698 / 5.80
+♠MoMKE*
+0.783 / 4.65
+0.589 / 8.14
+0.509 / 11.23
+0.731 / 7.12
+0.654 / 10.05
+0.056 / 12.31
+0.589 / 8.92
+0.709 / 5.91
+♠SDR-GNN*
+0.797 / 4.47
+0.647 / 7.14
+0.492 / 10.13
+0.751 / 6.07
+0.641 / 8.34
+0.047 / 12.62
+0.602 / 8.13
+0.730 / 6.60
+MCMoE(Ours)
+0.820 / 4.10
+0.720 / 5.58
+0.633 / 7.22
+0.773 / 4.85
+0.657 / 6.82
+0.005 / 14.25
+0.648 / 7.14
+0.815 / 4.22
+Clubs
+∆SOT A
+↑2.9% / ↓8.3% ↑11.3% / ↓21.8% ↑24.4% / ↓23.4% ↑2.9% / ↓10.7%
+↑0.5% / ↓4.6% ↓98.4% / ↑67.8% ↑7.6% / ↓11.7% ↓1.2% / ↓27.2%
+♡MLP-Mixer*
+0.701 / 8.08
+0.682 / 27.60
+0.468 / 9.84
+0.641 / 7.35
+0.525 / 13.97
+0.122 / 13.29
+0.546 / 13.35
+0.787 / 7.68
+♡PAMFN
+0.767 / 5.42
+0.733 / 10.08
+0.524 / 201.27
+0.702 / 7.53
+0.600 / 202.95
+0.042 / 204.06
+0.598 / 105.22
+0.836 / 5.21
+♣ActionMAE*
+0.737 / 5.64
+0.692 / 7.02
+0.595 / 12.44
+0.736 / 7.28
+0.504 / 11.53
+0.202 / 33.18
+0.602 / 12.85
+0.771 / 6.25
+♠GCNet*
+0.734 / 6.75
+0.646 / 7.61
+0.549 / 19.14
+0.756 / 10.16
+0.520 / 115.81
+0.222 / 17.82
+0.595 / 29.55
+0.732 / 5.93
+♠IMDer*
+0.769 / 4.31
+0.690 / 6.99
+0.517 / 9.84
+0.761 / 8.38
+0.531 / 11.93
+0.333 / 18.98
+0.622 / 10.07
+0.754 / 6.41
+♠MoMKE*
+0.780 / 4.93
+0.756 / 6.60
+0.602 / 10.12
+0.779 / 7.34
+0.552 / 12.83
+0.354 / 13.36
+0.661 / 9.20
+0.789 / 6.01
+♠SDR-GNN*
+0.765 / 6.85
+0.681 / 7.02
+0.572 / 11.44
+0.778 / 8.68
+0.541 / 13.49
+0.331 / 14.34
+0.633 / 10.30
+0.763 / 5.76
+MCMoE(Ours)
+0.796 / 6.59
+0.809 / 5.66
+0.771 / 8.62
+0.757 / 6.53
+0.643 / 10.53
+0.490 / 12.06
+0.726 / 8.33
+0.845 / 5.62
+Hoop
+∆SOT A
+↑2.1% / ↑52.9% ↑7.0% / ↓14.2% ↑28.1% / ↓12.4% ↓2.8% / ↓10.3%
+↑7.2% / ↓8.7%
+↑38.4% / ↓9.3%
+↑9.8% / ↓9.5%
+↑1.1% / ↑7.9%
+♡MLP-Mixer*
+0.787 / 6.37
+0.663 / 9.11
+0.644 / 8.65
+0.690 / 11.62
+0.676 / 9.88
+0.350 / 14.61
+0.651 / 10.04
+0.789 / 8.03
+♡PAMFN
+0.798 / 9.42
+0.381 / 128.67
+0.622 / 22.44
+0.594 / 135.13
+0.449 / 18.95
+-0.004 / 139.33
+0.511 / 75.66
+0.846 / 7.67
+♣ActionMAE*
+0.719 / 10.17
+0.635 / 9.37
+0.609 / 9.18
+0.658 / 16.15
+0.651 / 9.79
+0.309 / 13.31
+0.609 / 11.33
+0.759 / 6.69
+♠GCNet*
+0.785 / 6.46
+0.656 / 9.13
+0.688 / 8.22
+0.702 / 7.55
+0.660 / 9.18
+0.210 / 15.57
+0.642 / 9.35
+0.786 / 5.46
+♠IMDer*
+0.757 / 6.57
+0.676 / 7.34
+0.759 / 7.33
+0.667 / 7.45
+0.673 / 8.88
+0.073 / 13.12
+0.635 / 8.45
+0.776 / 5.96
+♠MoMKE*
+0.809 / 5.42
+0.662 / 8.07
+0.764 / 8.92
+0.695 / 8.48
+0.699 / 9.60
+0.180 / 15.57
+0.667 / 9.34
+0.800 / 5.34
+♠SDR-GNN*
+0.801 / 6.07
+0.676 / 6.86
+0.729 / 7.91
+0.730 / 7.33
+0.686 / 8.91
+0.217 / 15.07
+0.668 / 8.69
+0.810 / 5.41
+MCMoE(Ours)
+0.861 / 4.57
+0.841 / 4.64
+0.730 / 8.80
+0.811 / 5.33
+0.706 / 8.79
+0.256 / 14.78
+0.741 / 7.82
+0.890 / 3.89
+Ribbon
+∆SOT A
+↑6.4% / ↓15.7% ↑24.4% / ↓32.4% ↓4.5% / ↑20.1% ↑11.1% / ↓27.3% ↑1.0% / ↓1.0% ↓26.9% / ↑12.7% ↑10.9% / ↓7.5% ↑5.2% / ↓27.2%
+Table 10: omparisons with the state-of-the-art on the RG under incomplete multimodal scenarios. v, f, and a refer to the RGB,
+flow, and audio modalities. “Average” denotes the average result of all six incomplete multimodal combinations. The red bold
+/ black bold indicate the best / second-best results. * indicates our reimplementation. ∆SOT A means the performance increase
+or decrease of our MCMoE compared to the best competing methods. ♡, ♣, and ♠mean the evaluated method sources for
+multimodal AQA, incomplete multimodal action recognition, and incomplete multimodal emotion recognition.

@@ -1,0 +1,1387 @@
+Unmasking Airborne Threats: Guided-Transformers for Portable Aerosol Mass
+Spectrometry⋆
+Kyle M. Regana,∗, Michael McLoughlinc, Wayne A. Brydenc, Gonzalo R. Arceb
+aCenter for Bioinformatics and Computational Biology, University of Delaware, Newark, 19713, Delaware, United States
+bDepartment of Electrical and Computer Engineering, University of Delaware, Newark, 19716, Delaware, United States
+cZeteo Tech Inc., Sykesville, 21784, Maryland, United States
+Abstract
+Matrix Assisted Laser Desorption/Ionization Mass Spectrometry (MALDI-MS) is essential for biomolecular analysis
+in human health protection, offering precise identification of pathogens through unique mass spectral signatures to
+support environmental monitoring and disease prevention. However, traditional MALDI-MS relies on labor-intensive
+sample preparation and multi-shot spectral averaging, confining it to laboratory settings and hindering its application
+in dynamic, real-world settings critical for public health surveillance. These limitations are amplified in emerging
+portable aerosol MALDI-MS systems, where autonomous sampling produces noisy, single-shot spectra from a mix-
+ture of aerosol analytes, demanding novel computational detection methods to safeguard against infectious diseases.
+To address this, we introduce the Mass Spectral Dictionary-Guided Transformer (MS-DGFormer): a computational
+framework that processes raw, minimally prepared mass spectral data for accurate multi-label classification, directly
+enhancing real-time pathogen monitoring. Utilizing a transformer architecture to model long-range dependencies
+in spectral time-series, MS-DGFormer incorporates a novel dictionary encoder with Singular Value Decomposition
+(SVD)-derived denoised side information, empowering the model to extract vital biomolecular patterns from noisy
+single-shot spectra with high reliability. This approach achieves robust spectral identification in aerosol samples,
+supporting autonomous, real-time analysis in field-deployable systems. By reducing preprocessing requirements,
+MS-DGFormer facilitates portable MALDI-MS deployment in high-risk areas like public spaces, transforming
+human health strategies through proactive environmental monitoring, early detection of biological threats, and rapid
+response to mitigate disease spread.
+Preprint Notice. This manuscript is a preprint and has been submitted to *Computer in Biology and Medicine*.
+Keywords: Pathogen Detection, Mass Spectrometry, Machine Learning, Bioaerosols, Public Health,
+1. Introduction
+Matrix Assisted Laser Desorption/Ionization Mass
+Spectrometry (MALDI-MS) has evolved to be a power-
+ful tool to characterize and identify large biomolecules.
+MALDI-MS is a “soft ionization” method and typically
+utilizes a light absorbing matrix that, when mixed with
+an analytical sample and illuminated with a pulsed laser
+⋆This preprint has been submitted to Computer in Biology and
+Medicine.
+∗Corresponding author
+Email addresses: regank@udel.edu (Kyle M. Regan ),
+mike.mcloughlin@zeteotech.com (Michael McLoughlin),
+wayne.bryden@zeteotech.com (Wayne A. Bryden),
+arce@udel.edu (Gonzalo R. Arce)
+light, will create ions from biomolecules to include pro-
+teins, peptides, and lipids [1]. For biodefense applica-
+tions, a major advantage of MALDI is that it can be
+combined with Time-of-Flight analyzers [2], which do
+not require a complex fluidic system and can be minia-
+turized for field applications [3]. To achieve high mass
+resolution and accuracy, multiple methods such as de-
+layed extraction and ion reflectors have been developed
+to compensate for energy spread during the ionization
+process [4]. Because MALDI-MS uses a sample de-
+posited onto a substrate, deconvolution of a mixed sam-
+ple can be quite complex and has motivated the devel-
+opment of single particle methods [5], [6]. A portable
+prototype MALDI-MS, introduced in “digitalMALDI:
+arXiv:2511.17446v1  [cs.LG]  21 Nov 2025
+
+A Single-Particle–Based Mass Spectrometric Detection
+System for Biomolecules” [7] demonstrated the ability
+to produce spectra from environmental aerosol parti-
+cles. The spectrometer autonomously samples aerosol
+particles, irradiates each by an ultraviolet laser creating
+ions from individual particles, then analyzes the ions
+by time-of-flight. The portability of this spectrometer
+enables in-field measurements for rapid identification
+of possible biological threats such as airborne bacteria,
+fungi, viruses, toxins, or nonvolatile chemicals.
+This research is driven by the urgent need to pro-
+tect communities from natural and engineered biolog-
+ical threats, such as infectious outbreaks or bioterror-
+ism. By enabling rapid detection of airborne pathogens,
+our work could curb disease spread and enhance pub-
+lic safety. Envision deploying compact devices in high-
+traffic areas like airports, transit systems, or stadiums
+for continuous, real-time scanning, to transform how we
+safeguard against environmental biological risks.
+At the heart of this approach lies the near autonomous
+sampling of atmospheric *aerosols, a technique that en-
+ables continuous monitoring without relying on exten-
+sive human intervention. Yet, creating a threat detection
+system that is robust, accurate, and precise is not easy.
+False positives risk sparking unwarranted alarm, while
+false negatives could allow a silent spread of infec-
+tion. Unlike controlled laboratory conditions with care-
+fully prepared samples, environmental sampling cap-
+tures a complex mixture of aerosol particles—primarily
+harmless background particles—making it challenging
+to identify the unique mass spectra of pathogens. This
+work tackles these challenges, laying the groundwork
+for a reliable system capable of safeguarding society
+from biological threats.
+MALDI-MS is already FDA-cleared for identifying
+bacterial and fungal isolates in clinical labs, capable
+of distinguishing over 10,000 strains. While extensive
+research applies MALDI-MS to biological specimens,
+most focus on meticulously prepared lab samples re-
+quiring days of culturing or separation.
+Even then,
+single-laser-shot spectra are noisy, so multi-shot aver-
+aging is standard to boost signal-to-noise ratio before
+database matching.
+This works well in clinics where shots target the same
+analyte, but environmental sampling involves diverse
+particles per shot. Averaging can blur features, as shown
+in Fig. 1, which depicts a batch of spectra from 80 dust
+aerosols mixed with five spectra each from Bacillus glo-
+bigii, E. coli, Insulin, and Ubiquitin.
+Averaging as-
+sumes uniform analytes [8][9], but mixtures yield mud-
+dled spectra (Fig. 1A). A single-shot method is essential
+to isolate individual analyte spectra (Fig. 1B-E).
+To enhance single-shot analysis, we leverage the low-
+rank structure of spectra using Singular Value Decom-
+position (SVD), a mathematical technique for denois-
+ing data by identifying dominant patterns. For a noise-
+less spectrum z ∈Rl and noisy version s = z + ϵ, we
+form a matrix S ∈Rn×l from n spectra of the same
+class. SVD decomposes S = UΣVT, where U ∈Rn×n
+and VT ∈Rl×l are orthogonal matrices and Σ ∈Rn×l
+is a diagonal matrix containing the singular values in
+descending order. The matrix S has a low-rank struc-
+ture, with r ≪min (n, l), indicating that z resides within
+an r-dimensional subspace of Rl spanned by the first r
+columns of V [10]. By retaining the top r singular val-
+ues (with r ≪min(n, l)) approximates the signal sub-
+space, filtering out noise [11].
+This assumes uniform analytes, so for mixtures, we
+build a dictionary of denoised sub-dictionaries per an-
+alyte class via SVD, creating a union of subspaces as
+side information for feature extraction. We then employ
+a transformer encoder, a machine learning model adept
+at processing sequences like spectral peaks with posi-
+tional context, to generate embeddings for input spectra
+and dictionaries separately. This separation allows spec-
+tral embeddings to extract biologically relevant features
+from the dictionary during training, and dictionary re-
+moval during inference, halving parameters for faster,
+deployable predictions crucial for field use in biological
+monitoring.
+2. Methods
+2.1. Aerosol MALDI-MS Data Acquisition
+In this study, aerosol particles were ionized us-
+ing ultraviolet (349 nm) laser pulses in a portable
+MALDI-Time-of-Flight (ToF) mass spectrometer, as
+detailed in our prototype system [7].
+Each mass
+spectrum is represented as an intensity vector s
+=
+[s1, s2, . . . , sl]T ∈Rl paired with a corresponding m
+z vec-
+tor m = [m1, m2, . . . , ml]T ∈Rl. For batches of n parti-
+cles, the spectra form a matrix:
+S =
+
+s11
+s12
+. . .
+s1l
+s21
+s22
+. . .
+s2l
+...
+...
+...
+...
+sn1
+sn2
+. . .
+snl
+
+∈Rn×l
+.
+Since m is identical across measurements (unless ma-
+chine parameters change), a two-dimensional m matrix
+is unnecessary.
+Due to the prototype phase, our data collection is lim-
+ited to a handful of targets. To simulate field-expected
+2
+
+Figure 1: (A) Top: An example batch of particles containing 80% dust particulate, with the remaining 20% evenly divided among the four biological
+markers. Each row represents a mass spectrum, and each column corresponds to a mass-to-charge ratio value. Bottom: The column-wise average.
+(B) Top: The heatmap of rows from (A) corresponding to B. globigii spectra. Bottom: the average spectrum. (C), (D), (E) same format as (A) but
+with E. coli, Insulin, and Ubiquitin, respectively.
+spectral profiles for environmental pathogen monitor-
+ing, we selected bacterial (multi-peak, noisy), protein
+(few-peak), and non-biological (peakless) types. Data
+included two bacteria (Bacillus globigii, Escherichia
+coli), two proteins (insulin, ubiquitin) as positives, and
+Arizona Road Dust as negative background. For safety,
+samples were aerosolized and collected in a lab set-
+ting, mimicking real-world conditions. Data acquisi-
+tions were performed in a class-specific manner, with
+m
+z restricted to the range [500, 10, 000] Da. Each class
+produces a matrix of raw spectra, S, which is split into
+80% for training and 20% for testing. Consequently,
+our model is trained on individual raw spectra, simulat-
+ing single-shot detection, to ensure robust performance
+in field scenarios where a matrix of spectra may con-
+tain multiple, co-occurring classes. Table 1 summarizes
+spectra counts and the training/testing split.
+Table 1: Number of Spectra per Class
+Class
+# of Samples
+Training Samples
+Test Samples
+A.R.Dust
+630
+504
+126
+B.globigii
+1500
+1200
+300
+E.coli
+1500
+1200
+300
+Insulin
+1400
+1120
+280
+Ubiquitin
+1500
+1200
+300
+Total
+6530
+5224
+1306
+2.2. Sparse Signal Processing
+A mass spectrum s can be modeled by a linear com-
+bination of columns, referred to as atoms, from a dictio-
+nary matrix D ∈Rl×α, such that s = Dx, where x ∈Rα
+is a sparse coefficient vector (||x||0 ≪α). This synthe-
+sis model leverages sparsity to denoise and extract rel-
+evant features from noisy spectra, crucial for real-time
+3
+
+pathogen detection in complex aerosol signatures.
+Common dictionaries include orthogonal bases like
+Cosines, Fourier, or Wavelets (where l
+=
+α), but
+over-complete dictionaries ((l
+≪
+α)) [12] allow
+more flexible representations, advancing applications
+in compressive sensing[13], dictionary learning[14],
+medical imaging[15], classification[16], and object
+detection[17].
+These approaches often solve the relaxed convex op-
+timization problem known as Basis Pursuit (BP)[18]:
+min
+x
+||x||1 s.t. s = Dx
+(1)
+where the sparse vector, x, encodes rich task-specific
+information. This motivated data-driven dictionaries, as
+demonstrated in the Face Recognition imaging problem
+[19], where training samples form columns based on
+the principle that high-dimensional data from the same
+class lie in a low-dimensional subspace. A test sam-
+ple is thus represented as a sparse linear combination of
+training samples via Sparse Representation Classifica-
+tion (SRC)[19]. SRC has been applied to many applica-
+tions such as image classification [20], denoising [21],
+and deep learning [22].
+2.3. Proposed Dictionary Construction
+Inspired by SRC, we constructed the dictionary D ∈
+Rl×α using α training spectra evenly distributed across
+c classes (α/c per class), arranged column-wise with
+same-class spectra grouped into sub-dictionaries Di
+(i = 1, . . . , c). Thus, Di = [di,1, . . . , di,α/c], and D =
+[D1, . . . , Dc].
+This class-specific clustering exploits the low-rank
+structure inherent in spectra from the same biomolecu-
+lar class (rank r ≪α/c). To denoise and capture essen-
+tial features, we applied Singular Value Decomposition
+(SVD) to each sub-dictionary:
+˜Di = UrΣrVT
+r ,
+r ≪α
+c ,
+where Ur ∈Rl×r and Vr ∈Rα/c×r are orthogonal matri-
+ces of left and right singular vectors, and Σr ∈Rr×r con-
+tains the top r singular values. The denoised dictionary
+was then formed by stacking these low-rank approxima-
+tions:
+˜D = [ ˜D1, ˜D2, . . . , ˜Dc] ∈Rα×l.
+This creates a union of rank-r subspaces that efficiently
+represent key biomolecular patterns in noisy spectra, en-
+hancing multi-label classification for airborne pathogen
+0.5
+1.6
+3.2
+5.5
+8.3
+0
+50
+100
+150
+Ion Intensity (mV)
+B.globigii
+3.2
+3.6
+4.0
+4.4
+0
+20
+40
+Zoomed In
+0
+10
+20
+30
+40
+50
+Index
+2 × 10
+3
+3 × 10
+3
+4 × 10
+3
+Singular Value (log)
+Singular Values
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+0.5
+1.6
+3.2
+5.5
+8.3
+m/z (kDa)
+0
+50
+100
+150
+Ion Intensity (mV)
+Rank 2 Approx.
+3.2
+3.6
+4.0
+4.4
+m/z (kDa)
+0
+20
+40
+Zoomed In
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Figure 2: Top: Heatmap of 200 mass spectra from Bacillus globigii.
+Middle: A low-rank approximation via the Singular Value Decompo-
+sition (SVD) with rank r = 2. Bottom: The first 50 singular values
+from the SVD plotted on a y-axis log-scale.
+detection in public health scenarios. The approach’s ef-
+ficacy is shown in Fig. 2, where SVD on Bacillus glo-
+bigii data reveals the first two singular values captur-
+ing primary features, with subsequent values as noise; a
+rank-2 approximation sharpens peaks and reduces noise
+for clearer identification.
+2.4. Transformers for Time-Series and Mass Spectrom-
+etry
+Transformers, first introduced for natural language
+processing [23], have been extended to time-series anal-
+ysis, including forecasting [24, 25, 26] and classifica-
+tion [27, 28]. In mass spectrometry (MS), they support
+peptide/protein identification and protein structure pre-
+diction [29, 30], capitalizing on long-range dependen-
+cies among spectral peaks. Typically, these models use
+denoised, high-resolution spectra from lab instruments,
+with m
+z values as positional inputs. Recent MS advance-
+ments include PowerNovo [31], an ensemble of trans-
+former and BERT models for tandem MS peptide se-
+quencing, and a semi-autoregressive transformer frame-
+work for rapid sequencing [32]. These methods acceler-
+ate proteomics but often rely on preprocessed data, con-
+trasting our focus on raw, noisy single-shot spectra from
+4
+
+Figure 3: The input spectral embedding layer creates a sequence of
+small overlapping patches from the mass spectrum s through one-
+dimensional convolution filters, transforming the 1D spectrum to 2D
+sequence.
+portable aerosol systems for real-time pathogen detec-
+tion in environmental health monitoring.
+2.5. Proposed MS-DGFormer Architecture
+The Mass Spectral Dictionary-Guided Transformer
+(MS-DGFormer) processes raw input spectra and de-
+noised dictionary spectra through separate embedding
+and encoding pathways, enabling robust multi-label
+classification of biomolecular patterns in noisy aerosol
+data for real-time public health monitoring (see Fig. 4
+for model overview).
+Input Embedding. To handle the intensity vector s ∈Rl
+and corresponding
+m
+z values m ∈Rl, we adapt the
+"patchification" from Vision Transformers [33] for 1D
+spectra. Overlapping patches are extracted via 1D con-
+volution with kernel size ρ, stride γ, and h output chan-
+nels (hidden dimension), yielding N = l−ρ
+γ + 1 embed-
+dings:
+pi,j =
+ρ−1
+X
+k=0
+wj,ksγi+k + b j,
+forming matrix P ∈RN×h. This convolutional method
+captures local peaks amid noise, outperforming linear
+projections by reducing edge artifacts and enhancing ro-
+bustness (Fig. 3). Transformer attention is permutation-
+invariant, focusing on pairwise token relationships with-
+out inherent order. Positional embeddings address this
+by encoding sequence positions, using methods like
+fixed sinusoids [23], rotary embeddings (RoPE) [34], or
+learnable parameters. In mass spectrometry, the m
+z vec-
+tor m provides intrinsic positional data from time-of-
+flight. For overlapping patches projected to dimension
+h, we patch m similarly: Mi = m[γ(i−1)+1:γ(i−1)+ρ] ∈Rρ,
+forming M ∈RN×ρ. A linear projection maps these to
+h:
+Mpe = MWT + b ∈RN×h,
+with W ∈Rh×ρ and b ∈Rh. Adding Mpe to spectral
+embeddings P integrates intensity and m
+z positions, al-
+lowing learned extrapolation to h for better biomolecu-
+lar pattern recognition in noisy spectra.
+Dictionary Embeddings. Similarly, each spectrum in
+the denoised dictionary ˜D ∈Rα×l (Section 2.3) un-
+dergoes convolutional embedding, producing patch se-
+quences ˜dp
+i
+∈RN×h for i = 1, . . . , α, stacked into
+˜Dp ∈Rα×N×h. The same positional embeddings Mpe
+are added to consistently encode m
+z positions.
+Sepa-
+rate learnable weights for input and dictionary spectra
+distinguish noisy from denoised features, allowing tar-
+geted extraction of clean biomolecular signatures for
+improved detection accuracy.
+Encoder Blocks. Both input and dictionary pathways
+employ transformer encoder blocks based on Vaswani
+et al. [23], featuring multi-head self-attention, an MLP,
+layer normalization, and residuals for gradient stability.
+For the input, embeddings P (with added positional em-
+beddings) are projected to queries (Q), keys (K), and
+values (V):
+Q = PWQ,
+K = PWK,
+V = PWV,
+with scaled dot-product attention per head and concate-
+nation via WO. This captures long-range spectral de-
+pendencies essential for noisy data. For the dictionary,
+embeddings ˜Dp (with added positional embeddings)
+are processed per sub-dictionary ˜Dp
+i
+∈R
+α
+c ×N×h. For
+each sub-dictionary, a learnable sequence ˜dL
+i ∈R1×N×h
+is concatenated, the resulting tensor is permuted to
+RN×( α
+c +1)×h, and attention is applied slice-wise across se-
+quences at each patch position (Fig. 5). The c sequence
+tokens gather information globally throughout the sub-
+dictionary, providing aggregated side information for
+the input encoder’s output. Keeping the input and dic-
+tionary encoders separate ensures denoised priors guide
+classification without contaminating raw signals, facili-
+tating precise pathogen identification for biodefense ap-
+plications.
+Selection Attention. Following encoding, the input se-
+quence (shape N × 1 × h) selectively extracts features
+from the c aggregated sub-dictionary sequences (shape
+N ×c×h) via a multi-head cross-attention layer (Fig. 6).
+The input acts as queries, with sub-dictionaries as keys
+and values, enabling class-specific feature integration
+5
+
+Figure 4: The Mass Spectral Dictionary-Guided Transformer (MS-DGFormer) architecture. (A) Input embedding module. (B) Dictionary Embed-
+ding Module. (C) Selection Attention Mechanism. (D) Final peak prediction layer.
+(e.g., prioritizing the relevant low-rank subspace for a
+given pathogen). A residual connection preserves orig-
+inal input information, enhancing model stability and
+accuracy in noisy environmental samples.
+Peak Prediction. Known peak locations in training
+classes form ground-truth yi ∈RN, where yi,j = 1 if
+class i has a peak at patch j. An MLP processes the
+model output Pout ∈RN×h for binary predictions:
+ˆy = sigmoid
+
+ReLU(PoutW(1) + b(1))W(2) + b(2)
+,
+with W(1) ∈Rh×ϕ, b(1) ∈Rϕ, W(2) ∈Rϕ×1, and b(2) ∈R.
+This outputs probabilities per patch, supporting multi-
+label classification for rapid biomolecular threat detec-
+tion in aerosols. The final predicted class ˆc is the one
+with maximum cosine similarity to ground truth vectors
+yc for c ∈{1, . . . , 5}:
+ˆc = arg max
+c
+ˆy · yc
+∥ˆy∥∥yc∥.
+Training optimizes binary cross-entropy between ˆy and
+y, while class predictions inform evaluation metrics: ac-
+curacy, precision, recall, and F1 score.
+3. Results
+3.1. Competing Models
+To evaluate our model’s performance, we bench-
+marked it against recurrent baselines and a dictionary-
+ablated variant, focusing on sequence modeling for
+noisy mass spectra in pathogen detection. To ensure
+a fair comparison, we strive to maintain consistency in
+model parameters where possible; however, due to ar-
+chitectural differences, exact parameter matching is not
+always feasible.
+Recurrent Neural Network (RNN)[35], Long Short-
+Term Memory (LSTM)[36], and Bidirectional LSTM
+(biLSTM)[37] models retained our input embedding
+and peak prediction layers for consistent processing and
+output. Positional embeddings were omitted, as RNNs
+and LSTMs inherently capture sequential order. The
+dictionary, input encoder, dictionary encoder, and se-
+lection attention were replaced with RNN, LSTM, or
+biLSTM blocks. This evaluation directly compares re-
+current vs.
+transformer-based sequence handling in
+biomolecular classification.
+To assess the dictionary’s impact in our model, we
+trained a model without the dictionary embedding,
+encoder, and selection attention (MS-Former), which
+halved the total parameter count.
+Essentially this
+model is a standard transformer. For fair comparison,
+we trained variants with 3 input encoder layers (MS-
+Former-3; 4.13M parameters) to match our core archi-
+tecture and 7 layers (MS-Former-7) to approximate to-
+tal parameters (8-9M across models), isolating the dic-
+tionary’s role in enhancing accuracy for environmental
+health applications.
+3.2. Model and Dictionary Hyperparameters
+Experiments used convolutional embedding window
+size ρ = 100 and overlap γ = 50 (50%), yielding
+N = 1765 patches for spectra of length l = 88300. Cor-
+responding m
+z values were patched identically. Patches
+mapped to hidden dimension h = 256. Multi-head at-
+tention (nheads = 8, dk = 32) was applied in the in-
+6
+
+Figure 5: The processing of a sub-dictionary is illustrated by exemplifying the first low-rank approximated sub-dictionary ˜D1 ∈R
+α
+c ×l. The
+spectra [˜d1,1, . . . , ˜d1, α
+c ]T are transformed into token sequences via convolution with overlapping kernels and h output channels, yielding ˜Dp
+1 ∈
+R
+α
+c ×N×h, where each kernel encodes temporal peak information. A learnable token sequence ˜dL
+1 ∈R1×N×h is concatenated with ˜Dp
+1, forming
+˜Dp
+1 ∈R( α
+c +1)×N×h. This tensor is permuted to RN×( α
+c +1)×h, for attention to be computed independently across the N temporal positions. The
+attention mechanism aggregates information across the α
+c + 1 sequences at each temporal location. Finally, the learnable tokens ˜dL
+1, now enriched
+with contextual information, are extracted to represent the aggregated temporal information.
+Figure 6: An input spectral sequence P ∈RN×h is first encoded by
+the input encoder. Each sub-dictionary’s sequences are permuted to
+RN×( α
+c +1)×h, processed by the dictionary encoder, and the respective
+learnable token sequences (˜dL
+i ) are extracted. Multi-head attention
+selects dictionary features for each temporal position.
+put encoder’s self-attention, dictionary encoder’s slice
+attention, and selection attention. Attention MLP inter-
+mediate dimension was 2048; peak prediction MLP was
+ϕ = 512. Both encoders had L = 3 layers. Dictionary
+D comprised α = 32 sequences from 4 positive classes
+(B. globigii, E. coli, insulin, ubiquitin; 8 per class), ex-
+cluding dust. Limited by single 4070 GPU memory, it
+was denoised via sub-dictionary SVD with rank r = 2,
+providing efficient side information for robust pathogen
+detection in portable systems.
+Our model and competing models were trained for
+300 epochs with batch size of 8, a learning rate of
+10−4 with 10% warm-up, and a cosine annealing de-
+cay.
+There were two types of regularization imple-
+mented: neuron dropouts placed similarly to [23] with
+0.1 dropout probability, and binary cross-entropy label
+smoothing. This type of label smoothing treats each 1
+as 0.9 and each 0 as 0.1, so the model does not become
+overconfident in its peak predictions.
+3.3. MS-DGFormer Evaluation
+We begin by examining the results obtained from
+MS-DGFormer before proceeding to a comparison with
+competing models. To understand the features captured
+in each sub-dictionary, we visualize the attention maps
+derived from each learnable sequence, ˜dL
+i . Figure 7 dis-
+plays the average attention scores, revealing that patches
+containing spectral peaks receive higher attention scores
+compared to those without. Thus, ˜dL
+i effectively focuses
+on the peaks found within the ith sub-dictionary.
+Next, to gain insight into how the model processes
+the raw overlapping m
+z values and maps them to its em-
+bedding space, we extract and visualize the positional
+embeddings. For visualization purposes, we flatten both
+the raw m
+z values and the corresponding positional em-
+beddings. Specifically, the raw m
+z matrix M ∈R1765×100
+is flattened to a vector in R176500, and the positional
+embeddings P ∈R1765×256 are flattened to a vector in
+R451840. We then plot these flattened vectors, focusing
+on the segments corresponding to the first 10 patches,
+as illustrated in Fig. 8. From this figure, it is evident
+that the model preserves the structural characteristics of
+the raw m
+z values, such as their overlapping nature (with
+50% overlap between adjacent patches), while mapping
+them to a higher-dimensional embedding space (from
+100 to 256 dimensions per patch).
+Additionally, the
+amplitude of the positional embeddings is adjusted to
+a range of approximately ±5, aligning with the intensity
+scales observed in the mass spectra. To demonstrate the
+alignment between the positional embeddings and the
+7
+
+0
+1000
+0
+2
+4
+6
+dL
+1
+0
+1000
+0
+2
+4
+6
+dL
+2
+0
+1000
+0
+2
+4
+6
+dL
+3
+0
+1000
+0
+2
+4
+6
+dL
+4
+0.025
+0.050
+0.075
+0.100
+0.125
+0.150
+0.175
+0.200
+Learned Dictionary Sequences' Attention Maps
+Sub-Dictionary Sequence Number
+Patch Number
+Figure 7: Each class’s sub-dictionary attention maps averaged across
+heads are shown. The larger attention scores are located at each class’s
+true peak locations showing the dictionary’s efficacy for feature ex-
+traction.
+original m
+z values, we normalize both to a common am-
+plitude range and plot them on a uniform linear space.
+Fig. 9 illustrates this alignment for each patch, high-
+lighting the model’s ability to encode positional infor-
+mation effectively.
+Finally, we visualize the attention maps within the
+selection attention head to understand how the model
+selects features from the sub-dictionaries based on the
+input spectrum class. To achieve this, we input a repre-
+sentative bacteria, protein, and noise spectrum into the
+model and extract the attention map from the selection
+attention head for visualization. Fig. 9 shows the at-
+tention scores across the sub-dictionaries for each input
+spectrum. From this figure, it is evident that for each
+input spectrum, the attention scores are significantly
+higher for the sub-dictionary corresponding to the same
+class. However, for the Arizona Road Dust class, the
+attention scores are more dispersed and lower in mag-
+nitude. This behavior is expected because the Arizona
+Road Dust spectra primarily contain noise peaks, which
+do not align well with the denoised spectra represented
+in the sub-dictionaries.
+3.4. Competing Model Comparisons
+Having demonstrated the spectral features captured
+by MS-DGFormer, we now proceed to evaluate its
+performance against competing models using standard
+classification metrics. Each model is assessed on the
+M1
+M500
+M1000
+M1500
+0.0
+0.5
+1.0
+Normalized m
+z
+Flattened M (overlapping m
+z )
+Mpe
+1
+Mpe
+500
+Mpe
+1000
+Mpe
+1500
+5
+0
+5
+Embedded m
+z
+Flattened Mpe (Pos. Embed.)
+M1
+M3
+M5
+M7
+M9
+0.001
+0.002
+First 10 patches
+Mpe
+1
+Mpe
+3
+Mpe
+5
+Mpe
+7
+Mpe
+9
+0.01
+0.00
+0.01
+First 10 learned patches
+1
+3
+5
+7
+9
+m
+z  Patches for M and Mpe
+0.002
+0.000
+0.002
+Normalized and Aligned on Uniform Linspace
+Mpe
+1 : 10
+M1 : 10
+Figure 8: Top: The overlapping patches of m
+z values are flattened to
+RNρ (left). M is embedded via a learnable linear layer producing Mpe
+(right). Middle: The first 10 patches of M and Mpe. Bottom: The
+patches are normalized and plotted on the same linspace.
+test set, with performance measured using micro and
+macro accuracy, precision, recall, and F1-score. Table
+III presents the macro metrics, where MS-DGFormer
+achieves the highest scores across all metrics, despite
+having fewer parameters than most other models, with
+the exception of MS-Former-3. Notably, the biLSTM-
+based model outperforms MS-Former-7 but still falls
+short of MS-DGFormer’s performance.
+For brevity, we focus on the micro F1-score in our
+analysis, as it effectively balances the trade-off between
+false positives and false negatives, which is critical for
+classification tasks. Table IV displays the micro F1-
+scores for each class, with MS-DGFormer consistently
+achieving the highest F1-score across all classes.
+In
+contrast, the other models exhibit significant perfor-
+mance degradation on the Arizona Road Dust class.
+This is particularly concerning because dust-like parti-
+cles are commonly encountered in environmental con-
+ditions, and misclassifying them as biological agents
+could result in a high rate of false alarms.
+3.5. Computational Efficiency
+Real-time field analysis demands rapid processing
+of continuous spectral streams, where both parameter
+count and hardware requirements are critical. Our de-
+sign improves efficiency by separating the dictionary
+embedding/encoder from the input embedding/encoder.
+8
+
+Figure 9: Top: E.coli input spectrum and the attention map from the
+selection attention mechanism. The attention scores are larger for
+E.coli, capturing the learning of the selection mechanism. Middle:
+Ubiquitin input spectrum and its corresponding selection attention
+map. Bottom: Arizona Road Dust and its corresponding selection
+attention map showing no dominant features selected from a single
+class.
+The dictionary sequences remain constant during train-
+ing and are encoded independently of the input spec-
+trum. Only the learned sequence per sub-dictionary is
+used: α sequences enter the dictionary encoder during
+training, but only c sequences are passed to the selection
+attention head.
+Because
+the
+dictionary
+input
+is
+spectrum-
+independent, we precompute and store the c learned
+sub-dictionary sequences,
+removing the dictionary
+embedding layer, dictionary encoder, and dictionary
+itself from the inference model. This yields an efficient
+variant, MS-DGFormer-E, where only the pre-trained
+weights of the remaining components are loaded. The
+c sequences are stored in memory and fed directly into
+the selection attention head, cutting parameters from
+8.36 × 106 to 4.39 × 106 without performance loss.
+This architecture also scales efficiently. Adding more
+sequences to sub-dictionaries during training does not
+Table 2: Macro Metrics Across All Classes.
+Model
+Macro Metrics
+Accuracy
+Precision
+Recall
+F1
+Params
+RNN-6
+0.560
+0.832
+0.560
+0.491
+9.52M
+LSTM-4
+0.679
+0.821
+0.679
+0.641
+9.50M
+BiLSTM-6
+0.939
+0.916
+0.939
+0.915
+9.48M
+MS-Former-3
+0.709
+0.845
+0.709
+0.664
+4.13M
+MS-Former-7
+0.862
+0.876
+0.862
+0.824
+9.39M
+MS-DGFormer
+0.983
+0.982
+0.983
+0.982
+8.36M
+Table 3: Micro F1 Scores For Each Class
+Model
+A.R.Dust
+B.globigii
+E.coli
+Insulin
+Ubiq.
+RNN-6
+0.278
+0.045
+0.408
+0.795
+0.926
+LSTM-4
+0.331
+0.623
+0.374
+0.906
+0.972
+BiLSTM-6
+0.736
+0.926
+0.954
+0.976
+0.983
+MS-Former-3
+0.369
+0.328
+0.880
+0.787
+0.952
+MS-Former-7
+0.553
+0.666
+0.984
+0.921
+0.994
+MS-DGFormer
+0.949
+0.991
+0.979
+0.987
+0.994
+affect inference time, as the number of sequences used
+at inference, c, remains fixed.
+If θ new classes are
+added, the training dictionary expands to α
+c θ + α se-
+quences, yet inference still requires only c+θ sequences,
+with c ≪α
+c .
+We evaluated inference speed and spectral throughput
+on batches of size 1, 4, and 8, averaging 100 runs after
+10 warm-up runs. As shown in Table V, MS-DGFormer-
+E achieves nearly a 2× increase in mean inference speed
+and more than a 2× increase in throughput over the full
+MS-DGFormer. The only model with comparable infer-
+ence time is MS-Former-3, due to its similar parameter
+count, but its classification performance is significantly
+lower. While results are hardware-specific, the relative
+efficiency gains should generalize across platforms.
+4. Discussion
+We have introduced an approach capable of classify-
+ing individual noisy mass spectra without the need to
+collect several spectra of the same class to create an
+averaged spectrum. The mass spectra are turned into
+sequences of small overlapping patches enabling atten-
+tion mechanisms to capture peak locations. Although,
+this alone is not enough to accurately classify the spec-
+tral input due to intense noise. We notice that if we
+do have a batch of spectra all from the same class, the
+SVD is able to significantly reduce noise and reveal true
+spectral peaks. However, it is unlikely this will nat-
+urally occur in the environment. We construct a dic-
+tionary composed of training samples from each class,
+9
+
+Table 4: Inference Performance Metrics for Different Models and Batch Sizes
+Model
+Batch Size 1
+Batch Size 4
+Batch Size 8
+Mean (ms) ↓
+Std (ms) ↓
+Spectra/s ↑
+Mean (ms) ↓
+Std (ms) ↓
+Spectra/s ↑
+Mean (ms) ↓
+Std (ms) ↓
+Spectra/s ↑
+RNN-6
+125.32
+3.36
+7.98
+156.30
+4.03
+25.59
+221.37
+5.94
+36.14
+LSTM-4
+108.62
+3.31
+9.21
+116.619
+4.79
+34.30
+194.51
+6.79
+41.13
+BiLSTM-6
+156.38
+2.56
+6.39
+263.82
+1.46
+15.16
+223.67
+4.18
+35.77
+MS-Former-3
+11.88
+2.55
+84.15
+34.70
+3.31
+115.27
+62.87
+4.91
+127.25
+MS-Former-7
+23.46
+2.32
+42.63
+74.31
+4.18
+53.83
+141.19
+3.08
+56.66
+MS-DGFormer
+72.27
+3.76
+13.84
+95.66
+2.85
+41.81
+127.17
+2.58
+62.91
+MS-DGFormer-E
+12.31
+1.67
+81.23
+35.98
+3.70
+111.16
+66.33
+3.92
+120.60
+clustered together to resemble sub-dictionaries, and per-
+form the SVD on the sub-dictionaries to be used as side-
+information. One learnable (randomly initialized) se-
+quence is concatenated to each sub-dictionary to capture
+features for their respective sub-dictionary for both ef-
+fectiveness and efficiency. Further, our model processes
+the input spectrum and dictionary through separate en-
+coders allowing the features to be learned indepen-
+dently, with another attention head capable of selecting
+specific information from the dictionary. In this man-
+ner, only the learned dictionary sequences are required
+for inference, and the dictionary components can be re-
+moved from the model. This significantly improves in-
+ference speed and spectral throughput since nearly half
+of the model parameters reside in the dictionary compo-
+nents. Finally, our MS-DGFormer is compared against
+competing sequential models and achieves the highest
+micro and macro classification metrics with drastically
+faster inference metrics.
+Overall, our proposed architecture, MS-DGFormer,
+addresses several challenges that arise when transition-
+ing MALDI-MS systems from laboratory to environ-
+mental settings. Traditional MALDI-MS workflows re-
+quire extensive sample preparation and pre-processing;
+our approach eliminates much of this burden through
+autonomous aerosol sampling, shifting the workload
+to computational post-processing and machine learning
+inference. Rather than relying on multi-shot spectral
+averaging to obtain clean spectra, we leverage SVD-
+denoised sub-dictionaries to provide rich side informa-
+tion for accurate classification of raw, minimally pro-
+cessed spectra.
+False positive classification is a particular challenge
+in environmental sampling, where negative classes such
+as dust are abundant. MS-DGFormer demonstrates ro-
+bust performance in these scenarios, effectively mitigat-
+ing misclassification.
+Our results highlight the potential of real-time
+pathogen detection using portable aerosol MALDI-MS
+systems, paving the way for field-deployable solutions
+that can transform environmental monitoring, biological
+threat detection, and efforts to reduce disease spread.
+Declaration of competing interest
+W.B., and M.M. have competing interests. W.B. is
+the President and CEO of Zeteo Tech, Inc. M.M. is the
+Vice President of Research and CTO at Zeteo Tech, Inc.
+Acknowledgments
+This work was supported in part by the National In-
+stitute of Health under award number T32GM142603
+and in part by Zeteo Tech Inc. Due to privacy or ethi-
+cal restrictions, the data from the study is only available
+upon request from the corresponding author. Code is
+available upon request from the corresponding author.
+Author Contributions
+Conceptualization, K.R., G.A., M.M. and W.B;
+methodology, K.R., G.A., M.M. and W.B; software,
+K.R; validation, G.A., M.M., W.B.; formal analysis,
+K.R., G.A.; investigation, K.R., G.A., M.M. and W.B;
+resources, K.R., G.A., M.M. and W.B; data curation,
+K.R, M.M, W.B; writing—original draft preparation,
+K.R., G.A; writing—review and editing, G.A., M.M.
+and W.B.; visualization, K.R.; supervision, G.A., M.M.
+and W.B.; project administration, G.A., M.M. and W.B.;
+funding acquisition, G.A., M.M. and W.B. All authors
+have read and agreed to the published version of the
+manuscript.
+Declaration of generative AI and AI-assisted tech-
+nologies in the manuscript preparation process
+During the preparation of this work the author(s) used
+Grok xAI in order for grammar correction and readabil-
+ity. After using this tool/service, the author(s) reviewed
+10
+
+and edited the content as needed and take(s) full respon-
+sibility for the content of the published article.
+References
+[1] A. El-Aneed, A. Cohen, J. Banoub, Mass spec-
+trometry, review of the basics:
+Electrospray,
+maldi, and commonly used mass analyzers, Ap-
+plied Spectroscopy Reviews 44 (3) (2009) 210–
+230. doi:10.1080/05704920902717872.
+[2] W. C. Wiley, I. H. McLaren, Time-of-flight mass
+spectrometer with improved resolution, Review of
+Scientific Instruments 26 (12) (2004) 1150–1157.
+doi:10.1063/1.1715212.
+[3] W. A. Bryden, R. C. Benson, H. W. Ko, C. Fense-
+lau,
+R. J. Cotter,
+Tiny-tof mass spectrome-
+ter for biodetection, in:
+P. J. Stopa, M. A.
+Bartoszcze (Eds.), Rapid Methods for Analy-
+sis of Biological Materials in the Environment,
+Springer Netherlands, Dordrecht, 2000, pp. 101–
+110. doi:10.1007/978-94-015-9534-6_10.
+[4] R. J. Cotter, Time-of-flight mass spectrometry,
+in: Electrospray and MALDI Mass Spectrome-
+try, John Wiley & Sons, Ltd, 2010, pp. 345–364.
+doi:10.1002/9780470588901.ch10.
+[5] A.
+L.
+van
+Wuijckhuijse,
+M.
+A.
+Stowers,
+W. A. Kleefsman, B. L. M. van Baar, C. E.
+Kientz, J. C. M. Marijnissen, Matrix-assisted
+laser
+desorption/ionisation
+aerosol
+time-of-
+flight mass spectrometry for the analysis of
+bioaerosols:
+development of a fast detector
+for airborne biological pathogens, Journal of
+Aerosol
+Science
+36
+(5-6)
+(2005)
+677–687.
+doi:10.1016/j.jaerosci.2004.11.003.
+[6] C. Papagiannopoulou, R. Parchen, P. Rubbens,
+W.
+Waegeman,
+Fast
+pathogen
+identifica-
+tion
+using
+single-cell
+matrix-assisted
+laser
+desorption/ionization-aerosol time-of-flight mass
+spectrometry data and deep learning methods,
+Analytical Chemistry 92 (11) (2020) 7523–7531.
+doi:10.1021/acs.analchem.9b05806.
+[7] D. Chen, W. A. Bryden, M. McLoughlin, S. A.
+Ecelberger, T. J. Cornish, L. P. Moore, K. M. Re-
+gan, digitalmaldi: A single-particle-based mass
+spectrometric detection system for biomolecules,
+Journal of Mass Spectrometry 60 (2) (2025)
+e5110. doi:10.1002/jms.5110.
+[8] M. McLoughlin, G. Arce, Deterministic prop-
+erties of the recursive separable median fil-
+ter, IEEE Transactions on Acoustics, Speech,
+and Signal Processing 35 (1) (1987) 98–106.
+doi:10.1109/TASSP.1987.1165026.
+[9] G. R. Arce, N. C. Gallagher, T. A. Nodes, Median
+filters: Theory for one- and two-dimensional fil-
+ters, in: T. S. Huang (Ed.), Advances in Computer
+Vision and Image Processing, Vol. 2, JAI Press,
+Greenwich, CT, 1986, pp. 89–166.
+[10] J. A. Fessler, R. R. Nadakuditi, Linear Algebra for
+Data Science, Machine Learning, and Signal Pro-
+cessing, Cambridge University Press, 2024.
+[11] C. Eckart, G. Young, The approximation of one
+matrix by another of lower rank, Psychometrika
+1 (3) (1936) 211–218.
+[12] S. Mallat, Z. H. Zhang, Matching pursuits with
+time-frequency dictionaries, IEEE Transactions
+on Signal Processing 41 (12) (1993) 3391–3401.
+doi:10.1109/78.258082.
+[13] D. L. Donoho, Compressed sensing, IEEE Trans-
+actions on Information Theory 52 (4) (2006)
+1289–1306.
+[14] M. Aharon, M. Elad, A. B. Malach, K-svd: An
+algorithm for designing overcomplete dictionar-
+ies for sparse representation, IEEE Transactions
+on Signal Processing 54 (11) (2006) 4311–4322.
+doi:10.1109/TSP.2006.881199.
+[15] S. Ravishankar, Y. Bresler, Mr image recon-
+struction from highly undersampled k-space data
+by dictionary learning, IEEE Transactions on
+Medical Imaging 30 (5) (2011) 1028–1041.
+doi:10.1109/TMI.2010.2090538.
+[16] M. Yamac, M. Ahishali, A. Degerli, S. Ki-
+ranyaz,
+M. E. H. Chowdhury,
+M. Gabbouj,
+Convolutional
+sparse
+support
+estimator-based
+covid-19
+recognition
+from
+x-ray
+images,
+IEEE Transactions on Neural Networks and
+Learning Systems 32 (5) (2021) 1810–1820.
+doi:10.1109/TNNLS.2021.3070467.
+[17] M. Ahishali, M. Yamac, S. Kiranyaz, M. Gab-
+bouj, Representation based regression for object
+distance estimation, Neural Networks 158 (2023)
+15–29. doi:10.1016/j.neunet.2022.11.011.
+URL https://www.sciencedirect.com/science/article/p
+11
+
+[18] S. Chen, D. L. Donoho, M. A. Saunders, Atomic
+decomposition by basis pursuit, SIAM Journal
+on Scientific Computing 20 (1) (2001) 33–61.
+doi:10.1137/S1064827500394074.
+[19] J. Wright, A. Y. Yang, A. Ganesh, S. Sas-
+try,
+Y. Ma,
+Sparse representation for com-
+puter vision and pattern recognition, Proceed-
+ings of the IEEE 98 (6) (2009) 1031–1044.
+doi:10.1109/JPROC.2009.2015716.
+[20] J. Yang, K. Yu, Y. Gong, T. Huang, Linear spatial
+pyramid matching using sparse coding for image
+classification, in: 2009 IEEE Conference on Com-
+puter Vision and Pattern Recognition, 2009, pp.
+1794–1801. doi:10.1109/CVPR.2009.5206757.
+[21] J.-L. Starck, E. Candes, D. Donoho, The curvelet
+transform for image denoising, IEEE Transac-
+tions on Image Processing 11 (6) (2002) 670–684.
+doi:10.1109/TIP.2002.1014998.
+[22] W. Wen, C. Wu, Y. Wang, Y. Chen, H. Li, Learning
+structured sparsity in deep neural networks (2016).
+arXiv:1608.03665.
+URL https://arxiv.org/abs/1608.03665
+[23] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit,
+L. Jones, A. N. Gomez, L. Kaiser, I. Polosukhin,
+Attention is all you need, in: Advances in Neu-
+ral Information Processing Systems (NeurIPS),
+Vol. 30, Curran Associates, Inc., 2017, pp. 5998–
+6008. arXiv:1706.03762.
+URL https://arxiv.org/abs/1706.03762
+[24] H. Zhou, S. Zhang, J. Peng, S. Zhang, J. Li,
+H. Xiong, W. Zhang, Informer: Beyond efficient
+transformer for long sequence time-series fore-
+casting (2021). arXiv:2012.07436.
+URL https://arxiv.org/abs/2012.07436
+[25] T. Zhou, Z. Ma, Q. Wen, X. Wang, L. Sun,
+R. Jin, Fedformer: Frequency enhanced decom-
+posed transformer for long-term series forecasting
+(2022). arXiv:2201.12740.
+URL https://arxiv.org/abs/2201.12740
+[26] A. Garza, C. Challu, M. Mergenthaler-Canseco,
+Timegpt-1 (2024). arXiv:2310.03589.
+URL https://arxiv.org/abs/2310.03589
+[27] G. Zerveas, S. Jayaraman, D. Patel, A. Bhamidi-
+paty, C. Eickhoff, A transformer-based framework
+for multivariate time series representation learning
+(2020). arXiv:2010.02803.
+URL https://arxiv.org/abs/2010.02803
+[28] J. Xu, H. Wu, J. Wang, M. Long, Anomaly trans-
+former: Time series anomaly detection with asso-
+ciation discrepancy (2022). arXiv:2110.02642.
+URL https://arxiv.org/abs/2110.02642
+[29] M. Ekvall, P. Truong, W. Gabriel, M. Wil-
+helm, L. K"all, Prosit transformer:
+A trans-
+former
+for
+prediction
+of
+ms2
+spectrum
+in-
+tensities,
+Journal
+of
+Proteome
+Research
+21 (5) (2022) 1359–1364, pMID: 35413196.
+doi:10.1021/acs.jproteome.1c00870.
+URL https://doi.org/10.1021/acs.jproteome.1c00870
+[30] M. Yilmaz, W. E. Fondrie, W. Bittremieux, W. S.
+Noble,
+Sequence-to-sequence translation from
+mass spectra to peptides with a transformer
+model, Nature Communications 15 (2024) 6427.
+doi:10.1038/s41467-024-49731-x.
+URL https://www.nature.com/articles/s41467-024-4973
+[31] D. V. Petrovskiy, et al., Powernovo: de novo pep-
+tide sequencing via tandem mass spectrometry us-
+ing an ensemble of transformer and bert models,
+Scientific Reports 14 (2024) 15000.
+[32] Y. Zhao, S. Wang, J. Huang, B. Meng, D. An,
+X. Fang, Y. Wei, X. Dai, A transformer-based
+semi-autoregressive framework for high-speed
+and
+accurate
+de
+novo
+peptide
+sequencing,
+Communications Biology 8 (1) (2025) 234.
+doi:10.1038/s42003-025-07584-0.
+URL https://doi.org/10.1038/s42003-025-07584-0
+[33] A. Dosovitskiy, L. Beyer, A. Kolesnikov, D. Weis-
+senborn, X. Zhai, T. Unterthiner, M. Dehghani,
+M. Minderer, G. Heigold, S. Gelly, J. Uszkoreit,
+N. Houlsby, An image is worth 16x16 words:
+Transformers for image recognition at scale, arXiv
+preprint arXiv:2010.11929 (2021).
+URL https://doi.org/10.48550/arXiv.2010.11929
+[34] J. Su, Y. Lu, S. Pan, A. Murtadha, B. Wen, Y. Liu,
+Roformer: Enhanced transformer with rotary po-
+sition embedding (2023). arXiv:2104.09864.
+URL https://arxiv.org/abs/2104.09864
+[35] J.
+L.
+Elman,
+Finding
+structure
+in
+time,
+Cognitive
+Science
+14
+(2)
+(1990)
+179–211.
+doi:10.1207/s15516709cog1402_1.
+[36] S. Hochreiter, J. Schmidhuber, Long short-term
+memory, Neural Computation 9 (8) (1997) 1735–
+1780. doi:10.1162/neco.1997.9.8.1735.
+12
+
+[37] M. Schuster, K. Paliwal, Bidirectional recur-
+rent neural networks,
+IEEE Transactions on
+Signal Processing 45 (11) (1997) 2673–2681.
+doi:10.1109/78.650093.
+13

@@ -1,0 +1,759 @@
+Self-Supervised Learning by Curvature Alignment
+Benyamin Ghojogh 1 M.Hadi Sepanj 2 Paul Fieguth 2
+Abstract
+Self-supervised learning (SSL) has recently ad-
+vanced through non-contrastive methods that cou-
+ple an invariance term with variance, covariance,
+or redundancy-reduction penalties. While such
+objectives shape first- and second-order statistics
+of the representation, they largely ignore the lo-
+cal geometry of the underlying data manifold. In
+this paper, we introduce CurvSSL, a curvature-
+regularized self-supervised learning framework,
+and its RKHS extension, kernel CurvSSL. Our
+approach retains a standard two-view encoder–
+projector architecture with a Barlow Twins-style
+redundancy-reduction loss on projected features,
+but augments it with a curvature-based regular-
+izer. Each embedding is treated as a vertex whose
+k nearest neighbors define a discrete curvature
+score via cosine interactions on the unit hyper-
+sphere; in the kernel variant, curvature is com-
+puted from a normalized local Gram matrix in
+an RKHS. These scores are aligned and decorre-
+lated across augmentations by a Barlow-style loss
+on a curvature-derived matrix, encouraging both
+view invariance and consistency of local manifold
+bending. Experiments on MNIST and CIFAR-
+10 datasets with a ResNet-18 backbone show
+that curvature-regularized SSL yields competi-
+tive or improved linear evaluation performance
+compared to Barlow Twins and VICReg. Our
+results indicate that explicitly shaping local ge-
+ometry is a simple and effective complement to
+purely statistical SSL regularizers.
+Benyamin Ghojogh and M.Hadi Sepanj contributed equally to
+this work.
+1Artificial Intelligence Scientist, Waterloo, Ontario,
+Canada 2Vision and Image Processing Group, Systems Design
+Engineering, University of Waterloo, Ontario, Canada. Corre-
+spondence to: Benyamin Ghojogh <bghojogh@uwaterloo.ca>,
+M.Hadi Sepanj
+<mhsepanj@uwaterloo.ca>,
+Paul Fieguth
+<paul.fieguth@uwaterloo.ca>.
+1. Introduction
+Self-supervised learning (SSL) has become a central
+paradigm for visual representation learning, replacing ex-
+plicit labels with surrogate objectives defined over aug-
+mented views of the same image (Sepanj et al., 2025a; Rani
+et al., 2023). Contrastive methods such as InfoNCE-based
+approaches (Sepanj & Fiegth, 2025; Chen et al., 2020) max-
+imize agreement between positive pairs while repelling neg-
+atives, whereas recent non-contrastive methods (Grill et al.,
+2020; Bardes et al., 2022; Sepanj & Fieguth, 2024; Sep-
+anj et al., 2025b) avoid explicit negatives by combining an
+invariance term with variance, covariance, or redundancy-
+reduction penalties. Architectures such as Barlow Twins
+(Zbontar et al., 2021) and VICReg (Bardes et al., 2022)
+enforce that two augmentations of the same sample pro-
+duce highly correlated embeddings along the diagonal of a
+cross-correlation matrix, while off-diagonal terms and per-
+dimension variances are controlled to prevent dimensional
+collapse.
+These approaches, however, still treat the representation
+space primarily as a flat Euclidean vector space and reg-
+ularize it using first- and second-order statistics (means,
+variances, cross-correlations). From a geometric point of
+view, high-dimensional data are often assumed to concen-
+trate around a lower-dimensional manifold embedded in
+feature space. Standard SSL objectives encourage different
+augmentations of the same input to map to nearby points on
+this manifold and to occupy decorrelated feature dimensions
+globally, but they do not explicitly control the local geome-
+try of the learned manifold. In particular, two augmentations
+may be close in Euclidean distance yet induce different local
+neighborhoods, tangent directions, or higher-order bending
+of the manifold. As a consequence, embeddings can satisfy
+invariance and redundancy-reduction constraints while still
+distorting the local structure that underlies nearest-neighbor
+retrieval, clustering, or semi-supervised learning.
+In differential and discrete geometry, curvature quantifies
+how a surface or manifold bends in a neighborhood of a
+point. For polyhedra, classical constructions based on angu-
+lar defect measure how much the sum of face angles around
+a vertex deviates from 2π (Descartes, 1890; Markvorsen,
+1996; Coxeter, 1973; Richeson, 2019; Hilton & Pedersen,
+1982). The sharper the corner, the larger the defect. A
+1
+arXiv:2511.17426v1  [cs.LG]  21 Nov 2025
+
+Self-Supervised Learning by Curvature Alignment
+closely related discrete viewpoint for data is to imagine
+each point as a vertex of a hypothetical polyhedron whose
+faces are spanned by its k nearest neighbors (Ghojogh et al.,
+2020). By translating neighbor differences to the origin,
+normalizing them onto a unit hypersphere, and aggregating
+cosine similarities between neighbor directions, one obtains
+a scalar curvature score that reflects how sharply the local
+neighborhood bends around that point. This construction
+can be further generalized to reproducing kernel Hilbert
+spaces (RKHS) (Gretton, 2013; Sepanj et al., 2025b) by ex-
+pressing inner products and norms through a kernel function,
+and normalizing the corresponding local Gram matrix.
+Motivated by this geometric perspective, we propose
+curvature-regularized self-supervised learning (CurvSSL)
+along with its kernel version kernel CurvSSL. This method is
+a simple non-contrastive SSL objective that integrates curva-
+ture into the learning signal. We retain a standard two-view
+encoder–projector architecture and a redundancy-reduction
+term in the spirit of Barlow Twins (Zbontar et al., 2021),
+which encourages diagonal cross-correlation between the
+projected embeddings of two augmentations while driving
+off-diagonal correlations toward zero. On top of this, we
+treat each projected embedding as a vertex in representation
+space, compute a discrete curvature score from its k nearest
+neighbors via cosine interactions on the unit hypersphere,
+and use these scores to define an additional, geometry-aware
+regularizer. At the batch level, we align curvature across aug-
+mentations of the same samples and decorrelate curvature
+patterns across different samples using a Barlow Twins-style
+loss on a curvature-derived matrix. In this way, the objec-
+tive does not only enforce invariance and low redundancy
+in the coordinates of the embeddings, but also promotes
+consistency and diversity in the local bending of the learned
+manifold.
+Overall, CurvSSL can be viewed as a curvature-regularized
+variant of non-contrastive SSL: the backbone loss still en-
+forces view-invariance and redundancy reduction, yet the
+representation is further constrained to preserve local man-
+ifold geometry as captured by discrete curvature in the
+embedding space (and, in an extension, kernelized curva-
+ture in an RKHS). We show experimentally that this sim-
+ple curvature-aware modification of a ResNet-based SSL
+pipeline yields competitive representations, indicating that
+explicitly shaping local geometry is a promising comple-
+ment to purely statistical regularizers.
+2. Background on Polyhedron Curvature and
+Angular Defect
+A polytope is a geometrical object in Rd whose faces are
+planar. The special cases of polytope in R2 and R3 are called
+polygon and polyhedron, respectively. Some examples for
+polyhedron are cube, tetrahedron, octahedron, icosahedron,
+and dodecahedron with four, eight, and twenty triangular
+faces, and twelve flat faces, respectively (Coxeter, 1973).
+Consider a polygon where τj and µj are the interior and
+exterior angles at the j-th vertex; we have τj + µj = π.
+A similar analysis holds in R3 for Fig. 1-a. In this figure,
+a vertex of a polyhedron and its opposite cone are shown
+where the opposite cone is defined to have perpendicular
+faces to the faces of the polyhedron at the vertex. The
+intersection of a unit sphere centered at the vertex and the
+opposite cone is shown in the figure. This intersection
+is a geodesic on the unit sphere. According to Thomas
+Harriot’s theorem proposed in 1603 (Markvorsen, 1996),
+if this geodesic on the unit sphere is a triangle, its area is
+µ1 +µ2 +µ3 −π = 2π−(τ1 +τ2 +τ3). The generalization
+of this theorem from a geodesic triangular polygon (3-gon)
+to an k-gon is (Markvorsen, 1996):
+µ1 + · · · + µk −kπ + 2π = 2π −
+k
+X
+a=1
+τa,
+(1)
+where the polyhedron has k faces meeting at the vertex.
+Ren´e Descartes’s angular defect at a vertex x of a polyhe-
+dron is (Descartes, 1890):
+D(x) := 2π −
+k
+X
+a=1
+τa.
+(2)
+The total defect of a polyhedron is defined as the summation
+of the defects over the vertices. It can be shown that the
+total defect of a polyhedron with v vertices, e edges, and f
+faces is:
+D :=
+v
+X
+i=1
+D(xi) = 2π(v −e + f).
+(3)
+The term v −e + f is Euler-Poincar´e characteristic of the
+polyhedron (Richeson, 2019; Hilton & Pedersen, 1982);
+therefore, the total defect of a polyhedron is equal to its
+Euler-Poincar´e characteristic. According to Fig. 1-b, the
+smaller τ angles result in sharper corner of the polyhedron.
+Therefore, we can consider the angular defect as the curva-
+ture of the vertex.
+3. Curvature Calculation for Data Points
+3.1. Curvature Calculation in the Input Space
+The main idea of the curvature calculation of data points
+is as follows (Ghojogh et al., 2020). Every data point is
+considered to be the vertex of a hypothetical polyhedron (see
+Fig. 1-a). For every point, we find its k-Nearest Neighbors
+(k-NN). The k neighbors of the point (vertex) form the k
+faces of a polyhedron meeting at that vertex. Then, the
+more curvature that point (vertex) has, the more anomalous
+2
+
+Self-Supervised Learning by Curvature Alignment
+Figure 1. (a) Polyhedron vertex, unit sphere, and the opposite cone,
+(b) large and small curvature, (c) a point and its neighbors normal-
+ized on a unit hyper-sphere around it.
+it is because it is far away (different) from its neighbors.
+Therefore, we define a curvature score, denoted by c, which
+is proportional to the curvature or angular effect.
+Since, according to the equation of angular effect, the cur-
+vature is proportional to negative summation of angles, we
+can consider the curvature score to be inversely proportional
+to the summation of angles. Without loss of generality, we
+assume the angles are in the range [0, π] (otherwise, we take
+the smaller angle). The less the angles between two edges
+of the polyhedron, the more their cosine. As the curvature
+score is inversely proportional to the angles, we can use
+cosine for the curvature score:
+c(xi) ∝1
+τa
+∝cos(τa).
+(4)
+We define the curvature score to be the summation of cosine
+of the angles of the polyhedron faces meeting at that point:
+c(xi) :=
+k
+X
+a=1
+cos(τa) =
+k
+X
+a=1
+˘x⊤
+a ˘xa+1
+||˘xa||2||˘xa+1||2
+,
+(5)
+where ˘xa := xa −xi is the a-th edge of the polyhedron
+passing through the vertex xi, xa is the a-th neighbor of xi,
+and ˘xa+1 denotes the next edge sharing the same polyhe-
+dron face with ˘xa where ˘xk+1 = ˘x1.
+Note that finding the pairs of edges which belong to the
+same face is difficult and time-consuming so we relax this
+calculation to the summation of the cosine of angles between
+all pairs of edges meeting at the vertex xi:
+c(xi) :=
+k−1
+X
+a=1
+k
+X
+b=a+1
+˘x⊤
+a ˘xb
+||˘xa||2||˘xb||2
+,
+(6)
+where ˘xa := xa −xi, ˘xb := xb −xi, and xa and xb
+denote the a-th and b-th neighbors of xi. In Eq. (6), we have
+omitted the redundant angles because of symmetry of inner
+product. Note that the Eq. (6) implies that we normalize the
+k neighbors of xi to fall on the unit hyper-sphere centered
+at xi and then compute their cosine similarities (see Fig.
+1-c).
+The mentioned relaxation is valid for the following reason.
+Take two edges meeting at the vertex xi. If the two edges
+belong to the same polyhedron face, the relaxation is ex-
+act. Consider the case where the two edges do not belong
+to the same face. These two edges are connected with a
+set of polyhedron faces. If we tweak one of the two edges
+to increase/decrease the angle between them, the angle of
+that edge with its neighbor edge on the same face also in-
+creases/decreases. Therefore, the changes in the additional
+angles of relaxation are consistent with the changes of the
+angles between the edges sharing the same faces.
+3.2. Curvature Calculation in the RKHS
+The pattern of curvature of data points might not be linear.
+Therefore, we use the kernel curvature to work on data
+in the RKHS (Ghojogh et al., 2020). In kernel curvature
+calculation, the two stages of finding k-NN and calculating
+the curvature score are performed in RKHS. Let ϕ : X →H
+be the pulling function mapping the data x ∈X to the
+RKHS H. In other words, x 7→ϕ(x). Let t denote the
+dimensionality of the RKHS, i.e., ϕ(x) ∈Rt while x ∈Rd.
+Note that we usually have t ≫d. The kernel over two
+vectors x1 and x2 is the inner product of their pulled data
+(Hofmann et al., 2008; Ghojogh et al., 2023):
+R ∋k(x1, x2) := ϕ(x1)⊤ϕ(x2).
+(7)
+The Euclidean distance in the RKHS is (Sch¨olkopf, 2001):
+||ϕ(xi) −ϕ(xj)||2 =
+q
+k(xi, xi) −2k(xi, xj) + k(xj, xj).
+(8)
+Using this distance, we find the k-NN of the dataset in the
+RKHS.
+After finding k-NN in the RKHS, we calculate the score in
+the RKHS. We pull the vectors ˘xa and ˘xb to the RKHS so
+˘x⊤
+a ˘xb is changed to k(˘xa, ˘xb) = ϕ(˘xa)⊤ϕ(˘xb). Let Ki ∈
+Rk×k denote the kernel matrix of neighbors of xi whose
+(a, b)-th element is k(˘xa, ˘xb). The vectors in Eq. (6) are
+normalized. In the RKHS, this is equivalent to normalizing
+the kernel (Ah-Pine, 2010; Ghojogh et al., 2023):
+k′(˘xa, ˘xb) :=
+k(˘xa, ˘xb)
+p
+k(˘xa, ˘xa) k(˘xb, ˘xb)
+.
+(9)
+If K′
+i ∈Rk×k denotes the normalized kernel Ki, the kernel
+curvature score in the RKHS is:
+c(xi) :=
+k−1
+X
+a=1
+k
+X
+b=a+1
+K′
+i,ab,
+(10)
+3
+
+Self-Supervised Learning by Curvature Alignment
+where K′
+i,ab denotes the (a, b)-th element of the normalized
+kernel K′
+i.
+4. CurvSSL and Kernel CurvSSL
+4.1. Network and Data Settings
+The neural network for self-supervised learning contains an
+encoder fθ followed by a projection head g. Let X ⊂Rd
+be the input space, fθ : X →Rdh an encoder, and g :
+Rdh →Rdz a projection head. Suppose T (x) denotes the
+distribution of training data. For every training data instance,
+we draw two stochastic augmentations (x, x′) ∼T (x) and
+pass them through the encoder and the projection head:
+h = fθ(x) ∈Rdh,
+z = g(h) ∈Rdz,
+h′ = fθ(x′) ∈Rdh,
+z′ = g(h′) ∈Rdz.
+(11)
+Every mini-batch, with size b, is {(zi, z′
+i)}b
+i=1.
+4.2. Loss Function
+We now describe the proposed self-supervised objective.
+As before, let {(zi, z′
+i)}b
+i=1 denote the projected embed-
+dings of two augmentations of a mini-batch of size b, where
+zi = g(fθ(xi)) and z′
+i = g(fθ(x′
+i)) ∈Rdz. Our loss has
+two components: (i) a redundancy-reduction term on the em-
+bedding coordinates, in the spirit of Barlow Twins, and (ii) a
+curvature-based term that aligns and decorrelates curvature
+patterns across the batch.
+4.2.1. REDUNDANCY REDUCTION IN EMBEDDING SPACE
+We first normalize the projected embeddings per feature
+dimension:
+˜zi = zi −µz
+σz + ε ,
+˜z′
+i = z′
+i −µ′
+z
+σ′z + ε ,
+(12)
+where the division is element-wise, µz, σz ∈Rdz are the
+batch-wise mean and standard deviation of {zi}b
+i=1, and
+similarly for µ′
+z, σ′
+z and {z′
+i}b
+i=1; ε > 0 is a small constant
+for numerical stability. We then form the cross-correlation
+matrix:
+C ∈Rdz×dz,
+Cuv := 1
+b
+b
+X
+i=1
+˜zi,u ˜z′
+i,v,
+(13)
+where Cuv is the (u, v)-th element of C and ˜zi,u denotes
+the u-th component of ˜zi. Following Barlow Twins (Zbontar
+et al., 2021), we enforce that the diagonal entries of C are
+close to 1 (strong agreement between views in each feature)
+while off-diagonal entries are close to 0 (low redundancy
+between different features):
+Lemb :=
+dz
+X
+u=1
+(Cuu −1)2 + λemb
+dz
+X
+u,v=1
+u̸=v
+C2
+uv,
+(14)
+where λemb > 0 controls the strength of the off-diagonal
+penalty.
+4.2.2. CURVATURE-BASED REGULARIZATION
+In addition to redundancy reduction at the coordinate level,
+we regularize the local geometry of the learned manifold via
+curvature. For each embedding zi, we compute a discrete
+curvature score c(zi) by treating zi as a vertex of a hypo-
+thetical polyhedron whose faces are spanned by its k-nearest
+neighbors in the embedding space. Let {zi,a}k
+a=1 denote
+these neighbors, and define edge vectors ˘zi,a := zi,a −zi.
+Normalizing these edges onto the unit hypersphere and ag-
+gregating the pairwise cosine similarities between neighbor
+directions yields the curvature score (see Eq. (6)):
+c(zi) :=
+k−1
+X
+a=1
+k
+X
+b=a+1
+˘z⊤
+i,a˘zi,b
+∥˘zi,a∥2 ∥˘zi,b∥2
+,
+(15)
+which measures how sharply the local neighborhood around
+zi bends. The kernel curvature score is (see Eq. (10)):
+c(zi) :=
+k−1
+X
+a=1
+k
+X
+b=a+1
+K′
+i,ab,
+(16)
+where K′
+i,ab is the (a, b)-th element of the normalized ker-
+nel kernel K′
+i between ˘zi,a and ˘zi,b.
+Eqs. (15) and (16) can be used for curvature scores in
+CurvSSL and kernel CurvSSL loss functions, respectively.
+We compute analogous curvature scores c(z′
+i) for the second
+view.
+Stacking
+the
+curvature
+scores
+into
+vectors
+c
+=
+[c(z1), . . . , c(zb)]⊤and c′ = [c(z′
+1), . . . , c(z′
+b)]⊤∈Rb,
+we first normalize them across the batch:
+˜c = c −µc1
+σc + ε ,
+˜c′ = c′ −µ′
+c1
+σ′c + ε ,
+(17)
+where µc, σc ∈R are the mean and standard deviation of c,
+µ′
+c, σ′
+c are those of c′, the 1 ∈Rb is the all-ones vector, and
+ε > 0 is again a small constant. We then form a curvature-
+derived matrix:
+M ∈Rb×b,
+M ij := 1
+b ˜ci ˜c′
+j,
+(18)
+where M ij denotes the (i, j)-th element of M, which plays
+an analogous role to the cross-correlation matrix C, but now
+at the sample level in terms of curvature. We encourage the
+curvature of matched augmentations to agree (diagonal en-
+tries of M close to 1) and the curvature patterns of different
+samples to be decorrelated (off-diagonals close to 0):
+Lcurv :=
+b
+X
+i=1
+(M ii −1)2 + λcurv
+b
+X
+i,j=1
+i̸=j
+M 2
+ij,
+(19)
+4
+
+Self-Supervised Learning by Curvature Alignment
+where λcurv > 0 controls the strength of curvature-based
+redundancy reduction.
+4.2.3. TOTAL OBJECTIVE AND KERNEL EXTENSION
+Our final self-supervised loss is a weighted sum of the
+embedding-level and curvature-level terms:
+L := Lemb + αcurv Lcurv,
+(20)
+where αcurv > 0 balances the influence of curvature regular-
+ization. In the Euclidean case, i.e., CurvSSL, c(·) is given
+by Eq. (15). In the kernel curvature variant, i.e., kernel
+CurvSSL, Eq. (16) is used for c(·).
+The proposed objective enforces view invariance and re-
+dundancy reduction at the level of embedding coordinates,
+while simultaneously shaping the local manifold geometry
+through curvature alignment and curvature-based decorrela-
+tion across the batch.
+5. Experiments
+We empirically evaluate the proposed curvature-regularized
+self-supervised learning on two standard benchmarks,
+MNIST (LeCun et al., 1998) and CIFAR-10 (Krizhevsky &
+Hinton, 2009), using a ResNet backbone (He et al., 2016)
+and a two-stage protocol: (i) self-supervised pretraining
+with the proposed CurvSSL and kernel CurvSSL objectives,
+and (ii) frozen-encoder linear evaluation. In addition, we
+visualize the learned representations with UMAP (McInnes
+et al., 2018) to inspect the geometry induced by curvature
+regularization.
+5.1. Experimental Setup
+Datasets.
+We consider MNIST (LeCun et al., 1998) and
+CIFAR-10 (Krizhevsky & Hinton, 2009) as two represen-
+tative image datasets of increasing difficulty. MNIST con-
+sists of grayscale handwritten digits (10 classes), while
+CIFAR-10 contains natural RGB images with more com-
+plex intra-class variability. For SSL pretraining, we use only
+the training split of each dataset. For linear evaluation, we
+use the standard training and test splits.
+Network and training details.
+For both datasets, we
+adopt a ResNet-18 (He et al., 2016) encoder fθ followed
+by a two-layer MLP projection head g that maps encoder
+features to a dz-dimensional projection space. The self-
+supervised model is trained using the curvature-regularized
+loss (20), where the embedding-level redundancy reduc-
+tion Lemb is instantiated as a Barlow Twins objective (14),
+and the curvature-level term Lcurv uses the discrete cur-
+vature score (15) or (16) with k-nearest neighbors in the
+projected space.
+We use dz = 128, k = 10 neigh-
+bors, a mini-batch size of 256, and train the SSL model
+Table 1. Linear evaluation accuracy (%) on MNIST and CIFAR-
+10 using a frozen ResNet-18 encoder pretrained with the SSL
+objectives.
+Method
+MNIST
+CIFAR-10
+VicReg (Bardes et al., 2022)
+95.9
+74.5
+Barlow Twins (Zbontar et al., 2021)
+94.9
+73.6
+CurvSSL (ours)
+97.9
+75.1
+Kernel CurvSSL (ours)
+98.4
+76.5
+for 100 epochs for MNIST and 500 epochs for CIFAR-
+10 using Adam optimizer (Kingma, 2014) with learning
+rate 10−3 and weight decay 10−4. The curvature and em-
+bedding weights (λemb, λcurv, αcurv) are selected once and
+reused across datasets. In all experiments, we simply set
+λemb = λcurv = αcurv = 1. For kernel CurvAlign, radial
+basis function (RBF) kernel function was employed.
+Data augmentations.
+For MNIST, we follow common
+practice for SSL on digit images, applying random resized
+crops, small rotations, and grayscale-to-RGB conversion,
+followed by per-channel normalization. For CIFAR-10, we
+adopt a standard augmentation pipeline with random resized
+crops, horizontal flips, color jitter, random grayscale, and
+per-channel normalization. Two independent augmented
+views are sampled for each image in a mini-batch and passed
+through the shared encoder–projector.
+5.2. Linear Evaluation
+To assess the quality of the learned representations, we
+perform linear evaluation following the standard protocol.
+After SSL pretraining, we freeze the encoder fθ and discard
+the projection head g. A small classifier consisting of a
+linear layer with one hidden layer and batch normalization
+(as described in Section 3) is trained on top of the frozen
+encoder features using cross-entropy loss. Only the classifier
+parameters are updated; the encoder weights remain fixed.
+We train the linear classifier for a fixed number of epochs
+(e.g., 50) with SGD and report top-1 test accuracy on
+MNIST and CIFAR-10. The results are summarized in
+Table 1. Overall, CurvSSL and kernel CurvSSL achieve
+competitive linear probe performance on both datasets, indi-
+cating that enforcing both redundancy reduction and curva-
+ture consistency produces representations that transfer well
+to supervised classification. On CIFAR-10, which is more
+challenging, we observe that the curvature term does not
+prevent the model from learning discriminative features and
+can improve class separation compared to using redundancy
+reduction alone. Moreover, as expected, kernel CurvSSL
+performs better than CurvSSL because of handling nonlin-
+earities better through RKHS.
+5
+
+Self-Supervised Learning by Curvature Alignment
+(a) CurvSSL (Euclidean).
+(b) Kernel CurvSSL.
+Figure 2. UMAP visualization of encoder features on MNIST after
+curvature-regularized SSL. Points are colored by ground-truth digit
+class.
+5.3. UMAP Visualization of Learned Representations
+Beyond scalar accuracy, we study the geometry of the
+learned representations via UMAP embeddings. For each
+dataset, we extract features from the frozen encoder on a
+held-out split (train or test) and project them to two di-
+mensions using UMAP with a fixed configuration (e.g.,
+nneighbors = 15, min dist = 0.1). We visualize either the en-
+coder features h or the projected features z, coloring points
+by ground-truth class labels.
+Figure 2 compares Euclidean CurvSSL and its kernel variant
+on MNIST. Clusters corresponding to different digits are
+well separated, with relatively smooth transitions between
+nearby classes (e.g., visually similar digits such as ‘3’ and
+‘5’). The curvature regularization encourages local neighbor-
+(a) CurvSSL (Euclidean).
+(b) Kernel CurvSSL.
+Figure 3. UMAP visualization of encoder features on CIFAR-10
+after curvature-regularized SSL. Points are colored by ground-truth
+class.
+hoods to be geometrically consistent across augmentations,
+which manifests as tighter and more coherent class clusters
+in the UMAP plot.
+As depicted in Fig. 3 for CIFAR-10, both CurvSSL and Ker-
+nel CurvSSL produce embeddings that form more complex
+structures, reflecting the higher intra-class variability of nat-
+ural images. Nonetheless, we observe that classes occupy
+distinct regions with meaningful local neighborhoods.
+6. Conclusion
+We proposed geometry-aware self-supervised objectives,
+named CurvSSL and kernel CurvSSL, that augment a Bar-
+low Twins-style redundancy reduction loss with curvature-
+based regularizations. By treating each embedding as a
+6
+
+Self-Supervised Learning by Curvature Alignment
+vertex with a discrete curvature score computed from its
+k-nearest neighbors on the unit hypersphere, and coupling
+these scores across augmentations and samples via a curva-
+ture–Barlow loss, our method encourages both view invari-
+ance and consistency of local manifold geometry.
+On MNIST and CIFAR-10, curvature-regularized SSL
+yields competitive linear evaluation accuracy and well-
+structured UMAP embeddings, suggesting that explicitly
+shaping local geometry complements standard invariance
+and redundancy-reduction terms. The method is simple to
+integrate into existing two-view pipelines and admits a ker-
+nel extension, making it a practical starting point for further
+geometric SSL work on larger datasets, architectures, and
+manifold-sensitive tasks such as semi-supervised learning
+and retrieval.
+References
+Ah-Pine, J. Normalized kernels as similarity indices. In
+Pacific-Asia Conference on Knowledge Discovery and
+Data Mining, pp. 362–373. Springer, 2010.
+Bardes, A., Ponce, J., and LeCun, Y. VICReg: Variance-
+invariance-covariance regularization for self-supervised
+learning. In International Conference on Learning Rep-
+resentations, 2022.
+Chen, T., Kornblith, S., Norouzi, M., and Hinton, G. A
+simple framework for contrastive learning of visual rep-
+resentations. In International conference on machine
+learning, pp. 1597–1607. PmLR, 2020.
+Coxeter, H. S. M. Regular polytopes. Courier Corporation,
+1973.
+Descartes, R. Progymnasmata de solidorum elementis. Oeu-
+vres de Descartes, X:265–276, 1890.
+Ghojogh, B., Karray, F., and Crowley, M. Anomaly detec-
+tion and prototype selection using polyhedron curvature.
+In Canadian Conference on Artificial Intelligence, pp.
+238–250. Springer, 2020.
+Ghojogh, B., Crowley, M., Karray, F., and Ghodsi, A. Back-
+ground on kernels. Elements of Dimensionality Reduction
+and Manifold Learning, pp. 43–73, 2023.
+Gretton, A. Introduction to RKHS, and some simple kernel
+algorithms. Adv. Top. Mach. Learn. Lecture Conducted
+from University College London, 16(5-3):2, 2013.
+Grill, J.-B., Strub, F., Altch´e, F., Tallec, C., Richemond, P.,
+Buchatskaya, E., Doersch, C., Avila Pires, B., Guo, Z.,
+Gheshlaghi Azar, M., et al. Bootstrap your own latent-a
+new approach to self-supervised learning. Advances in
+neural information processing systems, 33:21271–21284,
+2020.
+He, K., Zhang, X., Ren, S., and Sun, J. Deep residual learn-
+ing for image recognition. In Proceedings of the IEEE
+conference on computer vision and pattern recognition,
+pp. 770–778, 2016.
+Hilton, P. and Pedersen, J.
+Descartes, Euler, Poincare,
+Polya and polyhedra.
+S´eminaire de Philosophie et
+Math´ematiques, (8):1–17, 1982.
+Hofmann, T., Sch¨olkopf, B., and Smola, A. J. Kernel meth-
+ods in machine learning. The annals of statistics, pp.
+1171–1220, 2008.
+Kingma, D. P. Adam: A method for stochastic optimization.
+arXiv preprint arXiv:1412.6980, 2014.
+Krizhevsky, A. and Hinton, G. Learning multiple layers of
+features from tiny images. Technical report, University
+of Toronto, ON, Canada, 2009.
+LeCun, Y., Bottou, L., Bengio, Y., and Haffner, P. Gradient-
+based learning applied to document recognition. Proceed-
+ings of the IEEE, 86(11):2278–2324, 1998.
+Markvorsen, S. Curvature and shape. In Yugoslav Geo-
+metrical Seminar, Fall School of Differential Geometry,
+Yugoslavia, pp. 55–75, 1996.
+McInnes, L., Healy, J., and Melville, J. Umap: Uniform
+manifold approximation and projection for dimension
+reduction. arXiv preprint arXiv:1802.03426, 2018.
+Rani, V., Nabi, S. T., Kumar, M., Mittal, A., and Kumar,
+K. Self-supervised learning: A succinct review. Archives
+of Computational Methods in Engineering, 30(4):2761–
+2775, 2023.
+Richeson, D. S. Euler’s Gem: The Polyhedron Formula and
+the Birth of Topology, volume 64. Princeton University
+Press, 2019.
+Sch¨olkopf, B. The kernel trick for distances. In Advances
+in neural information processing systems, pp. 301–307,
+2001.
+Sepanj, H. and Fieguth, P. Aligning feature distributions
+in VICReg using maximum mean discrepancy for en-
+hanced manifold awareness in self-supervised represen-
+tation learning. Journal of Computational Vision and
+Imaging Systems, 10(1):13–18, 2024.
+Sepanj, M. H. and Fiegth, P. SinSim: Sinkhorn-regularized
+SimCLR. arXiv preprint arXiv:2502.10478, 2025.
+Sepanj, M. H., Ghojogh, B., and Fieguth, P. Self-supervised
+learning using nonlinear dependence. IEEE Access, 13:
+190582–190589, 2025a.
+7
+
+Self-Supervised Learning by Curvature Alignment
+Sepanj, M. H., Ghojogh, B., and Fieguth, P. Kernel VICReg
+for self-supervised learning in reproducing kernel Hilbert
+space. arXiv preprint arXiv:2509.07289, 2025b.
+Zbontar, J., Jing, L., Misra, I., LeCun, Y., and Deny, S.
+Barlow twins: Self-supervised learning via redundancy
+reduction. In International conference on machine learn-
+ing, pp. 12310–12320. PMLR, 2021.
+8

@@ -1,0 +1,2165 @@
+ReBaPL: Repulsive Bayesian Prompt Learning
+Yassir Bendou∗
+Omar Ezzahir∗
+Eduardo Fernandes Montesuma∗
+Gabriel Mahuas
+Victoria Shevchenko
+Mike Gartrell
+Sigma Nova
+Paris, France
+Abstract
+Prompt learning has emerged as an effective technique
+for fine-tuning large-scale foundation models for down-
+stream tasks. However, conventional prompt tuning meth-
+ods are prone to overfitting and can struggle with out-
+of-distribution generalization.
+To address these limita-
+tions, Bayesian prompt learning has been proposed, which
+frames prompt optimization as a Bayesian inference prob-
+lem to enhance robustness. This paper introduces Repulsive
+Bayesian Prompt Learning (ReBaPL), a novel method for
+Bayesian prompt learning, designed to efficiently explore
+the complex and often multimodal posterior landscape of
+prompts. Our method integrates a cyclical step-size sched-
+ule with a stochastic gradient Hamiltonian Monte Carlo
+(SGHMC) algorithm, enabling alternating phases of ex-
+ploration to discover new modes, and exploitation to re-
+fine existing modes. Furthermore, we introduce a repulsive
+force derived from a potential function over probability met-
+rics (including Maximum Mean Discrepancy and Wasser-
+stein distance) computed on the distributions of represen-
+tations produced by different prompts. This representation-
+space repulsion diversifies exploration and prevents prema-
+ture collapse to a single mode. Our approach allows for
+a more comprehensive characterization of the prompt pos-
+terior distribution, leading to improved generalization. In
+contrast to prior Bayesian prompt learning methods, our
+method provides a modular plug-and-play Bayesian exten-
+sion of any existing prompt learning method based on max-
+imum likelihood estimation. We demonstrate the efficacy
+of ReBaPL on several benchmark datasets, showing supe-
+rior performance over state-of-the-art methods for prompt
+learning.
+*These authors contributed equally to this work.
+1. Introduction
+Large-scale vision-language models (VLMs),
+such as
+CLIP [34], have demonstrated remarkable zero-shot gen-
+eralization capabilities across a wide array of visual tasks.
+Many works have shown better performance on down-
+stream task by adapting VLMs for few-shot image clas-
+sification [1, 12, 45–47]. Among these methods, prompt
+learning has emerged as an efficient model adaptation tech-
+nique, enabling VLMs and other foundation models to be
+tailored for specific downstream tasks by learning continu-
+ous prompt vectors, instead of fine-tuning the entire model.
+However, this approach is not without its drawbacks. Stan-
+dard prompt learning, which typically optimizes prompts
+through maximum likelihood estimation (MLE), is prone to
+overfitting on training data, leading to diminished general-
+ization performance on out-of-distribution (OOD) samples
+and unseen classes.
+The initial MLE-based prompt learning method, known
+as CoOp [47], is especially prone to overfitting [27]. In
+an attempt to mitigate this issue, a subsequent MLE-based
+prompt learning method, known as CoCoOp [46], proposed
+learning an instance-specific continuous prompt that is con-
+ditioned on the input image. While CoCoOp performs bet-
+ter than CoOp, it can still suffer from generalization issues.
+In contrast to prompt learning for the text modality only,
+other recent approaches involve multi-modal prompt learn-
+ing for both image and text representations [4, 16, 21, 43].
+These approaches introduce learnable prompt tokens at
+varying depths in the transformer layers in the image and
+text encoders, and then generally use a vision-language cou-
+pling function to induce learning of prompts in a shared em-
+bedding space.
+Other MLE prompt learning methods [22, 26] generally
+focus on regularization-based approaches to mitigate over-
+fitting [46, 48]. One such approach, PromptSRC [22], uses
+self-regulating constraints to prevent prompts from losing
+the generalized knowledge of the pretrained model. The
+1
+arXiv:2511.17339v1  [cs.LG]  21 Nov 2025
+
+ProDA method [26] is a probabilistic approach, where the
+prompt distribution is fit to a Gaussian distribution using
+MLE, with a regularization term to improve prompt diver-
+sity. While effective at mitigating overfitting, these methods
+guide the learning process towards a single optimal solution
+manifold and may not fully capture the complex, potentially
+multi-modal posterior distribution of effective prompts.
+Rather than seeking a single point estimate with reg-
+ularization, an alternative paradigm is to characterize the
+full distribution over prompts through Bayesian inference.
+Bayesian prompt learning methods [4, 5, 9, 23, 33] frame
+prompt learning as a Bayesian inference problem. These
+methods aim to enhance robustness and improve general-
+ization by inferring a posterior distribution over the prompt
+space. This probabilistic perspective naturally introduces
+regularization, which helps prevent the model from learning
+spurious features and overfitting to the training set. Most
+Bayesian prompt learning approaches estimate the poste-
+rior using a variational unimodal Gaussian approximation,
+which limits diversity. To address this limitation, the Adap-
+tive Particle-based Prompt Learning (APP) approach [5]
+uses a Wasserstein gradient flow and Stein Variational Gra-
+dient Descent (SVGD) to approximate multiple modes in
+the posterior using a variational distribution represented
+by a collection of interacting particles. VaMP [4] extends
+multi-modal (text-image) prompt learning by introducing
+variational inference to model prompts as probabilistic la-
+tent variables rather than deterministic parameters.
+This
+enables instance-specific, uncertainty-aware prompt gener-
+ation, where text prompts are dynamically conditioned on
+input image features and sampled from learned posterior
+distributions, with a class-aware prior providing semantic
+regularization. While VaMP incorporates uncertainty mod-
+eling into multi-modal prompting, it relies on a variational
+approximation with a unimodal Gaussian posterior, which
+may limit its ability to capture the full complexity of multi-
+modal prompt distributions.
+We propose a novel Repulsive Bayesian Prompt Learn-
+ing (ReBaPL) approach based on cyclical stochastic gra-
+dient Hamiltonian Monte Carlo (rcSGHMC). In contrast
+to the deterministic SVGD method used in APP, our ap-
+proach leverages an efficient MCMC algorithm where the
+posterior is represented as a collection of samples, cou-
+pled to a repulsive force based on the interaction between
+prompt representations. This allows our method to provide
+a richer representation of the shape of the high-density re-
+gions around multiple modes in the posterior, which results
+in better generalization to novel classes without overfitting
+on the base classes. In contrast to prior Bayesian prompt
+learning methods, our method provides a modular plug-
+and-play Bayesian extension of any existing MLE-based
+prompt learning method. We implement and perform exper-
+iments with ReBaPL running as a plug-and-play learning
+algorithm on top of two existing prompt learning methods:
+MaPLe [21] and MMRL [16].
+Our contributions include:
+• Repulsive cyclical SGHMC: We propose the rcSGHMC
+algorithm for approximating complex multimodal poste-
+riors. Through the use of Hamiltonian dynamics, cyclical
+learning rates, and repulsion between prompt representa-
+tions, our method is effective at exploring the complex
+posteriors with multiple modes that are found in prompt
+learning.
+• Representation-based repulsion: Rather than comparing
+parameters directly in weight space, our method intro-
+duces a repulsive potential based on probability met-
+rics, including Maximum Mean Discrepancy (MMD) and
+Wasserstein distance, between the distributions of repre-
+sentations. This allows us to capture the functional sim-
+ilarity between prompts through their induced represen-
+tations, encouraging exploration of functionally diverse
+modes in the posterior.
+• We show experimentally that our approach provides rich
+characterization of the space of diverse prompts, which
+improves generalization performance on base-to-novel
+tasks, cross-dataset transfer, and domain generalization.
+2. Background
+In this section, we introduce the core principles of our
+ReBaPL method, namely: prompt learning (section 2.1),
+Bayesian learning (section 2.2), and probability metrics
+(section 2.3).
+Figure 1 provides an overview of our ap-
+proach.
+2.1. Prompt Learning
+Contrastive Language-Image Pretraining (CLIP) [34] is a
+pre-training method that learns a joint latent space for
+texts and images. Its main principle is encoding an im-
+age through a Convolutional Neural Net (CNN), e.g., a
+ResNet [17]) or a Transformer, e.g., a ViT [10], and a text
+snippet through a Transformer [38].
+From a pre-trained
+CLIP, it is possible to perform downstream tasks, such as
+classification.
+For example, given an image x, one can
+measure the alignment with a textual prompt T in the la-
+tent space. A good candidate for the textual prompt is ”A
+photo of [CLS]”, where ”[CLS]” corresponds to the class
+with which one is measuring the alignment. In this sense,
+CLIP already demonstrates its own zero-shot generalization
+ability, mainly due to pre-training. Prompt learning takes
+this idea further, where the prompt is treated an optimiza-
+tion variable during learning [47].
+Early prompt learning methods for VLMs, such as
+CoOp [47] and CoCoOp [46], focus exclusively on learn-
+ing prompts in the language branch of CLIP. While
+these approaches demonstrate improved performance on
+downstream tasks, they adopt a uni-modal prompting
+2
+
+"a photo of a dog"
+Sim()
+Prompt
+Learner
+Word
+Embed
+Patch
+Embed
+Encoder
+Encoder
+Encoder
+: momentum
+: learnable prompts & coupling params
+: momentum variable
+: repulsion strength
+: repulsive force
+: step-size
+: gradient of potential
+: balance param
+: noise estimate
+Figure 1. Overview of our proposed ReBaPL approach, in a multi-modal prompt learning setting. Text and image encoders receive
+text (W0) and image (E0) embeddings as input, combined with learnable tokens of context prompts (P). The terms pertaining to the
+exploration and sampling stages and the repulsion force are colored in blue, red and green respectively.
+strategy that only partially adapts the pre-trained model.
+This limitation motivated the development of multi-modal
+prompt learning, which recognizes that both the vision
+and language encoders should be adapted simultaneously to
+achieve optimal alignment between modalities [21]. While
+our ReBaPL approach can be run on top of any MLE-based
+prompt learning method, we focus primarily on multi-
+modal prompt learning for the remainder of this paper, since
+these methods tend to significantly outperform uni-modal
+methods in terms of predictive performance [16, 21].
+Multi-modal Prompt Learning Given CLIP’s dual-
+encoder architecture with text encoder L and image encoder
+V, multi-modal prompt learning approaches [4, 16, 21] in-
+troduce learnable context tokens in both branches at multi-
+ple depths. Let V = {Vi}K
+i=1 and L = {Li}K
+i=1 denote the
+K transformer layers in the vision and language branches,
+respectively. In the case of MaPLe[21], MMRL [16], and
+VaMP [4], prompt tuning is further implemented in deeper
+layers in the encoders.
+For the language branch, learnable tokens {Pi
+∈
+Rdtext}b
+i=1 are introduced alongside the input word embed-
+dings W0 = [w1
+0, w2
+0, . . . , wN
+0 ] ∈RN×dtext, forming the in-
+put [P 1, P 2, . . . , P b, W0] to the first transformer layer. Ad-
+ditional learnable tokens are introduced in the transformer
+blocks of the language encoder Li, in deeper layers up to
+depth J < K:
+[ , Wi] = Li([Pi−1, Wi−1])
+i = 1, 2, . . . , J,
+(1)
+where the learned prompts Pi are processed at each layer,
+and [·, ·] is the concatenation operation. After depth J, sub-
+sequent layers process the prompts from layer J, and the
+final text representation v is computed by projecting the
+text embeddings to a common vision-language embedding
+space:
+[Pj, Wj] = Lj([Pj−1, Wj−1])
+j = J + 1, . . . , K,
+(2)
+v = TextProj(wN
+K)
+(3)
+Similarly, for the vision branch, learnable tokens { ˜Pi ∈
+Rdvis}b
+i=1 are introduced alongside the patch embeddings
+E0 and class token c0. The vision prompts are processed
+through transformer layers of the vision encoder Vi analo-
+gously to the language prompts, with learnable tokens intro-
+duced up to depth J, where u is the final image representa-
+tion is obtained by projecting to a common vision-language
+embedding space:
+[ci, Ei, ] = Vi([ci−1, Ei−1, ˜Pi−1])
+i = 1, 2, . . . , J,
+(4)
+[cj, Ej, ˜Pj] = Vj([cj−1, Ej−1, ˜Pj−1])
+j = J + 1, . . . , K,
+(5)
+u = ImageProj(cK)
+(6)
+Vision-Language Coupling.
+A key insight of recent
+multi-modal prompt learning is that the vision and language
+prompts should not be learned independently [16, 21]. To
+ensure mutual synergy between modalities, a coupling func-
+3
+
+tion F explicitly conditions the vision prompts on their lan-
+guage counterparts:
+˜Pi = Fi(Pi),
+(7)
+where the implementation of Fi
+: Rdtext
+→Rdvis de-
+pends on the particular multi-prompt learning method. For
+MaPLe [21], F is implemented as a learnable linear pro-
+jection.
+In MMRL [16], the coupling function uses vi-
+sual tokens embedded in a shared latent space, which are
+initialized by sampling from a Gaussian, and then uses
+a separate linear projection to generate modality-specific
+prompts. VaMP [4] employs a different coupling strategy,
+where text prompts are generated by layer-specific MLPs
+that map frozen CLIP image features to prompt tokens, cre-
+ating sample-specific text prompts, while vision prompts re-
+main shared and learnable across samples. For all of these
+approaches the coupling function acts as a bridge between
+the two modalities, allowing mutual gradient propagation
+and promoting synergistic adaptation. This explicit con-
+ditioning discourages independent uni-modal solutions and
+encourages learning of prompts in a shared embedding.
+Given a dataset D = {xi, yi}n
+i=1 of images xi and labels
+yi ∈{1, · · · , C}, multi-modal prompt learning optimizes
+the language prompts {Pi}, vision prompts { ˜Pi}, and cou-
+pling functions {Fi} via:
+θ⋆= arg min
+θ
+−1
+n
+n
+X
+i=1
+log p(yi|ui, θ),
+(8)
+p(yi|ui, θ) =
+exp(cossim(ui, vyi)/τ)
+PC
+c=1 exp(cossim(ui, vc)/τ)
+,
+(9)
+where θ encompasses all learnable prompts and coupling
+parameters, ui is the image embedding from the vision en-
+coder (now influenced by vision prompts ˜Pi), vc is the text
+embedding for class c (influenced by language prompts Pi),
+and τ is a temperature parameter.
+2.2. Bayesian Learning
+Bayesian learning is a framework for reasoning under un-
+certainty, which is particularly relevant to data-scarce ap-
+plications [31]. Starting from Bayes theorem [36], for a
+dataset D and a model parameterized by θ, the posterior
+probability over parameters p(θ|D) can be modeled as,
+p(θ|D) = p(D|θ)p(θ)
+p(D)
+, then p(θ|D) ∝p(D|θ)p(θ). (10)
+In practice, we want to estimate log p(θ|D), or, equivalently
+(modulo the normalization constant p(D)) log p(D|θ) +
+log p(θ). The first term is the log-likelihood, and the sec-
+ond term is the prior over parameters. Henceforth, we call
+U(θ) = −log p(D|θ) the potential.
+One way to estimate the posterior in Bayesian learning
+is sampling from p(θ|D), i.e., acquiring samples with high
+probability under this distribution.
+This can be done by
+adding the proper amount of noise to a gradient-based opti-
+mization algorithm. Indeed, assuming θ1, · · · , θK ∼p(θ),
+we can flow these samples with Langevin dynamics,
+θk,t+1 = θk,t −αt∇U(θk,t) +
+√
+2αtϵt,
+(11)
+where ϵt ∼N(0, Id). This equation corresponds to the
+discretization in time of the Langevin Stochastic Differen-
+tial Equation (SDE), ˙θk(t) = −∇U(θk(t))dt +
+√
+2dWt,
+where dWt is a standard d−dimensional Wiener process.
+Solving this SDE is potentially intractable, since comput-
+ing ∇U(θk) = −∇log p(D|θ) involves evaluating the like-
+lihood term over the complete dataset. This motivated [41]
+to propose the Stochastic Gradient Langevin Dynamics
+(SGLD) algorithm, which estimates the potential’s gradient,
+∇U, over mini-batches from D, that is,
+˜U(θ) = −m
+n
+m
+X
+i=1
+log p(xi|θ) + log p(θ),
+where m ≪n is the mini-batch size. However, this algo-
+rithm suffers from slow convergence in high dimensions.
+To solve the limitations of SGLD, [3] introduces mo-
+mentum variables r with a friction term, thus introducing
+Stochastic Gradient Hamiltonian Monte Carlo (SGHMC),
+(
+θk,t+1 = θk,t + rk,t
+rk,t+1 = rk,t −αt∇˜U(θk,t) −ηrk,t +
+p
+2(η −ˆγ)αtϵt.
+(12)
+Here, ˆγ estimates the stochastic gradient noise. The fric-
+tion term η counteracts this noise to ensure convergence to
+the correct stationary distribution. This allows SGHMC to
+combine the computational efficiency of mini-batching with
+the rapid exploration of momentum-based dynamics.
+In a further development, [44] proposed alternating be-
+tween exploration and sampling stages for enhancing the
+diversity of samples in Stochastic Gradient Markov Chain
+Monte Carlo (SGMCMC) methods. First, they update the
+learning rate using a cosine scheduler. Second, they alter-
+nate between iterations of exploration and sampling cycli-
+cally. This approach is known as Cyclical-SGMCMC.
+Remark. (Nomenclature of methods) As discussed in [44],
+both SGLD and SGHMC can be unified under the com-
+mon framework of SGMCMC methods. This nomenclature
+hints at the fact that these algorithms are stochastic gra-
+dient discretizations of continuous-time Markov processes
+designed to sample from the posterior distribution, differ-
+ing only in how they incorporate momentum, friction, and
+injected noise. For the remainder of the paper, we adopt this
+convention for Bayesian methods.
+4
+
+2.3. Probability Metrics
+In this section, we present metrics between probability dis-
+tributions that will be used in our method. Recall that, given
+a subset Ω∈Rd, P(Ω) denotes the set of probability dis-
+tributions on Ω. A probability metric is a metric on ele-
+ments of P(Ω). In the following, we discuss how to esti-
+mate these metrics based on finite samples from p, and q,
+denoted {z(p)
+i
+}n
+i=1 and {z(q)
+j }m
+j=1.
+The Maximum Mean Discrepancy (MMD) metric, pro-
+posed by [15], computes a distance between p and q based
+on a kernel κ : Ω× Ω→R. More specifically,
+d(p, q)2 = 1
+n2
+n
+X
+i,j=1
+κ(z(p)
+i
+, z(p)
+j
+) + 1
+m2
+m
+X
+i,j=1
+κ(z(q)
+i
+, z(q)
+j )
+−
+2
+nm
+n
+X
+i=1
+m
+X
+j=1
+κ(z(p)
+i
+, z(q)
+j ).
+(13)
+Meanwhile, the Wasserstein distance comes from Opti-
+mal Transport (OT) [29]. This distance computes the least
+amount of effort or energy to transport one distribution into
+another. In mathematical terms,
+d(p, q)2 =
+n
+X
+i=1
+m
+X
+j=1
+γ⋆
+ij∥z(p)
+i
+−z(q)
+j ∥2
+2,
+(14)
+where γ⋆= argminγ∈Γ
+Pn
+i=1
+Pm
+j=1 γij∥z(p)
+i
+−z(q)
+j ∥2
+2 is
+called the optimal transport plan. Here, Γ = {γ ∈Rn×n
++
+:
+Pn
+i=1 γij = m−1, Pm
+j=1 γij = n−1} is the set of feasible
+transportation plans.
+In either of these cases, one can see d(p, q) as a function
+of its samples, i.e., {{z(p)
+i
+}n
+i=1, {z(q)
+j }m
+j=1} 7→d(p, q). In
+this sense, equations 13 and 14 compute a distance between
+groups of points. This will be useful in the next section (c.f.
+equation 18), as probability metrics will serve as a way of
+capturing the geometry of the weight space.
+3. Bayesian Prompt Learning with Repulsive
+Cyclical SGHMC
+Our goal in this section is to present a Bayesian view of
+prompt learning.
+We recall that D = {xi, yi}n
+i=1 is a
+dataset of i.i.d.
+samples.
+Each text prompt and image
+in D is encoded, i.e., vyi = TextProj(wN
+K) and ui =
+ImageProj(cK). Starting from equations 8 and 9, and un-
+der the i.i.d. assumption, the log-likelihood is written as
+log p(D|θ) = Pn
+i=1 p(yi|ui, θ). Now, using equation 9,
+multi-modal prompt learning corresponds to Maximum A
+Posteriori (MAP) estimation:
+θ⋆
+MAP = arg maxθ log p(θ) +
+n
+X
+i=1
+p(yi|ui, θ),
+(15)
+where θ includes all learnable prompts and coupling param-
+eters. As a consequence of equation 15, MaPLe and MMRL
+inherit the intrinsic limitations of MAP estimation under
+data scarcity. In particular, they are subject to overfitting,
+and do not account for predictive uncertainty.
+Our goal is to use a Bayesian setting, which allows us to
+sample high quality prompts from the posterior p(θ|D). The
+main insight is that the underlying prompt landscape has
+many equally good (in terms of training loss) prompts that
+have different generalization capabilities (test loss or accu-
+racy). On the one hand, we want to generate samples that
+are likely under the posterior p(θ|D). On the other hand,
+we want to enhance sample diversity to uncover multiple
+modes in the landscape. To achieve both of these goals, we
+propose the Repulsive Cyclical SGMCMC (rcSGMCMC)
+algorithm. Our insight is that, in addition to using the cycli-
+cal SGMCMC schedule of [44], we can further encourage
+exploration with a repulsion term between prompts.
+Remark. (Notation) In the following, we describe our
+method mathematically. We use k to denote different sam-
+ples in MCMC, t to denote the iteration, and c to denote
+cycles. In this sense, each cycle c = 1, · · · , C is composed
+of t = 1, · · · , T iterations across the k = 1, · · · , K sam-
+ples.
+Given a balance parameter β, we define the exploration
+stage where t
+T ≤β, and the sampling stage where t
+T > β.
+We sample using equation 16 :
+
+
+
+
+
+
+
+θ(c)
+k,t+1 = θ(c)
+k,t + r(c)
+k,t + ξ PK
+ℓ=1 F(θ(c)
+k,t, θ(c−1)
+ℓ,T
+),
+r(c)
+k,t+1 = (1 −η)r(c)
+k,t −αt∇˜U(θ(c)
+k,t)
++ I t
+T ,β
+p
+2(η −ˆγ)αtϵt,
+(16)
+for ϵt ∼N(0, Id), and I t
+T ,β = 1 if
+t
+T > β and 0 oth-
+erwise. These two stages are scheduled within cycles, as
+in Zhang et al. [44]. We provide further mathematical mo-
+tivation for these equations in our supplementary materials.
+The main feature that distinguishes equation 16 is the
+repulsion of samples from the current cycle c, {θ(c)
+k,t}K
+k=1,
+away from those of the previous cycle, {θ(c−1)
+ℓ,T
+}K
+ℓ=1. We
+refer readers to Figures 1 for conceptual illustrations of the
+effect of this force on the SGHMC algorithm, i.e., mode
+exploration in the posterior.
+We model the repulsive force through another potential,
+V (θ, θ′), so that, F(θ, θ′) = −∇θV (θ, θ′). Intuitively, this
+potential should be large for similar parameters, and small
+for different ones. A natural potential is,
+V (θ, θ′) =
+1
+dΘ(θ, θ′)2 + ϵ,
+(17)
+where dΘ : Θ2 →R is a distance in the space of parame-
+ters Θ. We propose comparing the representations extracted
+5
+
+Algorithm 1 cSGHMC Training with Cycle Restarts and
+Inter-Cycle Repulsion
+Require: Initial step-size α0, number of iterations T, num-
+ber of cycles C, proportion of exploration β, momen-
+tum 1 −η, repulsion strength ξ, noise estimate ˆγ.
+1: for Cycle c = 1, · · · , C do
+2:
+for Iteration t = 1, · · · , T do
+3:
+Set αt with cosine scheduling
+4:
+F (c)
+k,t =
+(PK
+ℓ=1 F(θ(c)
+k,t, θ(c−1)
+ℓ,T
+)
+c > 1
+0
+otherwise
+5:
+nt =
+(p
+2(η −ˆγ)αtϵt
+mod(t−1,⌈T/C⌉)
+⌈T/C⌉
+> β
+0
+otherwise
+6:
+θ(c)
+k,t+1 = θ(c)
+k,t + r(c)
+k,t + F (c)
+k,t ,
+7:
+r(c)
+k,t+1 = (1 −η)r(c)
+k,t −αt∇˜U(θ(c)
+k,t) + nt
+8:
+end for
+9: end for
+by the networks, i.e., uθ,i for a representation of image xi:
+Algorithm 1 gives our complete cSGHMC approach.
+Modeling the geometry of the weight space is challeng-
+ing [25] due to invariance to permutations (e.g. [13]) and
+data scarcity in this space. Therefore, we propose compar-
+ing parameters θ and θ′ in terms of the distribution of their
+activations, i.e.,
+dΘ(θ, θ′) = dP(U)(Uθ, Uθ′),
+(18)
+where Uθ = {uθ,i}n
+i=1 and dP(U) is a distance over the
+set of probability distributions over U. The MMD [15] and
+Wasserstein distance [29] are of main interest to our appli-
+cations, which are described in section 2.3.
+While computing the MMD or the Wasserstein distance
+incurs an additional computational overhead, equation 18
+is computed on the level of mini-batches (e.g., 32 samples).
+Since the complexity of these distances scales with the num-
+ber of samples (i.e., O(n2) and O(n3) respectively), the
+overall computational cost of dP(U) is not prohibitive.
+After the execution of Algorithm 1, we produce a set
+of network parameter samples {θ(C)
+k,T }K
+k=1, which includes
+prompts and parameters of the coupling function. As a re-
+sult, we compute predictions based on the ensembling of
+these samples, namely,
+p(y|x) =
+K
+X
+k=1
+ωkp(y|x, θ(C)
+k,T ),
+where ωk is the importance of each θ(C)
+k,T . For simplicity, we
+use uniform weighting ωk = K−1.
+4. Experiments
+Overview.
+We assess the effectiveness of our proposed
+approach across three distinct evaluation protocols: base-
+to-novel class generalization, domain generalization, and
+cross-dataset transfer. Following established protocols in
+recent work on prompt learning [16, 21, 46, 47], all ex-
+periments are conducted under a 16-shot learning scenario,
+where we are provided with only 16 labeled training sam-
+ples per category. We run experiments on ReBaPL-based
+extensions of the MaPLe and MMRL methods for multi-
+modal prompt learning. Full details on our experiments are
+available in the supplementary material.
+Implementation Details. We utilize the ViT-B/16 variant
+of CLIP [34] as our vision-language backbone. All exper-
+iments are executed on NVIDIA L4 and L40s GPUs. We
+report average accuracy on base classes, novel classes, and
+their harmonic mean, computed over three independent runs
+with different random seeds, to ensure statistical reliabil-
+ity, following the experimental protocol for prompt learn-
+ing methods [21, 46]. Since the MMRL method uses the
+AdamW optimizer, for our MMRL + ReBaPL method we
+perform a AdamW burn-in during the initial iterations of
+each cycle to reach the neighborhood of the local mode, and
+then switch to SGHMC in the final iterations of the cycle.
+4.1. Base to Novel Generalization
+In this protocol, the available classes within each dataset
+are partitioned into two disjoint subsets: base categories
+and novel categories. During training, the model has access
+exclusively to labeled examples from the base categories.
+Evaluation is then performed on both base and novel sub-
+sets, enabling us to measure both the model’s adaptation
+performance on seen classes and its capacity to preserve
+zero-shot generalization on previously unseen classes. This
+evaluation is carried out across 11 benchmark classification
+datasets: ImageNet [8], Caltech101 [11], OxfordPets [32],
+StanfordCars [24], Flowers102 [30], Food101 [2], FGV-
+CAircraft [28], SUN397 [42], UCF101 [37], DTD [6], and
+EuroSAT [18].
+In Table 1 we present the performance of our method
+in the base-to-novel generalization task. We compare our
+method to the CLIP [34] baseline, and other methods in-
+cluding CoOp [47], and CoCoOp [46], APP [5], Prompt-
+SRC [22], MaPLe [21] and MMRL [16]. We re-run some
+of the leading methods (PromtpSRC, MaPLe, and MMRL)
+to ensure a fair comparison and avoid inconsistent results
+due to different hardware. While VaMP [4] is a method re-
+lated to ours, its code is not publicly available, and thus we
+do not include it our experiments. We demonstrate the ef-
+fectiveness of our proposed ReBaPL approach by running it
+as extensions of MaPLe and MMRL.
+In comparison with MaPLe, our method consistently im-
+proves performance on base classes, and in many cases
+6
+
+Table 1. Base to novel generalization results. Overall, our ReBaPL method improves the base performance of both MaPLe and MMRL,
+with a considerable increase in FGVCAircraft and EuroSAT datasets. We used MMD for the MaPLe + ReBaPL method, and Wasserstein
+distance for the MMRL + ReBaPL method, which respectively performed best. An asterisk (*) denotes methods we re-ran using the same
+random seeds and hardware.
+Method
+Average
+ImageNet
+Caltech101
+OxfordPets
+Base
+Novel
+HM
+Base
+Novel
+HM
+Base
+Novel
+HM
+Base
+Novel
+HM
+CLIP [34]
+69.34
+74.22
+71.70
+72.43
+68.14
+70.22
+96.84
+94.00
+95.40
+91.17
+97.26
+94.12
+CoOp [47]
+82.69
+63.22
+70.83
+76.47
+67.88
+71.92
+98.00
+89.81
+93.73
+93.67
+95.29
+94.47
+CoCoOp [47]
+80.47
+71.69
+75.83
+75.98
+70.43
+73.10
+97.96
+93.81
+95.84
+95.20
+97.69
+96.43
+APP [5]
+83.0
+65.8
+72.61
+69.9
+63.2
+66.4
+95.2
+91.0
+93.0
+96.8
+88.3
+92.4
+PromptSRC* [22]
+84.93
+74.49
+78.61
+76.77
+67.8
+72.01
+98.07
+94.03
+96.01
+95.27
+97.23
+96.24
+MaPLe* [21]
+82.03
+75.03
+78.37
+74.96
+66.97
+70.74
+97.83
+94.87
+96.33
+95.20
+98.13
+96.64
+MaPLe* + ReBaPL
+83.28
+76.08
+79.52
+76.06
+68.80
+72.25
+98.35
+94.87
+96.58
+96.17
+97.77
+96.96
+∆
++1.25
++1.05
++1.15
++1.10
++1.83
++1.51
++0.52
+0.0
++0.25
++0.97
+-0.36
++0.32
+MMRL* [16]
+85.54
+76.52
+80.59
+77.55
+67.43
+72.14
+98.93
+94.60
+96.72
+95.27
+97.23
+96.24
+MMRL* + ReBaPL
+85.74
+77.44
+81.38
+77.90
+68.83
+73.09
+99.10
+94.27
+96.62
+95.93
+97.57
+96.74
+∆
++0.20
++0.92
++0.79
++0.35
++1.40
++0.95
++0.17
+-0.33
+-0.10
++0.66
++0.34
++0.50
+Method
+StanfordCars
+Flowers102
+Food101
+FGVCAircraft
+Base
+Novel
+HM
+Base
+Novel
+HM
+Base
+Novel
+HM
+Base
+Novel
+HM
+CLIP [34]
+63.37
+74.89
+68.65
+72.08
+77.80
+74.83
+90.10
+91.22
+90.66
+27.19
+36.29
+31.09
+CoOp [47]
+78.12
+60.40
+68.13
+97.60
+59.67
+74.06
+88.33
+82.26
+85.19
+40.44
+22.30
+28.75
+CoCoOp [47]
+70.49
+73.59
+72.01
+94.87
+71.75
+81.71
+90.70
+91.29
+90.99
+33.41
+23.71
+27.74
+APP [5]
+85.9
+69.5
+76.8
+96.8
+61.0
+74.8
+84.6
+86.1
+85.4
+44.9
+26.0
+33.0
+PromptSRC* [22]
+77.93
+75.5
+76.7
+97.83
+77.13
+86.26
+90.60
+91.53
+91.06
+41.43
+23.67
+30.13
+MaPLe* [21]
+72.45
+74.90
+73.65
+96.33
+73.33
+83.27
+90.80
+92.10
+91.45
+36.60
+34.90
+35.73
+MaPLe* + ReBaPL
+74.73
+74.57
+74.65
+97.43
+74.37
+84.35
+90.83
+92.13
+91.48
+38.00
+34.03
+35.91
+∆
++2.28
+-0.33
++1.0
++1.10
++1.04
++1.08
++0.03
++0.03
++0.03
++1.4
+-0.87
++0.18
+MMRL* [16]
+81.23
+75.00
+77.99
+98.70
+76.83
+86.40
+90.60
+91.53
+91.06
+45.70
+37.1
+40.95
+MMRL* + ReBaPL
+81.20
+75.37
+78.17
+98.80
+77.23
+86.70
+90.73
+91.60
+91.16
+45.13
+38.57
+41.59
+∆
+-0.03
++0.37
++0.18
++0.10
++0.40
++0.30
++0.13
++0.07
++0.10
+-0.57
++1.47
++0.64
+Method
+SUN397
+DTD
+EuroSAT
+UCF101
+Base
+Novel
+HM
+Base
+Novel
+HM
+Base
+Novel
+HM
+Base
+Novel
+HM
+CLIP [34]
+69.36
+75.35
+72.23
+53.24
+59.90
+56.37
+56.48
+64.05
+60.03
+70.53
+77.50
+73.85
+CoOp [47]
+80.60
+65.89
+72.51
+79.44
+41.18
+54.24
+92.19
+54.74
+68.69
+84.69
+56.05
+67.46
+CoCoOp [47]
+79.74
+76.86
+78.27
+77.01
+56.00
+64.85
+87.49
+60.04
+71.21
+82.33
+73.45
+77.64
+APP [5]
+80.6
+73.3
+76.8
+78.4
+48.9
+60.2
+93.6
+47.6
+63.1
+86.2
+69.2
+76.8
+PromptSRC* [22]
+92.93
+74.17
+80.53
+83.33
+61.3
+70.64
+92.93
+74.17
+82.5
+87.10
+78.53
+82.6
+MaPLe* [21]
+81.07
+77.90
+79.45
+81.30
+57.50
+67.36
+92.47
+77.03
+84.05
+83.97
+77.70
+80.71
+MaPLe* + ReBaPL
+81.83
+79.87
+80.84
+82.50
+61.60
+70.53
+95.30
+79.20
+86.51
+84.97
+79.73
+82.27
+∆
++0.76
++1.97
++1.39
++1.2
++4.10
++3.17
++2.83
++2.17
++2.46
++1.0
++2.03
++1.56
+MMRL* [16]
+83.23
+79.27
+81.20
+85.63
+65.13
+73.99
+95.80
+77.20
+85.50
+88.30
+79.70
+83.78
+MMRL* + ReBaPL
+83.20
+79.37
+81.24
+86.10
+65.00
+74.08
+96.73
+83.63
+89.71
+88.33
+80.40
+84.18
+∆
+-0.03
++0.10
++0.04
++0.47
+-0.13
++0.09
++0.93
++6.43
++4.21
++0.03
++0.70
++0.40
+also novel classes.
+For some datasets (e.g., OxfordPets,
+StanfordCars, and FGVCAircraft), MaPLe outperforms our
+method by a small margin. Overall, we consistently im-
+prove over MaPLe in terms of the harmonic mean of base
+and novel accuracy, striking a balance in generalization.
+Concerning MMRL, while we improve on both base and
+novel classes, our gains are mostly on the novel classes.
+This finding highlights our claim that our repulsive cycli-
+cal SGHMC algorithm, and hence ReBaPL, improves gen-
+eralization by exploring the posterior landscape more thor-
+oughly. On average, our method improves MMRL on both
+base and novel classes, with a larger margin on the novel
+classes.
+Overall the harmonic mean is improved.
+Our
+method has substantial gains on the EuroSAT and ImageNet
+datasets, establishing a new state-of-the-art.
+4.2. Cross-Dataset Transfer
+To evaluate robustness under dataset shift, we adopt a
+source-to-target transfer protocol. The model is first trained
+on the complete set of 1000 ImageNet categories using the
+16-shot setting, and evaluated on the remaining 10 datasets
+without any additional fine-tuning.
+This setup allows to
+measure how well learned prompt adaptations transfer to
+entirely different data distributions and visual domains.
+We see from Table 2 that our ReBaPL-based models pro-
+vide significant gains over the baseline MaPLe and MMRL
+methods. Notably, our MMRL + ReBaPL approach pro-
+vides the highest average accuracy of 67.62%, indicating
+better generalization performance than competing methods.
+7
+
+Table 2. Comparison of our ReBaPL method with previous state-of-the-art multi-modal prompt learning methods on cross-dataset evalu-
+ation across 10 datasets. An asterisk (*) denotes methods we re-ran using the same random seeds and hardware. Delta values (∆) show
+improvements from adding ReBaPL (green for positive, red for negative).
+Source
+Target
+ImageNet
+Caltech101
+OxfordPets
+StanfordCars
+Flowers101
+Food101
+FGVCAircraft
+SUN397
+DTD
+EuroSAT
+UCF101
+Average
+PromptSRC* [22]
+68.96
+93.47
+90.33
+65.87
+70.40
+83.66
+24.13
+67.17
+46.40
+45.97
+67.67
+65.50
+MaPLe* [21]
+67.96
+93.17
+90.20
+65.97
+71.07
+86.33
+23.23
+67.23
+47.20
+45.70
+66.27
+65.63
+MaPLe + ReBaPL
+68.66
+93.80
+90.73
+66.30
+72.57
+86.40
+24.37
+67.70
+47.17
+50.90
+67.87
+66.77
+∆
++0.70
++0.63
++0.53
++0.33
++1.50
++0.07
++1.14
++0.47
+-0.03
++5.20
++1.60
++1.14
+MMRL* [16]
+70.13
+94.30
+91.0
+66.20
+71.53
+86.20
+26.07
+67.50
+46.93
+49.83
+69.13
+66.87
+MMRL + ReBaPL
+71.0
+94.60
+91.97
+66.63
+72.57
+86.43
+26.33
+67.90
+47.27
+52.97
+69.50
+67.62
+∆
++0.87
++0.30
++0.97
++0.43
++1.04
++0.23
++0.26
++0.40
++0.34
++3.14
++0.37
++0.75
+Source
+Target
+Method
+ImageNet ImageNetV2 ImageNet-S ImageNet-A ImageNet-R
+PromptSRC* [22]
+68.96
+62.50
+48.60
+49.63
+75.77
+MaPLe* [21]
+67.96
+61.57
+47.70
+48.80
+75.33
+MaPLe + ReBaPL
+68.66
+62.30
+48.50
+49.73
+75.40
+∆
++0.70
++0.73
++0.80
++0.93
++0.07
+MMRL* [16]
+70.13
+62.20
+47.80
+48.90
+75.03
+MMRL + ReBaPL
+71.00
+62.50
+48.40
+49.63
+75.63
+∆
++0.87
++0.30
++0.60
++0.73
++0.60
+Table 3. Comparison of robustness on out-of-distribution datasets.
+Delta values (∆) show improvements from adding ReBaPL (green
+for positive, red for negative).
+4.3. Domain Generalization
+To assess robustness against domain shift and out-of-
+distribution scenarios, we train exclusively on ImageNet
+and evaluate on four domain-shifted variants:
+Ima-
+geNetV2 [35], ImageNet-Sketch [40], ImageNet-A [20],
+and ImageNet-R [19].
+We show in Table 3 that our ReBaPL methods improve
+generalization on out-of-domain datasets, compared to the
+underlying MLE-based prompt learning method. We also
+see that our MaPLe + ReBaPL method provides the best
+performance on the ImageNet-A target. Finally, we see that
+our MMRL + ReBaPL method provides the highest accu-
+racy on the source ImageNet dataset. Taken together, these
+results show that our ReBaP approach is effective at im-
+proving out-of-domain generalization performance without
+hindering the performance on the source domain.
+4.4. Ablation
+We ablate a few design choices in our method. We com-
+pare 3 main choices:
+ReBaPL without repulsion (i.e.,
+F(θ, θ′) := 0) vs. ReBaPL with repulsion based on the
+Wasserstein distance and the MMD. This ablation seeks to
+isolate the benefit of using repulsion, and demonstrate that
+our method is robust to the choice of probability metric. We
+evaluate our methods on all datasets listed in Table 1.
+Table 4. Ablation on the use of repulsion in ReBaPL, averaged
+over 11 datasets.
+Method
+Base
+Novel
+HM
+MaPLe
+82.03
+75.03
+78.37
++ ReBaPL (No Repulsion)
+83.39
+75.47
+78.93
++ ReBaPL (Wasserstein)
+83.39
+75.86
+79.44
++ ReBaPL (MMD)
+83.28
+76.08
+79.52
+Overall, as shown in Table 4, our method has sta-
+ble performance for both the Wasserstein distance and
+MMD. The gap in harmonic mean between these choices
+is 0.08%, which is marginal compared to the improvement
+over MaPLe (around 1%). Furthermore, even without repul-
+sion, our ReBaPL method improves over MaPLe, highlight-
+ing the benefits of sampling from the posterior distribution.
+By adding the repulsion term we improve performance for
+novel classes. This finding supports our claim that adding
+repulsion allows us to explore the posterior landscape more
+thoroughly, and thus improve generalization.
+5. Conclusion
+In this paper we have introduced Repulsive Bayesian
+Prompt Learning (ReBaPL), a novel approach that ad-
+dresses overfitting and out-of-distribution generalization
+challenges in prompt learning methods.
+Our key con-
+tribution is the repulsive cyclical SGHMC (rcSGHMC)
+algorithm, which leverages Hamiltonian dynamics with
+cyclical learning rate schedules to alternate between
+exploration
+and
+exploitation
+phases
+when
+sampling
+from complex multimodal posterior distributions.
+By
+introducing a representation-based repulsive force de-
+rived from probability metrics (MMD and Wasserstein
+distance) computed on representation distributions, our
+method captures functional similarity between prompts
+and encourages diverse mode discovery while preventing
+premature convergence.
+Unlike prior Bayesian prompt
+learning approaches that rely on restrictive unimodal
+8
+
+approximations
+or
+deterministic
+variational
+methods,
+ReBaPL provides a modular, plug-and-play framework
+that can extend any existing MLE-based prompt learning
+method with principled Bayesian inference.
+Through
+comprehensive experiments we have demonstrated superior
+generalization by maintaining a richer characterization
+of the prompt posterior landscape. Future work includes
+exploring alternative probability metrics beyond MMD
+and Wasserstein distance, such as Sinkhorn divergence
+or information-theoretic measures, and developing adap-
+tive cyclical mechanisms that automatically adjust the
+number of cycles based on convergence diagnostics or
+posterior diversity to improve efficiency and performance.
+References
+[1] Yassir Bendou, Amine Ouasfi, Vincent Gripon, and Adnane
+Boukhayma. Proker: A kernel perspective on few-shot adap-
+tation of large vision-language models. In Proceedings of the
+Computer Vision and Pattern Recognition Conference, pages
+25092–25102, 2025. 1
+[2] Lukas Bossard, Matthieu Guillaumin, and Luc Van Gool.
+Food-101–mining discriminative components with random
+forests. In European Conference on Computer Vision, pages
+446–461. Springer, 2014. 6
+[3] Tianqi Chen, Emily Fox, and Carlos Guestrin. Stochastic
+gradient hamiltonian monte carlo.
+In Proceedings of the
+31st International Conference on Machine Learning, pages
+1683–1691, 2014. 4
+[4] Silin Cheng and Kai Han. Vamp: Variational multi-modal
+prompt learning for vision-language models.
+In NeurIPS
+2025. 1, 2, 3, 4, 6
+[5] Youngjae Cho, HeeSun Bae, Seungjae Shin, Yeo Dong Youn,
+Weonyoung Joo, and Il-Chul Moon. Make prompts adapt-
+able: Bayesian modeling for vision-language prompt learn-
+ing with data-dependent prior. In AAAI, pages 11552–11560,
+2024. 2, 6, 7
+[6] Mircea Cimpoi, Subhransu Maji, Iasonas Kokkinos, Sammy
+Mohamed, and Andrea Vedaldi. Describing textures in the
+wild. In IEEE Conference on Computer Vision and Pattern
+Recognition, pages 3606–3613, 2014. 6
+[7] Marco Cuturi. Sinkhorn distances: Lightspeed computation
+of optimal transport. Advances in neural information pro-
+cessing systems, 26, 2013. 3
+[8] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li,
+and Li Fei-Fei. ImageNet: A large-scale hierarchical im-
+age database. In IEEE Conference on Computer Vision and
+Pattern Recognition, pages 248–255. IEEE, 2009. 6
+[9] Mohammad Mahdi Derakhshani, Enrique Sanchez, Adrian
+Bulat, Victor G Turrisi da Costa, Cees GM Snoek, Georgios
+Tzimiropoulos, and Brais Martinez. Bayesian prompt learn-
+ing for image-language model generalization. In IEEE/CVF
+International Conference on Computer Vision, pages 15237–
+15246, 2023. 2
+[10] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,
+Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner,
+Mostafa Dehghani, Matthias Minderer, Georg Heigold, Syl-
+vain Gelly, et al. An image is worth 16x16 words: Trans-
+formers for image recognition at scale.
+arXiv preprint
+arXiv:2010.11929, 2020. 2
+[11] Li Fei-Fei, Rob Fergus, and Pietro Perona. Learning gener-
+ative visual models from few training examples: An incre-
+mental bayesian approach tested on 101 object categories. In
+IEEE Conference on Computer Vision and Pattern Recogni-
+tion - Workshops, page 178. IEEE, 2004. 6
+[12] Peng Gao, Shijie Geng, Renrui Zhang, Teli Ma, Rongyao
+Fang, Yongfeng Zhang, Hongsheng Li, and Yu Qiao.
+Clip-adapter: Better vision-language models with feature
+adapters. arXiv preprint arXiv:2110.04544, 2021. 1
+[13] Yoav Gelberg, Tycho FA van der Ouderaa, Mark van der
+Wilk, and Yarin Gal.
+Variational inference failures un-
+der model symmetries: Permutation invariant posteriors for
+bayesian neural networks. arXiv preprint arXiv:2408.05496,
+2024. 6
+[14] Aude Genevay, Gabriel Peyr´e, and Marco Cuturi.
+Learn-
+ing generative models with sinkhorn divergences. In Inter-
+national Conference on Artificial Intelligence and Statistics,
+pages 1608–1617. PMLR, 2018. 3
+[15] Arthur Gretton, Karsten M Borgwardt, Malte J Rasch, Bern-
+hard Sch¨olkopf, and Alexander Smola. A kernel two-sample
+test. The journal of machine learning research, 13(1):723–
+773, 2012. 5, 6, 2, 3
+[16] Yuncheng Guo and Xiaodong Gu. Mmrl: Multi-modal rep-
+resentation learning for vision-language models. In Proceed-
+ings of the Computer Vision and Pattern Recognition Confer-
+ence, pages 25015–25025, 2025. 1, 2, 3, 4, 6, 7, 8
+[17] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun.
+Deep residual learning for image recognition. In Proceed-
+ings of the IEEE conference on computer vision and pattern
+recognition, pages 770–778, 2016. 2
+[18] Patrick Helber, Benjamin Bischke, Andreas Dengel, and
+Damian Borth. Eurosat: A novel dataset and deep learning
+benchmark for land use and land cover classification. IEEE
+Journal of Selected Topics in Applied Earth Observations
+and Remote Sensing, 12(7):2217–2226, 2019. 6
+[19] Dan Hendrycks, Steven Basart, Norman Mu, Saurav Kada-
+vath, Frank Wang, Evan Dorundo, Rahul Desai, Tyler Zhu,
+Samyak Parajuli, Mike Guo, et al. The many faces of ro-
+bustness: A critical analysis of out-of-distribution general-
+ization. In IEEE International Conference on Computer Vi-
+sion, pages 8320–8329, 2021. 8
+[20] Dan Hendrycks, Kevin Zhao, Steven Basart, Jacob Stein-
+hardt, and Dawn Song. Natural adversarial examples. In
+IEEE Conference on Computer Vision and Pattern Recogni-
+tion, pages 15262–15271, 2021. 8
+[21] Muhammad Uzair Khattak, Hanoona Rasheed, Muham-
+mad Maaz, Salman Khan, and Fahad Shahbaz Khan.
+Maple: Multi-modal prompt learning.
+In Proceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pages 19113–19122, 2023. 1, 2, 3, 4, 6, 7, 8
+[22] Muhammad Uzair Khattak, Syed Talal Wasim, Muzammal
+Naseer, Salman Khan, Ming-Hsuan Yang, and Fahad Shah-
+baz Khan.
+Self-regulating prompts: Foundational model
+9
+
+adaptation without forgetting.
+In 2023 IEEE/CVF Inter-
+national Conference on Computer Vision (ICCV), pages
+15144–15154. IEEE, 2023. 1, 6, 7, 8
+[23] Mingyu Kim, Jongwoo Ko, and Mijung Park. Bayesian prin-
+ciples improve prompt learning in vision-language models.
+In AISTATS, 2025. 2
+[24] Jonathan Krause, Michael Stark, Jia Deng, and Li Fei-Fei.
+3D object representations for fine-grained categorization. In
+IEEE Conference on Computer Vision and Pattern Recogni-
+tion - Workshops, pages 554–561. IEEE, 2013. 6
+[25] Hao Li, Zheng Xu, Gavin Taylor, Christoph Studer, and Tom
+Goldstein. Visualizing the loss landscape of neural nets. Ad-
+vances in neural information processing systems, 31, 2018.
+6
+[26] Yuning Lu, Jianzhuang Liu, Yonggang Zhang, Yajing Liu,
+and Xinmei Tian. Prompt distribution learning. In Proceed-
+ings of the IEEE/CVF conference on computer vision and
+pattern recognition, pages 5206–5215, 2022. 1, 2
+[27] Chengcheng Ma, Yang Liu, Jiankang Deng, Lingxi Xie,
+Weiming Dong, and Changsheng Xu.
+Understanding and
+mitigating overfitting in prompt tuning for vision-language
+models. arXiv [cs.CV], 2022. 1
+[28] Subhransu Maji,
+Esa Rahtu,
+Juho Kannala,
+Matthew
+Blaschko, and Andrea Vedaldi. Fine-grained visual classi-
+fication of aircraft. arXiv preprint arXiv:1306.5151, 2013.
+6
+[29] Eduardo Fernandes Montesuma,
+Fred Maurice Ngole
+Mboula, and Antoine Souloumiac. Recent advances in op-
+timal transport for machine learning. IEEE Transactions on
+Pattern Analysis and Machine Intelligence, 2024. 5, 6, 2, 3
+[30] Maria-Elena Nilsback and Andrew Zisserman. Automated
+flower classification over a large number of classes. In Indian
+Conference on Computer Vision, Graphics & Image Process-
+ing, pages 722–729. IEEE, 2008. 6
+[31] Theodore Papamarkou, Maria Skoularidou, Konstantina
+Palla, Laurence Aitchison, Julyan Arbel, David Dun-
+son, Maurizio Filippone, Vincent Fortuin, Philipp Hennig,
+Jos´e Miguel Hern´andez-Lobato, et al. Position: Bayesian
+deep learning is needed in the age of large-scale ai. arXiv
+preprint arXiv:2402.00809, 2024. 4
+[32] Omkar M Parkhi, Andrea Vedaldi, Andrew Zisserman, and
+CV Jawahar. Cats and dogs. In IEEE Conference on Com-
+puter Vision and Pattern Recognition, pages 3498–3505.
+IEEE, 2012. 6
+[33] Zhen Qu, Xian Tao, Xinyi Gong, Shichen Qu, Qiyu Chen,
+Zhengtao Zhang, Xingang Wang, and Guiguang Ding.
+Bayesian prompt flow learning for zero-shot anomaly detec-
+tion. arXiv [cs.CV], 2025. 2
+[34] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning
+transferable visual models from natural language supervi-
+sion. In International conference on machine learning, pages
+8748–8763. PmLR, 2021. 1, 2, 6, 7
+[35] Benjamin Recht, Rebecca Roelofs, Ludwig Schmidt, and
+Vaishaal Shankar. Do ImageNet classifiers generalize to Im-
+ageNet? In International Conference on Machine Learning,
+pages 5389–5400. PMLR, 2019. 8
+[36] Paul J Smith. Statistics: A bayesian perspective, 1997. 4
+[37] Khurram Soomro, Amir Roshan Zamir, and Mubarak Shah.
+UCF101:
+A dataset of 101 human actions classes from
+videos in the wild. arXiv preprint arXiv:1212.0402, 2012.
+6
+[38] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-
+reit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia
+Polosukhin. Attention is all you need. Advances in neural
+information processing systems, 30, 2017. 2
+[39] C´edric Villani et al.
+Optimal transport:
+old and new.
+Springer, 2008. 3
+[40] Haohan Wang, Songwei Ge, Zachary Lipton, and Eric P
+Xing. Learning robust global representations by penalizing
+local predictive power. In Advances in Neural Information
+Processing Systems, pages 10506–10518, 2019. 8
+[41] Max Welling and Yee W Teh. Bayesian learning via stochas-
+tic gradient langevin dynamics. In Proceedings of the 28th
+international conference on machine learning (ICML-11),
+pages 681–688, 2011. 4
+[42] Jianxiong Xiao, James Hays, Krista A Ehinger, Aude Oliva,
+and Antonio Torralba.
+Sun database: Large-scale scene
+recognition from abbey to zoo. In IEEE Conference on Com-
+puter Vision and Pattern Recognition, pages 3485–3492.
+IEEE, 2010. 6
+[43] Shijun Yang, Xiang Zhang, Wanqing Zhao, Hangzai Luo,
+Sheng Zhong, Jinye Peng, and Jianping Fan. Multi-modal
+mutual-guidance conditional prompt learning for vision-
+language models. arXiv [cs.CV], 2025. 1
+[44] Ruqi Zhang, Chunyuan Li, Jianyi Zhang, Changyou Chen,
+and Andrew Gordon Wilson.
+Cyclical stochastic gradi-
+ent mcmc for bayesian deep learning.
+arXiv preprint
+arXiv:1902.03932, 2019. 4, 5
+[45] Renrui Zhang, Rongyao Fang, Wei Zhang, Peng Gao,
+Kunchang Li, Jifeng Dai, Yu Qiao, and Hongsheng Li.
+Tip-adapter:
+Training-free clip-adapter for better vision-
+language modeling. arXiv preprint arXiv:2111.03930, 2021.
+1
+[46] Kaiyang Zhou, Jingkang Yang, Chen Change Loy, and Ziwei
+Liu. Conditional prompt learning for vision-language mod-
+els. In Proceedings of the IEEE/CVF conference on com-
+puter vision and pattern recognition, pages 16816–16825,
+2022. 1, 2, 6
+[47] Kaiyang Zhou, Jingkang Yang, Chen Change Loy, and Ziwei
+Liu. Learning to prompt for vision-language models. In-
+ternational Journal of Computer Vision, 130(9):2337–2348,
+2022. 1, 2, 6, 7
+[48] Beier Zhu, Yulei Niu, Yucheng Han, Yue Wu, and Hanwang
+Zhang. Prompt-aligned gradient for prompt tuning. arXiv
+[cs.CV], 2025. 1
+10
+
+ReBaPL: Repulsive Bayesian Prompt Learning
+Supplementary Material
+A. Additional Experiments
+A.1. Toy Example
+We start with a toy example to illustrate our method. We
+consider a simple Gaussian mixture potential U(θ)
+=
+1
+2(N(·|µ1, Σ1) + N(·|µ2, Σ2)) and V (θ, θ′) as in equa-
+tion 17, with d(θ, θ′) = ∥θ−θ′∥2 for simplicity. The under-
+lying potential U has two modes (µ1 and µ2), and we want
+to explore both of them through MCMC (SGLD in this case,
+for simplicity).
+We start by running standard SGLD to obtain a sample
+in the posterior, denoted by the blue dot in Figures 2 and 3.
+As shown in Figure 2 (a), this point is located in a high den-
+sity region of U(θ) . For the next cycle, we add repulsion
+for exploring the second mode in the landscape of U(θ).
+The repulsion potential, V , is shown in Figure 2 (b). Note
+how the vector field, i.e., F(θ, θ(c−1)
+k,T
+), point outwards from
+θ(c−1)
+k,T
+. We show the posterior alongside the final vector
+field ∇θ
+
+U(θ) + ξV (θ, θ(c−1)
+k,T
+)
+
+in Figure 2 (c). Overall,
+repulsion modifies the vector field, driving samples away
+from θ(c−1)
+k,T
+, thus enhancing mode exploration.
+(a) Potential U(θ)
+(b) Potential V (θ, θ′)
+(c) Field w/ repulsion
+Figure 2.
+Conceptual illustration of the benefits of repulsive
+MCMC on a mixture of Gaussian distributions. In (a), we show the
+potential U(θ) alongside the vector field ∇U(θ). The blue point,
+θ(c−1)
+k,T
+represents the minimum of θ 7→U(θ) obtained through
+SGLD. In (b), we show the repulsion potential V (θ, θ(c−1)
+k,T
+) along-
+side the vector field F(θ, θ(c−1)
+k,T
+) = ∇θV (θ, θ(c−1)
+k,T
+). As we show
+in (c) the repulsion vector field changes the initial vector field,
+pushing samples away from the sample of the previous cycle.
+We then run SGLD and SGLD with repulsion on this
+toy example. The results are shown in Figure 3 (a) and (b)
+from an initialization θ(c)
+k,0. Due the initialization, SGLD
+converges to the same mode as θ(c−1)
+k,T
+.
+In comparison,
+by adding the repulsion term, θ(c)
+k,0 converges to the second
+mode in the posterior.
+θ(c−1)
+k,T
+θ(c)
+k,0
+θ(c)
+k,t
+(a) SGLD
+θ(c−1)
+k,T
+θ(c)
+k,0
+θ(c)
+k,T
+(b) SGLD + Repulsion
+Figure 3. As we show in (a) and (b), we encourage mode explo-
+ration by driving particles from the current cycle, θ(c)
+k,t, away from
+those of the previous cycle, θ(c−1)
+k,T
+.
+Remark. (Intuition on repulsion strength ξ) The repul-
+sion strength ξ strikes a balance between the force driving
+samples to the modes of the log-likelihood, i.e., ∇θU(θ),
+and the repulsive force driving particles away from previ-
+ous cycles’ particles, i.e., ∇θV (θ, θ(c−1)
+k,T
+). Intuitively, if
+ξ →+∞, the repulsive strength overpowers the force to-
+wards the modes of the posterior. Therefore, tuning ξ is
+important to strike a balance between standard SGMCMC
+and mode exploration. We show in Figure 4 an illustration
+of this phenomenon.
+θ(c−1)
+k,T
+θ(c)
+k,0
+θ(c)
+k,T
+Figure 4. SGMCMC with very high repulsion strength ξ. In this
+case the repulsive force dominates the sampling trajectory.
+A.2. Prompt Diversity
+An important aspect of MCMC is yielding diverse sam-
+ples from the posterior distribution. This can be analyzed
+through the lens of mode collapse, i.e., whether the sam-
+pled {θ(c)
+k,T }K
+k=1 are close with respect some defined metric.
+To assess whether our method successfully mitigates
+mode collapse, we analyzed the similarity in features dis-
+1
+
+A1
+A2
+A3
+A1
+A2
+A3
+0.0000
+0.0122
+0.0258
+0.0122
+0.0000
+0.0221
+0.0258
+0.0221
+0.0000
+(a) Training A with repulsion
+B1
+B2
+B3
+B1
+B2
+B3
+0.0000
+0.0125
+0.0120
+0.0125
+0.0000
+0.0087
+0.0120
+0.0087
+0.0000
+(b) Training B without repulsion
+Figure 5. Wasserstein distance matrix after training on Eurosat,
+with and without repulsion. Average Wasserstein distance with
+repulsion is greater.
+tribution between the sampled models. We computed the
+Wasserstein distance between the representations for three
+independent checkpoints. This metric quantifies how dis-
+tinct the internal feature distributions are between models,
+with a higher distance indicating greater diversity between
+the feature distributions.
+To quantify the diversity of the learned features, we com-
+pute the pairwise Wasserstein distances between the latent
+representations of models from different training cycles.
+Using a test batch of 100 images, we construct a matrix
+D with entries Di,j = W2(Uθi, Uθj). Here, Uθi is defined
+as the empirical distribution of the latent features associated
+with cycle i.
+As illustrated in Figure 5, the resulting distance matrices
+reveal the extent of functional separation between samples.
+We observe that for Training A, which employs repulsion,
+the Wasserstein distances between the representation distri-
+butions across different cycles are, on average, greater than
+those observed in Training B.
+A.3. Ablations
+In this section we ablate the hyperparameters of our method,
+including the batch size n used to calculate the repulsion
+force, the repulsion strength ξ, and the number of cycles T.
+We start by tuning the core hyper-parameters of our re-
+pulsion method, namely, the batch size n, and the re-
+pulsion strength ξ.
+We use n ∈{16, 32, 64}, ξ
+∈
+{10−3, 10−2, 10−1}, and distance ∈{MMD, Wasserstein},
+with a total of 18 combinations. We show our results in
+Figure 6 for the UCF dataset. Overall, this figure shows the
+inherent trade-off associated with repulsion strength. On
+the one hand, a small repulsion strength is not enough to
+encourage exploration, resulting in a smaller improvement
+in performance. On the other hand, large repulsion leads to
+too much exploration, as we discussed in our toy example
+(section A.1).
+10−3
+10−2
+10−1
+Repulsion Strength ξ
+81.0
+81.5
+82.0
+82.5
+83.0
+83.5
+84.0
+Harmonic Mean
+MMD
+n =16
+n =32
+n =64
+No repulsion
+10−3
+10−2
+10−1
+Wasserstein
+Figure 6. Harmonic mean of base and novel accuracies on the
+UCF dataset, as a function of repulsion strength ξ for various batch
+sizes.
+5
+10
+15
+20
+Number of Cycles (C)
+67
+68
+69
+70
+71
+72
+73
+Harmonic Mean
+Figure 7. Ablation on the number of cycles in the rcSGHMC al-
+gorithm for the DTD dataset.
+Next, we run an ablation on the number of cycles C ∈
+{1, 2, 3, 4, 6, · · · , 20} in our algorithm. We show our results
+in Figure 7. First, repulsive cSGMCMC improves over the
+MaPLe baseline for all number of cycles. Second, running
+Algorithm 1 for more cycles generally leads to better perfor-
+mance. This is somewhat intuitive, since we are able to ac-
+quire more samples from additional modes in the posterior
+distribution. These findings show that, through repulsion,
+our method is able to better explore the posterior landscape.
+B. Additional Implementation Details
+We describe in Table 5 the set of hyperparameters used to
+run our experiments in Table 1.
+C. Additional Background
+C.1. Probability Metrics
+We give further details on the probability metrics introduced
+in section 2.3, especially equations 13 and 14. Here, we
+cover the essential theory behind the MMD and the Wasser-
+stein distance. For further details, we refer readers to [15]
+and [29].
+2
+
+Table 5. Hyperparameters used in our ReBaPL experiments for
+both MMRL and MaPLe.
+Hyperparameter
+MaPLe
+MMRL
+Learning rate α
+0.002
+0.001
+Batch size b
+1
+4
+Epochs per cycle T
+5
+5
+# Cycles C
+3
+3
+Samples per cycle K
+1
+1
+Repulsion strength ξ
+0.001
+10−4
+Repulsion batch size n
+32
+64
+Distance
+MMD
+Wasserstein
+Algorithm
+rcSGHMC
+Weight decay
+5e-4
+Random seed
+[1, 2, 3]
+Maximum Mean Discrepancy. Let F be a family of test
+functions over U. The MMD is defined by,
+MMD(p, q) = sup
+f∈F
+Ex∼p[f(x)] −Ey∼q[f(y)].
+When F is a reproducing kernel Hilbert space (see [15, Sec-
+tion 2.2]) with kernel κ : U × U →R, the squared MMD is
+expressed in terms of the mean embeddings of p and q,
+MMD(p, q)2 = ∥µp −µq∥2
+2.
+Here, the mean embedding is the element µp ∈F such that
+⟨f, µp⟩F = Ex∼p[f], ∀f ∈F. By [15, Lemma 6], the
+squared MMD admits the form,
+MMD(p, q)2 =
+E
+x∼p,x′∼p[κ(x, x′)]+
+E
+y∼q,y′∼q[κ(y, y′)]
+−2
+E
+x∼p,y∼q[κ(x, y)],
+(19)
+which then admits the unbiased estimator in equation 13.
+Due to the double summations in equation 13, and with the
+assumption that n ≈m, the computational complexity of
+computing the empirical MMD is O(n2).
+Wasserstein distance. This distance is rooted in the theory
+of OT [29, 39], and gives the least amount of effort or energy
+required to move the probability mass from p to q. In other
+words, consider the set Γ(p, q) so that γ ∈Γ(p, q) satisfies,
+Z
+U
+γ(x, y)dy = p(x)
+Z
+U
+γ(x, y)dx = q(y).
+The elements of γ are called transport plans, and can be
+conceptualized as joint distributions with marginals p and q.
+Note that Γ(p, q) also impose mass preservation constraints
+on the transportation plans. With these concepts,
+γ⋆= arginf
+γ∈Γ(p,q)
+Z
+U
+Z
+U
+c(x, y)γ(x, y)dxdy,
+(20)
+where c : U × U →R is called the ground-cost, i.e., a
+function that measures the effort of moving x to y.
+The problem in equation 20 can induce a metric on
+P(U), under certain conditions. Especially, let (U, dU) be
+a metric space, and c(x, y) = d(x, y)α, α ∈[1, +∞). The
+OT cost under these conditions defines the α−Wasserstein
+distance,
+Wα(p, q)α = inf
+γ∈Γ
+Z
+U
+Z
+U
+d(x, y)αγ(x, y)dxdy.
+(21)
+This is an infinite dimensional program on the variable γ.
+Given samples x(p)
+i
+∼p and y(q)
+j
+∼q, the Wasserstein dis-
+tance admits an empirical estimator given by equation 14.
+In this case, it is calculated through a finite linear program
+with n × m variables. In that sense, its computational com-
+plexity is O(n3).
+Remark. (Entropic Regularization) An alternative to equa-
+tion 14 is to consider the Sinkhorn divergence [7, 14],
+which is a regularized version of the OT problem, which has
+O(n2) complexity per iteration. However, in small sample
+scenarios (e.g., at the level of a mini-batch), Sinkhorn diver-
+gence usually needs many iterations to accurately estimate
+the transportation plan, which leads to a running time that
+is comparable or worse than exact OT. For that reason, in
+our experiments, we use the standard Wasserstein distance.
+Remark. (Mini-batch estimation) In the main paper (c.f.
+equations 13 and 14), we presented the empirical estima-
+tors of the continuous MMD and Wasserstein distance (c.f.
+equations 19 and 21). These estimators assume n and m
+i.i.d. samples from distributions p and q, respectively. Now,
+note that our main interest is computing dP(U)(Uθ, Uθ′),
+where Uθ = {uθ,i}n
+i=1 and Uθ′ = {uθ′,i}n
+i=1. In other
+words, we understand Uθ and Uθ′ as the i.i.d. samples from
+the distribution of representations produced by networks θ
+and θ′, respectively.
+For the sake of completeness, the MMD reads as,
+MMD(Uθ, Uθ′)2 = 1
+n2
+ X
+i,j
+κ(uθ,i, uθ,j)+
+X
+i,j
+κ(uθ′,i, uθ′,j)−
+2
+X
+i,j
+κ(uθ,i, uθ′,j)
+
+,
+and the Wasserstein distance,
+W2(Uθ, Uθ′)2 =
+n
+X
+i=1
+n
+X
+j=1
+γ⋆
+ij∥uθ,i −uθ′,j∥2
+2,
+where γ⋆is obtained through linear programming.
+3

@@ -1,0 +1,1167 @@
+MMT-ARD: Multimodal Multi-Teacher Adversarial Distillation
+for Robust Vision-Language Models
+Yuqi Li1*
+Junhao Dong2*
+Chuanguang Yang2
+Shiping Wen4
+Piotr Koniusz5
+Tingwen Huang6
+Yingli Tian1†
+Yew-Soon Ong2†
+1The City University of New York, CUNY
+2Nanyang Technological University
+3Institute of Computing Technology, Chinese Academy of Sciences
+4University of Technology Sydney
+5Data61, CSIRO
+6Shenzhen University of Advanced Technology
+Abstract
+Vision-Language Models (VLMs) are increasingly de-
+ployed in safety-critical applications, making their ad-
+versarial robustness a crucial concern.
+While adversar-
+ial knowledge distillation has shown promise in transfer-
+ring robustness from teacher to student models, traditional
+single-teacher approaches suffer from limited knowledge di-
+versity, slow convergence, and difficulty in balancing ro-
+bustness and accuracy. To address these challenges, we
+propose MMT-ARD: a Multimodal Multi-Teacher Adversar-
+ial Robust Distillation framework. Our key innovation is
+a dual-teacher knowledge fusion architecture that collab-
+oratively optimizes clean feature preservation and robust
+feature enhancement. To better handle challenging adver-
+sarial examples, we introduce a dynamic weight allocation
+strategy based on teacher confidence, enabling adaptive fo-
+cus on harder samples. Moreover, to mitigate bias among
+teachers, we design an adaptive sigmoid-based weighting
+function that balances the strength of knowledge trans-
+fer across modalities. Extensive experiments on ImageNet
+and zero-shot benchmarks demonstrate that MMT-ARD im-
+proves robust accuracy by +4.32% and zero-shot accuracy
+by +3.5% on the ViT-B-32 model, while achieving a 2.3× in-
+crease in training efficiency over traditional single-teacher
+methods. These results highlight the effectiveness and scal-
+ability of MMT-ARD in enhancing the adversarial robust-
+ness of multimodal large models. Our codes are available
+at https://github.com/itsnotacie/MMT-ARD
+*Equal Contribution.
+†Corresponding Author.
+1. Introduction
+With the rapid advancement of multimodal artificial in-
+telligence technology, Vision-Language Models (VLMs)
+have been widely adopted in autonomous driving, medical
+imaging, and industrial inspection. By jointly learning vi-
+sual and textual representations, these models demonstrate
+strong cross-modal reasoning abilities. However, VLMs re-
+main highly vulnerable to adversarial perturbations. Stud-
+ies show that adding imperceptible perturbations can lead to
+completely erroneous model predictions [13] such as traffic-
+sign misclassification in autonomous driving or diagnostic
+errors in medical settings. This fragility stems from the
+multimodal alignment mechanism of VLMs—attackers dis-
+rupt cross-modal attention calculations by perturbing criti-
+cal regions in the visual feature space, causing the model
+to produce high-confidence erroneous matches for adver-
+sarial examples.
+As VLMs enter safety-critical applica-
+tions, their adversarial vulnerability has emerged as a ma-
+jor security threat hindering technological deployment. To
+break through th Current mainstream defenses fall into
+three categories: adversarial training, parameter-efficient
+fine-tuning, and knowledge distillation. Adversarial train-
+ing enhances robustness by minimizing adversarial loss,
+but is computationally expensive[1, 8, 19].
+Parameter-
+efficient fine-tuning methods (e.g., prompt tuning) reduce
+computational requirements yet rely heavily on the inher-
+ent robustness of pre-trained models, leading to poor cross-
+dataset generalization[3, 14]. Knowledge distillation, par-
+ticularly Adversarial Robustness Distillation (ARD), have
+shown great potential in enhancing model resilience. How-
+ever, existing approaches still suffer from three key lim-
+itations: 1) Foundational fine-tuning flaw: they rely on
+fine-tuning non-robust large models as teachers, which is
+1
+arXiv:2511.17448v1  [cs.CV]  21 Nov 2025
+
+ViT-B-32 
+ acc
+ViT-B-32 
+ racc
+ViT-B-32 
+ sum-acc
+ViT-B-32 
+ clip-zero
+RN50 
+ acc
+RN50 
+ racc
+RN50 
+ sum-acc
+RN50 
+ clip-zero
+0.05
+0.79
+1.52
+baseline 1
+our 1
+baseline 2
+our 2
+baseline 3
+our 3
+baseline 4
+our 4
+(a)
+RN101 
+ acc
+RN101 
+ racc
+RN101 
+ sum-acc
+RN101 
+ clip-zero
+Vit-B-32-lora 
+ acc
+Vit-B-32-lora 
+ racc
+Vit-B-32-lora 
+ sum-acc
+Vit-B-32-lora 
+ clip-zero
+0.1
+1
+10
+baseline 1
+our 1
+baseline 2
+our 2
+baseline 3
+our 3
+baseline 4
+our 4
+(b)
+Figure 1. Multidimensional performance comparison of MMT-
+ARD with the baseline under different backbone. (a) Teacher-
+student combination based on ViT-B-32 and RN50. (b) Combi-
+nation based on ViT-B-32-lora and RN101. The method proposed
+in this study (Our 1-4) comprehensively outperforms the baseline
+methods (Baseline 1-4) across the clean accuracy (acc) and robust
+accuracy (racc).
+costly and ineffective in addressing the inherent structural
+vulnerabilities; 2) Convergence efficiency bottleneck: Stu-
+dent models require hundreds of epochs to approach teacher
+performance, making it difficult to meet practical deploy-
+ment efficiency requirements; and 3) Single-teacher archi-
+tecture limitation: A single teacher cannot simultaneously
+transfer both strong discriminative (clean) and robust (ad-
+versarial) features, resulting in an inevitable trade-off be-
+tween clean accuracy and robustness. ese limitations, we
+propose a Multimodal Multi-Teacher Adversarial Robust-
+ness Distillation (MMT-ARD) framework. The main con-
+tributions are summarized as follows: 1. A multimodal
+multi-teacher knowledge fusion architecture is designed
+to achieve synergistic optimization between clean feature
+preservation and robust feature enhancement. 2. A Dy-
+namic Importance Weighting (DIW) algorithm is pro-
+posed to adaptively balance the knowledge transfer inten-
+sity from multiple teachers based on confidence and feature
+relevance. 3. A cross-modal consistency constraint loss
+is constructed to enhance adversarial invariance within the
+visual-textual embedding space, improving the model’s ro-
+bustness under multimodal perturbations.
+Extensive experiments on ImageNet and Zero-Shot
+benchmarks demonstrate the effectiveness of the proposed
+method, showing significantly improvements on ViT-B-32
+robustness by 4.32%, zero-shot accuracy by 3.5%, and
+training efficiency by 2.3x over traditional adversarial dis-
+tillation approaches. As shown in Figure 1. It can be clearly
+observed that under different architectures (such as ResNet
+and Vision Transformer), the performance polygon of our
+method (’Our’) significantly encloses that of the baseline
+(’Baseline’), indicating that our method achieves overall
+performance improvements in clean accuracy, robust accu-
+racy, and generalization metrics.
+2. Related Work
+2.1. Adversarial Attack
+Adversarial attacks aim to mislead deep learning model
+by adding carefully crafted perturbations. Depending on
+the attacker’s level of knowledge about the target model,
+adversarial attack research has evolved into three cat-
+egories:
+optimization-driven attacks (e.g., FGSM [17],
+PGD [11]) which iteratively optimize perturbations to max-
+imize prediction errors; attention-reconstruction attacks
+(e.g.,AOA [4], TAIG [9]) which manipulate the model’s at-
+tention maps to disrupt feature localization; and decision-
+smoothing attacks (e.g.,TI [6], DI [20]) which improve
+transferability by smoothing the loss. Hybrid methods such
+as SM2I-FGSM [15] combine these strategies to exceed the
+limits of single-mechanism attacks. With the popularity of
+multimodal foundation models, adversarial research has ex-
+panded toward attacking multi-model cooperative systems.
+2.2. Adversarial Robustness via Finetuning
+Traditional single-modal defenses such as SAT [2] and
+TRADES [24] improve robustness through min-max opti-
+mization but fail under cross-modal attacks [10] and suffer
+significant drops in zero-shot generalization performance
+[12], which limits their utility in open environments. In
+contrast, multimodal cooperative defense offers a more sys-
+tematic and resilient solution. Text-guided contrastive de-
+fenses (e.g., PMG-AFT) improve robustness by freezing
+the text encoder to stabilize the shared feature space [16],
+thus achieving robust accuracy gains on ImageNet. Mean-
+while, cross-modal feature alignment methods (e.g., FARE)
+employ unsupervised adversarial fine-tuning, which even-
+tually reduces the adversarial feature bias to below 0.1.
+More importantly, multimodal defense establishes a ”cross-
+modal immune system” [13], which greatly improves the
+defense rate of joint attacks in scenarios such as payment
+systems.
+Collectively, these advances demonstrate that
+vision-language joint optimization effectively overcomes
+the cross-modal vulnerability of single-modal defense and
+provides a robust and generalizable protection mechanism
+for open environments.
+2.3. Knowledge Distillation
+The core framework of knowledge distillation [21–23] is
+to transfer valuable knowledge from the teacher to the stu-
+dent. Traditional Robust knowledge Distillation methods
+(such as RSLAD [28]) introduce robust soft labels but re-
+mains constrained by the single-teacher ceiling: student
+performance cannot surpass that of its teacher.
+The de-
+fense success rate under black-box attacks is still less than
+50%. Traditional single-teacher adversarial robust distil-
+lation exposes the modal fragmentation predicament: vi-
+sual teachers cannot guide text adversarial defense, result-
+2
+
+ing in fatal vulnerabilities in multimodal system defense.
+The multi-teacher knowledge distillation framework intro-
+duced to the study of adversarial distillation [25, 27]. It is
+worth noting that our research extends multi-teacher distil-
+lation to both robust and multimodal large language model
+contexts. The key intuition is that different robust teacher
+models (trained via distinct adversarial strategies) possess
+complementary strengths in handling various input regions
+or semantic attributes[7, 18, 26]. By allowing the student to
+learn collaboratively from multiple robust teachers, the pro-
+posed framework enables the integration of diverse robust-
+ness cues, producing student models that not only inherit
+but often surpass the robustness of any individual teacher.
+3. Method
+3.1. Multimodel Multi-Teacher Adversarial Robust
+Distillation
+Inspired by multi-teacher and robust unsupervised finetun-
+ing, we propose the Multimodel Multi-Teacher Adversar-
+ial Robust Distillation (MMT-ARD) framework. The core
+idea of this method is to simultaneously utilize an Ad-
+versarial Teacher and a Clean Teacher to guide the train-
+ing of a student CLIP model, thereby significantly improv-
+ing the robustness of the model under adversarial attacks
+while maintaining the consistency of its multimodal embed-
+dings. This design ensures consistent cross-modal feature
+representations while maintaining strong performance un-
+der both clean and adversarial conditions. The overall ar-
+chitecture of our proposed MMT-ARD framework is illus-
+trated in Figure 2.
+We employ the fine-tuned CLIP model as the adversarial
+teacher and the original CLIP model as the clean teacher.
+During training, the student model is jointly supervised by
+both teachers: the adversarial teacher provides a robust fea-
+ture representation under adversarial samples, whose input
+is the adversarial samples generated when the student model
+is internally maximized, while the clean teacher provides a
+semantic feature representation under clean samples. The
+student model receives both adversarial and clean inputs,
+producing outputs that are guided by corresponding adver-
+sarial soft labels and clean soft labels. Therefore, the robust-
+ness optimization framework of the proposed MMT-ARD
+method can be formulated as follows:
+OFT = arg min
+n
+X
+i=1
+h
+(1 −α) · KL (Sorg(xi), Torg(xi))
++ α · KL (PS(xi), PT (xi))
+i
+, (1)
+Pm(x) = max
+δ≤ε ∥madv(x + δ) −morg(x)∥2
+2 ,
+(2)
+where δ defines the perturbation constraint for generating
+adversarial samples, ensuring that the resulting perturba-
+tions are imperceptible to the human eye.
+Specifically,
+this constraint limits the pixel-wise change in an image to
+not exceed a small positive threshold ϵ, thereby preserving
+the visual appearance of the original input. Among them,
+Sorg represents the clean student model, Torg represents the
+clean teacher model, madv represents the adversarial stu-
+dent model or the adversarial teacher model, and max rep-
+resents the element with the largest absolute value within
+the feature space. The hyperparameter α controls the rela-
+tive importance of the two sub-objectives in the final opti-
+mization process. By adjusting α, the training process can
+flexibly balance the emphasis between clean and adversarial
+objectives. In the following section, we introduce an adap-
+tive parameter mechanism designed to dynamically regulate
+this weighting within the loss function.
+3.2. Dynamic Weight of Teachers’ Confidence
+In the multi-teacher distillation framework, traditional static
+weight distribution methods exhibit two key limitations.
+First, the reliability of knowledge sources differs inher-
+ently between teachers. The adversarial teacher’s predic-
+tion confidence for adversarial samples typically shows a
+bimodal distribution—where high-confidence correctly de-
+fended samples coexist with low-confidence attacked sam-
+ples—whereas the clean teacher’s confidence distribution
+on original samples is unimodal and more stable.
+Sec-
+ond, the weight distribution should have sample depen-
+dence: predictions for simple categories (e.g., “dog”) tend
+to be more confident than those for complex scenes (e.g.,
+“crowded marketplace”). Static weighting, therefore, can-
+not adapt to the semantic complexity and difficulty of differ-
+ent samples. To address these issues, we propose a dynamic
+weight allocation strategy grounded in three core principles:
+1) Deterministic priority principle: Assign higher weights
+to high-confidence predictions to ensure reliable knowledge
+transfer. 2) Uncertainty penalty principle: Suppress the in-
+terference of noise signals by reducing the weight of low-
+confidence predictions. 3) Cross-modal alignment princi-
+ple: Promote the consistency of multimodal representations
+through the joint estimation of confidence across visual
+and linguistic modalities. This dynamic weight distribution
+strategy essentially builds a sample-adaptive knowledge fu-
+sion mechanism, enabling the model to automatically ad-
+just the degree of trust assigned to different teachers based
+on specific sample features, thereby achieving more precise
+and robust knowledge distillation.
+Definition of Teacher Confidence: Given a teacher model
+T and an input x, its prediction confidence is:
+confT (x) = max(σ(T(x))),
+(3)
+where σ() denotes the softmax function and T(x) ∈RC is
+3
+
+Figure 2. MMT-ARD framework architecture, where the same input image is processed separately by two sets of encoders from the original
+teacher and the adversarial teacher. L1 and L2, which respectively constrain the consistency of the student model’s outputs with those of
+the two teachers, ultimately achieving collaborative transfer of robust representations through a weighted sum.
+the categorical logits vector. Dynamic weight calculation:
+for adversarial teacher Tadv and clean teacher Torg, define
+the weight ratio as follows.
+ρ(x) =
+confTadv(x)
+confTorg(x) + υ ,
+(4)
+where υ = 10−5 is the numerically stable term. The final
+weights are generated using the modified sigmoid function.
+wadv(x) =
+1
+1 + e−λ(ρ(x)−τ) ,
+(5)
+wclean(x) = 1 −wadv(x),
+(6)
+where λ denotes the slope coefficient, which controls the
+sharpness of the weight change and τ is the offset to adjust
+the weight balance.
+4. Theoretical Analyses
+Robustness Transfer under Multi-Teacher Distilla-
+tion.
+Let {z(m)
+:
+X
+→
+RK}M
+m=1 be M teacher
+logit maps with nonnegative weights w1, . . . , wM such
+that P
+m wm
+=
+1.
+For a labeled input (x, y),
+define the teacher margins γ(m)(x)
+:=
+z(m)
+y
+(x) −
+maxk̸=y z(m)
+k
+(x), m = 1, . . . , M, and the logit-averaged
+ensemble zens(x)
+:=
+PM
+m=1 wm z(m)(x), Γens(x)
+:=
+zens
+y
+(x) −maxk̸=y zens
+k (x). Suppose that the student logit
+map zS : X →RK is LS–Lipschitz w.r.t. ℓ2 and fits the
+ensemble at x within ℓ∞discrepancy ∆(x) :=
+zS(x) −
+zens(x)
+
+∞. Then for any perturbation δ with ∥δ∥2 ≤ε, the
+4
+
+student’s perturbed margin satisfies the following:
+zS
+y (x + δ) −max
+k̸=y zS
+k (x + δ)
+|
+{z
+}
+student margin at x+δ
+≥
+M
+X
+m=1
+wm γ(m)(x)
+|
+{z
+}
+avg. teacher margin at x
+−2∆(x) −2LS ε.
+(7)
+In particular, the student’s top-1 prediction at x + δ remains
+y for all ∥δ∥2 ≤ε whenever
+ε <
+PM
+m=1 wm γ(m)(x) −2∆(x)
+2LS
+.
+Ensemble margin vs.
+average teacher margins.
+By
+convexity of max,
+for any vectors a(m)
+∈
+RK,
+maxk
+  P
+m wma(m)
+k
+
+≤P
+m wm maxk a(m)
+k
+. With a(m) =
+z(m)(x), we get Γens(x)≥P
+m wmγ(m)(x).
+Student–ensemble
+closeness.
+From
+∥zS(x)
+−
+zens(x)∥∞
+≤
+∆(x), zS
+y (x)
+≥
+zens
+y
+(x) −∆(x) and
+maxk̸=y zS
+k (x)
+≤
+maxk̸=y zens
+k (x) + ∆(x), we have
+zS
+y (x) −maxk̸=y zS
+k (x)
+≥
+Γens(x) −2∆(x)
+(1)
+≥
+P
+m wmγ(m)(x) −2∆(x).
+Lipschitz stability. Since each logit of zS is LS–Lipschitz,
+|zS
+c (x + δ) −zS
+c (x)| ≤LS∥δ∥2 for all classes c. Thus the
+margin can shrink by at most 2LS∥δ∥2:
+zS
+y (x+δ)−max
+k̸=y zS
+k (x+δ) ≥
+ zS
+y (x)−max
+k̸=y zS
+k (x)
+
+−2LS∥δ∥2.
+Combining Eqs. (2) and (3) gives the claim; the robustness
+condition follows by positivity of the right-hand side.
+Remark 1. The theorem states the student inherits robust-
+ness from multiple teachers through their average margin,
+but loses some due to imperfect matching of the ensemble
+and sensitivity to input changes. To strengthen guarantees,
+increase teachers’ margins, reduce the student–ensemble
+mismatch during distillation, and control the student’s Lip-
+schitz constant.
+5. Experiment
+5.1. Dataset Description
+ImageNet-1K[5] serves as the main primary dataset for both
+training and evaluation, where adversarial samples are gen-
+erated to assess model robustness. Additionally, we evalu-
+ate the model’s generalization capability on zero-shot clas-
+sification tasks following the standard zero-shot evaluation
+protocol of the CLIP pre-trained model.
+5.2. Implementation Details
+Model architecture and training configuration:
+For
+model selection, we used OpenFlamingo 9 B and LLaVA-
+1.5 7 B as LVLM models as the infrastructure for teacher
+and student models. For the Teacher model, we choose dual
+teachers (adversarial teacher and Clean teacher), including
+ViT-L-14 PMG Fast2 (adversarial training version and self-
+trained Clean Teacher (based on ViT-L-14). On the student
+model, we experiment with four networks, including ViT-B-
+32, RN50, RN101, ViT-B-32-LoRA (using the LoRA fine-
+tuning strategy). All experiments were performed under the
+same hardware environment (NVIDIA A100), and the re-
+sults were repeated three times and averaged to ensure sta-
+tistical significance.
+Evaluation metrics include: Clean Accuracy (acc) : The
+classification accuracy of the model on clean samples. Ro-
+bust Accuracy (racc): The classification accuracy of the
+model on adversarial samples.
+Adversarial samples are
+generated using PGD attacks, with attack intensities (ϵ) of
+1/255, 2/255, 3/255, and 4/255, respectively. Sum-ACC:
+The Sum of clean accuracy and robust accuracy, which is
+used to comprehensively evaluate the model performance.
+Zero-Shot Accuracy: Accuracy on zero-shot classification
+tasks.
+5.3. Comprehensive Comparative Experiments on
+MM-TARD
+5.3.1. Enhanced robustness
+As shown in Table 1, under low-intensity attack scenar-
+ios, our method achieves a 4.32% absolute improvement
+in robust accuracy (racc) over the baseline (from 45.02%
+to 49.34%), representing a statistically significant enhance-
+ment.
+This demonstrates that the proposed dual-teacher
+distillation strategy effectively strengthens the model’s re-
+silience to adversarial perturbations.
+More importantly,
+the model also exhibits an absolute gain of 3.5% in zero-
+shot accuracy, indicating that that by learning more dis-
+criminative feature representations from the clean teacher,
+it acquires superior generalization capabilities rather than
+merely overfitting to adversarial examples. Furthermore,
+the increase in the overall Sum-acc metric (+2.48) further
+validates the comprehensive optimization effect of the pro-
+posed approach on the model’s robustness and generaliza-
+tion performance.
+5.3.2. High-intensity attack
+As the attack intensity (ϵ) increases, the distribution differ-
+ence between adversarial samples and clean samples inten-
+sifies, and the performance of all models declines as ex-
+pected. Under this extreme setting, our method performs
+close to the baseline in terms of robustness, but maintains an
+advantage of approximately 1.6% in clean accuracy consis-
+tently. This indicates that our method does not lose robust-
+ness in extreme adversarial environments, and at the same
+time successfully enables the student model to learn repre-
+sentations that are closer to the essential features of natural
+images, thereby achieving better performance on clean data.
+5
+
+Table 1. Performance of the benchmark method and the proposed method under the MMT-ARD framework on ViT-B-32, ResNet-50,
+ResNet-101 and ViT-B-32-Lora models
+Method eps
+CLIP ViT-B-32
+CLIP RN50
+CLIP RN101
+CLIP ViT-B-32-Lora
+acc
+racc
+sum-acc clip-zero
+acc
+racc
+sum-acc clip-zero
+acc
+racc
+sum-acc clip-zero
+acc
+racc
+sum-acc clip-zero
+baseline
+1
+61.84 49.00
+110.84
+26.40
+43.92 23.92
+67.84
+6.5
+45.84 20.44
+66.28
+3.8
+43.24 22.46
+65.70
+16.10
+2
+61.84 34.56
+96.40
+19.20
+43.92 10.14
+54.06
+3.1
+45.84
+7.54
+53.38
+1.0
+43.24
+9.46
+52.70
+10.40
+3
+61.84 22.72
+84.56
+14.00
+43.92
+4.04
+47.96
+1.8
+45.84
+2.26
+48.1
+0.5
+43.24
+2.74
+45.98
+5.0
+4
+61.84 13.76
+75.56
+9.90
+43.92
+1.28
+45.2
+1.0
+45.84
+0.62
+46.46
+0.1
+43.24
+0.74
+43.98
+2.6
+our
+1
+63.48 49.34
+112.82
+27.10
+46.56 25.36
+71.92
+9.0
+49.48 27.30
+76.78
+13.0
+45.76 23.06
+68.82
+17.2
+2
+63.48 34.78
+98.26
+19.60
+46.56 10.94
+57.5
+5.1
+49.48 12.46
+61.94
+6.4
+45.76
+9.24
+55.0
+7.5
+3
+63.48 22.24
+85.72
+13.80
+46.56
+4.28
+50.84
+3.0
+49.48
+4.78
+54.26
+3.6
+45.76
+2.52
+48.28
+5.0
+4
+63.48 12.92
+76.42
+9.60
+46.56
+1.46
+48.02
+1.6
+49.48
+1.62
+51.10
+2.0
+45.76
+0.62
+46.38
+2.8
+5.3.3. Generalization verification
+The results on the ResNet architecture further verify the uni-
+versality of our method. For RN101, our method achieves
+absolute improvements of 3.64% in clean accuracy and
+2.52% in robust accuracy. Most importantly, its robust accu-
+racy has more than doubled (a relative increase of 111.5%),
+while the zero-shot performance has improved by 3.1% (a
+relative increase of 720%). These results demonstrate that
+the proposed dual-teacher distillation strategy is effective
+across models with varying capacities and architectures. In
+particular, it substantially enhances the adversarial robust-
+ness of classical architectures like ResNet while preserving
+strong transferability and generalization performance.
+Taking the above analysis together, our multi-teacher
+distillation method can work effectively on multiple archi-
+tectures such as ViT and ResNet, and its core advantages
+are reflected in: 1) significantly improving the robustness
+and generalization ability of the model under common low-
+intensity attacks; 2) Maintain competitiveness under high-
+intensity attacks and optimize the essential feature represen-
+tation of the model; 3) It shows excellent generalization for
+different model architectures; 4) Perfect compatibility with
+efficient parameter fine-tuning technology, with high prac-
+tical value. Figure 3shows the visualization of the experi-
+mental results. Figure 3. (a) represents the original, clean
+input image,(b) represents the Grad-CAM heat map gener-
+ated by the adversarial teacher (ViT-L-14) when process-
+ing the adversarial examples,(c) represents the Grad-CAM
+heat map generated by the clean teacher (ViT-L-14) when
+processing the clean original image, and (c) represents the
+Grad-CAM heat map generated by the clean teacher (Vit -
+L-14) when processing the clean original image. Heat map
+of (d) the original student model without distillation (ViT-
+B-32) on the original image,(e) the student model distilled
+by our proposed multi-teacher method on the original im-
+age, and (f) the student model distilled using only a single
+teacher (adversarial teacher). The figure clearly reveals dif-
+ferent models (teacher vs. student) and different methods
+(baseline vs. student). Our approach) fundamental differ-
+ences in the basis for decision making.
+5.4. Ablation Study
+To comprehensively analyze the performance of our pro-
+posed MMT-ARD framework and verify the effectiveness
+of the contribution of each component, we conducted sys-
+tematic ablation studies. This section addresses three core
+questions: (1) What improvements are brought by intro-
+ducing the clean teacher and its integration strategy? (2)
+How do different loss function designs affect the trade-off
+between accuracy and robustness of the model? (3) How
+should the supervisory signals from multiple teachers be
+balanced to achieve optimal performance? We explore these
+aspects through controlled experiments, isolating the effect
+of each factor.
+5.4.1. Path-separated dual teacher strategy
+This experiment evaluates the necessity of introducing a
+clean teacher and a confidence-based weighting strategy.
+We compared three strategies: 1. Baseline: Uses only the
+adversarial teacher model (ViT-L-14 PMG Fast2) with the
+student model ViT-B-32. 2. Average: Uses both the adver-
+sarial and clean teachers; their output embeddings are aver-
+aged with equal weights. 3. Path-Separated Dual Teachers
+(Ours): Employs both teachers, where their predictions are
+dynamically weighted and fused based on confidence lev-
+els.
+As shown in Table 2, introducing a clean teacher con-
+sistently improves performance. Compared with the base-
+line, the equal-weight averaging strategy achieves minor
+improvements of +0.26% in clean accuracy and +0.16% in
+robust accuracy, with a Sum-acc increase of 0.42%. This
+demonstrates that discriminative features learned from the
+clean teacher (derived from natural image distributions)
+complement the robust features of the adversarial teacher.
+However, our path-separated dual-teacher strategy fur-
+ther enhances performance. While maintaining robust accu-
+racy (racc: 34.72%), the clean accuracy improves by 0.38%
+over the baseline. This indicates that allowing the clean
+teacher to focus on generating highly discriminative target
+embeddings for the original images provides a better learn-
+ing target for the student model, thereby improving classi-
+6
+
+Figure 3. Heatmaps of the models for different teacher-student pairs.
+fication performance. Compared with the simple Average
+strategy: the clean accuracy further improves by 0.12%,
+confirming that naive output fusion is suboptimal.
+Table 2. Experimental results of different combinations of teach-
+ers. CA: Clean Accuracy, RA: Robust Accuracy, Baseline: (Adv.
+Teacher Only)
+Strategy
+CA (acc)
+RA (racc)
+Sum-acc
+Baseline
+61.96
+34.56
+96.52
+Average
+62.22
+34.72
+96.94
+Weighted (Ours)
+63.48
+34.78
+98.26
+5.4.2. Dynamic weighting strategy based on teachers’
+confidence
+This experiment compare three configurations: 1. Single-
+KL (Baseline): Uses only the adversarial teacher’s output
+as soft labels to compute the KL divergence loss. 2. Dual-
+KL (0.5:0.5): Computes KL divergence from both teach-
+ers with equal (1:1) weighting. 3. Dual-KL + Adaptive
+Norm: Extends Dual-KL by introducing an adaptive nor-
+malization loss.
+As shown in Table 3, this experiment
+clearly illustrates the accuracy–robustness trade-off. When
+switching from Single-KL to fixed-weight Dual-KL loss,
+the model learns extremely discriminative features from the
+clean teacher, resulting in a sharp increase in clean accu-
+racy by +10.18%. However, this aggressive optimization
+deviates significantly from the robust feature space guided
+by the adversarial teacher, causing a sharp drop in robust ac-
+curacy by -23.02%. This indicates that giving equal weight
+to both teachers in the loss function leads to severe gradient
+conflicts in the optimization objective, making it difficult
+for the student model to simultaneously fit two highly diver-
+gent distributions. After adding the Adaptive Norm loss, the
+clean accuracy is further increased, but robustness is almost
+completely lost confirming that static fusion cannot effec-
+tively balance the competing learning signals. In contrast,
+incorporating a dynamic confidence-based weighting strat-
+egy significantly improves overall performance: compared
+to the baseline, clean accuracy is significantly improved by
++1.52%, robust accuracy reaches 34.78%, and Sum-acc sig-
+nificantly gains +1.74%.
+These results demonstrate that static averaging is sub-
+optimal, while dynamic weighting enables adaptive balanc-
+ing. When the adversarial teacher exhibits high confidence,
+the model prioritizes its supervision to preserve robustness;
+when confidence is low, it relies more on the clean teacher’s
+discriminative features to enhance accuracy. This adaptive
+cooperation between teachers is key to achieving balanced
+and superior performance.
+5.4.3. Loss weight
+Based on the findings in Section 5.4.2, we conducted an in-
+depth analysis to optimize the accuracy–robustness trade-
+off by fine-tuning the loss weight ratio between the two
+teachers (λadv: λorg). The experiment successfully found
+7
+
+Table 3. Experimental results for different loss function designs.
+CA: Clean Accuracy, RA: Robust Accuracy.
+Loss Design
+CA (acc)
+RA (racc)
+Single-KL (Baseline)
+61.96
+34.56
+Dual-KL (0.5:0.5)
+72.14
+11.54
+Dual-KL + Adaptive Norm
+73.26
+0.34
+the optimal operation point (Sweet Spot). As shown in Ta-
+ble 4, when the weight ratio is set to 3:0.5 (i.e., λadv / λorg =
+6), the model achieves an optimal balance between clean ac-
+curacy (63.88%) and robust accuracy (34.42%). Both indi-
+cators at this point are significantly better than the Dual-KL
+(0.5:0.5) setting, and the robustness returned to a level com-
+parable to the baseline, while the clean accuracy maintained
+an improvement of nearly 2%. These results highlight three
+key insights: 1. Adversarial supervision should dominate
+the training process: a higher λadv ratio is a prerequisite
+for maintaining model robustness. This is in line with the
+essence of adversarial training, that is, the model must pri-
+oritize learning stable decision boundaries. 2. Clean super-
+vision refines representations: A small but non-zero λorg
+weight is sufficient to provide the necessary discriminative
+signal, effectively refining the basic feature representation
+learned from adversarial training, thereby improving the
+clean accuracy without compromising its stability. 3. Bal-
+ance is feasible: Through strict weight tuning, a new Pareto
+Optimal point can be found, breaking through the trade-off
+boundary between robustness and accuracy without signifi-
+cantly sacrificing robustness, and achieving an overall per-
+formance improvement.
+Table 4.
+Experimental results of different loss weight propor-
+tions.CA: Clean Accuracy, RA: Robust Accuracy
+Weight Ratio λadv :λorg
+CA (acc)
+RA (racc)
+1 : 0.5
+71.26
+16.18
+2 : 0.5
+68.72
+21.84
+3 : 0.5
+63.88
+34.42
+3.5 : 0.5
+63.74
+34.44
+3 : 1
+69.88
+18.76
+7 : 0.3
+62.88
+34.60
+5.4.4. Quantitative analysis of gradient
+To quantitatively evaluate the consistency of visual atten-
+tion regions between different distillation models and their
+teacher model, we adopt a method based on Grad-CAM fea-
+ture map subtraction followed by L2 norm computation.
+The numerical value intuitively reflects the degree of dif-
+ference in the attention region between the models. The
+resulting L2 norm intuitively reflects the degree of discrep-
+ancy between the attention regions: a smaller value indi-
+cates greater similarity between the student’s and teacher’s
+gradient feature maps, implying stronger alignment with the
+teacher’s guidance.
+As shown in Table 5, analyses conducted on three
+validation
+set
+images
+(ILSVRC2012 val 00004748,
+ILSVRC2012 val 00012820,
+ILSVRC2012 val 00014409)
+reveal
+that
+reveal
+that
+the proposed method consistently achieves significantly
+lower L2 norm values than ViT-B-32, whether compared
+against the clean or adversarial teacher.
+This strongly
+proves that our approach can effectively make the student
+model learn and inherit the key feature attention regions of
+the teacher model, thereby improving feature representation
+transfer efficiency.
+In the path distilled from adv teacher, our method
+achieves L2 values (2157, 2296, 2571) lower than or equal
+to the baseline method (2175, 2316, 2580) on all three im-
+ages, indicating a slight but consistent advantage in captur-
+ing the attention mechanism of the robust teacher model. It
+reflects the positive effect of the introduced module. There-
+fore, from the perspective of gradient feature similarity,
+this experiment confirms that the multi-teacher distillation
+framework proposed in this paper can effectively promote
+the student model to align the visual attention of the teacher
+model more accurately, thus ensuring the effectiveness of
+knowledge distillation at the feature level, which lays a
+foundation for the performance improvement of the final
+model.
+Table 5.
+Comparison of the knowledge distillation effec-
+tiveness of Clean teacher (Cle T) and adversarial teacher
+(adv T) models for ViT-B-32, baseline, and MMT-ARD (quan-
+titative
+results
+on
+datasets
+of
+ILSVRC2012 va1 00004748
+(Val 1),
+ILSVRC2012 val 00012820
+(Val 2),
+and
+ILSVRC2012 val 00014409 (Val 3) respectively.)
+Val 1
+Val 2
+Val 3
+Cle T to ViT-B-32
+2613
+2603
+2655
+Cle T to Baseline
+2104
+2288
+2630
+Cle T to ours
+2107
+2266
+2598
+adv T to ViT-B-32
+2650
+2621
+2779
+adv T to Baseline
+2175
+2316
+2580
+adv T to ours
+2157
+2296
+2571
+6. Conclusion
+This study have proposed a Multimodal Multi-teacher
+adversarial Robust distillation framework (MMT-ARD),
+which effectively solves the robustness problem of visual
+language models in adversarial environments through a
+dual-teacher knowledge fusion architecture and a dynamic
+weight allocation strategy. Experiments demonstrated that
+the proposed method improves robust accuracy of ViT-B-
+32 model by 4.32% and zero-shot accuracy by 3.5% on
+8
+
+the ImageNet dataset, and improves the training efficiency
+by 2.3 times. The results of this study provide new ideas
+and methods for the research on the adversarial robustness
+of multimodal models, and provide reliable technical sup-
+port for artificial intelligence applications in safety-critical
+fields. Future work will focus on further optimizing the
+dynamic weight algorithm and extending the framework to
+more modalities and more complex application scenarios.
+References
+[1] S Baluja and I Fischer. Adversarial transformation networks:
+Learning to generate adversarial examples. arxiv 2017. arXiv
+preprint arXiv:1703.09387. 1
+[2] Arjun Nitin Bhagoji, Warren He, Bo Li, and Dawn Song.
+Practical black-box attacks on deep neural networks using
+efficient query mechanisms.
+In Proceedings of the Euro-
+pean conference on computer vision (ECCV), pages 154–
+169, 2018. 2
+[3] Pin-Yu Chen, Huan Zhang, Yash Sharma, Jinfeng Yi, and
+Cho-Jui Hsieh. Zoo: Zeroth order optimization based black-
+box attacks to deep neural networks without training substi-
+tute models. In Proceedings of the 10th ACM workshop on
+artificial intelligence and security, pages 15–26, 2017. 1
+[4] Sizhe Chen, Zhengbao He, Chengjin Sun, Jie Yang, and Xi-
+aolin Huang. Universal adversarial attack on attention and
+the resulting dataset damagenet. IEEE Transactions on Pat-
+tern Analysis and Machine Intelligence, 44(4):2188–2197,
+2020. 2
+[5] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li,
+and Li Fei-Fei. Imagenet: A large-scale hierarchical image
+database. In 2009 IEEE Conference on Computer Vision and
+Pattern Recognition, pages 248–255, 2009. 5
+[6] Yinpeng Dong, Tianyu Pang, Hang Su, and Jun Zhu.
+Evading defenses to transferable adversarial examples
+by translation-invariant attacks.
+In Proceedings of the
+IEEE/CVF conference on computer vision and pattern
+recognition, pages 4312–4321, 2019. 2
+[7] Inpyo Hong and Chang Choi. Knowledge distillation vulner-
+ability of deit through cnn adversarial attack. Neural Com-
+puting and Applications, 37(12):7721–7731, 2025. 3
+[8] Qian Huang, Isay Katsman, Horace He, Zeqi Gu, Serge Be-
+longie, and Ser-Nam Lim. Enhancing adversarial example
+transferability with an intermediate level attack. In Proceed-
+ings of the IEEE/CVF international conference on computer
+vision, pages 4733–4742, 2019. 1
+[9] Yi Huang and Adams Wai-Kin Kong. Transferable adver-
+sarial attack based on integrated gradients. arXiv preprint
+arXiv:2205.13152, 2022. 2
+[10] Lin Li, Haoyan Guan, Jianing Qiu, and Michael Spratling.
+One prompt word is enough to boost adversarial robustness
+for pre-trained vision-language models. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 24408–24419, 2024. 2
+[11] Aleksander Madry, Aleksandar Makelov, Ludwig Schmidt,
+Dimitris Tsipras, and Adrian Vladu. Towards deep learn-
+ing models resistant to adversarial attacks. arXiv preprint
+arXiv:1706.06083, 2017. 2
+[12] Chengzhi Mao, Scott Geng, Junfeng Yang, Xin Wang,
+and Carl Vondrick.
+Understanding zero-shot adversar-
+ial robustness for large-scale models.
+arXiv preprint
+arXiv:2212.07016, 2022. 2
+[13] Christian Schlarmann,
+Naman Deep Singh,
+Francesco
+Croce, and Matthias Hein. Robust clip: Unsupervised ad-
+versarial fine-tuning of vision embeddings for robust large
+vision-language models. arXiv preprint arXiv:2402.12336,
+2024. 1, 2
+[14] Chun-Chen Tu, Paishun Ting, Pin-Yu Chen, Sijia Liu, Huan
+Zhang, Jinfeng Yi, Cho-Jui Hsieh, and Shin-Ming Cheng.
+Autozoom: Autoencoder-based zeroth order optimization
+method for attacking black-box neural networks. In Proceed-
+ings of the AAAI conference on artificial intelligence, pages
+742–749, 2019. 1
+[15] Guoqiu Wang, Xingxing Wei, and Huanqian Yan. Improv-
+ing adversarial transferability with spatial momentum. arXiv
+preprint arXiv:2203.13479, 2022. 2
+[16] Sibo Wang, Jie Zhang, Zheng Yuan, and Shiguang Shan.
+Pre-trained model guided fine-tuning for zero-shot adversar-
+ial robustness. In Proceedings of the IEEE/CVF conference
+on computer vision and pattern recognition, pages 24502–
+24511, 2024. 2
+[17] Xingxing Wei, Siyuan Liang, Ning Chen, and Xiaochun Cao.
+Transferable adversarial attacks for image and video object
+detection. arXiv preprint arXiv:1811.12641, 2018. 2
+[18] Tsung-Han Wu, Hung-Ting Su, Shang-Tse Chen, and Win-
+ston H Hsu. Revisiting semi-supervised adversarial robust-
+ness via noise-aware online robust distillation. arXiv preprint
+arXiv:2409.12946, 2024. 3
+[19] Weibin Wu, Yuxin Su, Xixian Chen, Shenglin Zhao, Irwin
+King, Michael R Lyu, and Yu-Wing Tai. Boosting the trans-
+ferability of adversarial samples via attention. In Proceed-
+ings of the IEEE/CVF conference on computer vision and
+pattern recognition, pages 1161–1170, 2020. 1
+[20] Cihang Xie, Zhishuai Zhang, Yuyin Zhou, Song Bai, Jianyu
+Wang, Zhou Ren, and Alan L Yuille. Improving transferabil-
+ity of adversarial examples with input diversity. In Proceed-
+ings of the IEEE/CVF conference on computer vision and
+pattern recognition, pages 2730–2739, 2019. 2
+[21] Chuanguang Yang, Zhulin An, Linhang Cai, and Yongjun
+Xu.
+Hierarchical self-supervised augmented knowledge
+distillation.
+In Proceedings of the Thirtieth International
+Joint Conference on Artificial Intelligence, pages 1217–
+1223, 2021. 2
+[22] Chuanguang Yang, Helong Zhou, Zhulin An, Xue Jiang,
+Yongjun Xu, and Qian Zhang. Cross-image relational knowl-
+edge distillation for semantic segmentation. In Proceedings
+of the IEEE/CVF conference on computer vision and pattern
+recognition, pages 12319–12328, 2022.
+[23] Chuanguang Yang, Zhulin An, Libo Huang, Junyu Bi, Xin-
+qiang Yu, Han Yang, Boyu Diao, and Yongjun Xu. Clip-kd:
+An empirical study of clip model distillation. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 15952–15962, 2024. 2
+[24] Hongyang Zhang, Yaodong Yu, Jiantao Jiao, Eric Xing, Lau-
+rent El Ghaoui, and Michael Jordan. Theoretically principled
+9
+
+trade-off between robustness and accuracy. In International
+conference on machine learning, pages 7472–7482. PMLR,
+2019. 2
+[25] Shiji Zhao, Jie Yu, Zhenlong Sun, Bo Zhang, and Xingxing
+Wei. Enhanced accuracy and robustness via multi-teacher
+adversarial distillation. In European Conference on Com-
+puter Vision, pages 585–602. Springer, 2022. 3
+[26] Shiji Zhao, Ranjie Duan, Xizhe Wang, and Xingxing Wei.
+Improving adversarial robust fairness via anti-bias soft label
+distillation. Advances in Neural Information Processing Sys-
+tems, 37:89125–89149, 2024. 3
+[27] Shiji Zhao, Xizhe Wang, and Xingxing Wei.
+Mitigating
+accuracy-robustness trade-off via balanced multi-teacher ad-
+versarial distillation. IEEE transactions on pattern analysis
+and machine intelligence, 46(12):9338–9352, 2024. 3
+[28] Bojia Zi, Shihao Zhao, Xingjun Ma, and Yu-Gang Jiang. Re-
+visiting adversarial robustness distillation: Robust soft labels
+make student better. In Proceedings of the IEEE/CVF In-
+ternational Conference on Computer Vision, pages 16443–
+16452, 2021. 2
+10

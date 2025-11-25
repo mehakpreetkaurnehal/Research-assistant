@@ -1,0 +1,997 @@
+MASKED-AND-REORDERED SELF-SUPERVISION FOR
+REINFORCEMENT LEARNING FROM VERIFIABLE REWARDS
+Zhen Wang∗
+DP Technology
+Zhifeng Gao
+DP Technology
+Guolin Ke
+DP Technology
+November 24, 2025
+ABSTRACT
+Test-time scaling has been shown to substantially improve large language models’ (LLMs) mathemat-
+ical reasoning. However, for a large portion of mathematical corpora, especially theorem proving,
+RLVR’s scalability is limited: intermediate reasoning is crucial, while final answers are difficult to
+directly and reliably verify. Meanwhile, token-level SFT often degenerates into rote memorization
+rather than inducing longer chains of thought. Inspired by BERT’s self-supervised tasks, we propose
+MR-RLVR (Masked-and-Reordered RLVR), which constructs process-level self-supervised rewards
+via “masked-then-fill” and “step reordering” to extract learnable signals from intermediate reasoning.
+Our training pipeline comprises two stages: we first perform self-supervised training on sampled
+mathematical calculation and proof data; we then conduct RLVR fine-tuning on mathematical cal-
+culation datasets where only outcomes are verifiable. We implement MR-RLVR on Qwen2.5-3B
+and DeepSeek-R1-Distill-Qwen-1.5B, and evaluate on AIME24, AIME25, AMC23, and MATH500.
+Under a fixed sampling and decoding budget, MR-RLVR achieves average relative gains over the
+original RLVR of +9.86% Pass@1, +5.27% Pass@5, and +4.00% Pass@8. These results indicate
+that incorporating process-aware self-supervised signals can effectively enhance RLVR’s scalability
+and performance in only outcome-verifiable settings.
+1
+Introduction
+Large language models (LLMs) have recently made rapid progress on mathematical and scientific reasoning tasks,
+driven by techniques such as chain-of-thought prompting, diverse sampling, and test-time scaling. Reinforcement
+learning (RL) has further improved performance on reasoning-intensive tasks including mathematical problem solving,
+code generation, and program synthesis [Yang et al., 2025, Guo et al., 2025]. A central question in these settings
+is how to design reward signals that guide models toward reliable and generalizable reasoning strategies. Verifiable
+rewards obtained by programmatically checking final answers or executing unit tests offer a practical solution: whether
+a model output satisfies predefined symbolic or numeric constraints can often be determined automatically, providing
+scalable and low-cost supervision for RL [Guo et al., 2024, Yang et al., 2024]. Reinforcement Learning from Verifiable
+Rewards (RLVR) [Shao et al., 2024] instantiates this idea by directly optimizing policies to pass symbolic or numerical
+checks at the level of final answers, and has shown strong performance on code generation and mathematical reasoning
+tasks [Shao et al., 2024, Guo et al., 2025].
+However, terminally verifiable rewards primarily constrain the final answer. To further improve complex multi-step
+reasoning, it is crucial yet challenging to construct equally informative training signals for the intermediate reasoning
+process. One line of work explicitly leverages intermediate steps: process supervision and Process Reward Model
+(PRM) frameworks [Lightman et al., 2023, Guan et al., 2025] provide step-level supervision by scoring or classifying
+intermediate steps, improving stability and interpretability in mathematical reasoning. These approaches, however,
+typically require large-scale, high-quality human annotations, and in complex theorem-proving scenarios it is inherently
+difficult to decide whether a local step is reasonable. This leads to high annotation costs and limits scalability to diverse
+large-scale corpora. In addition, token-level supervised fine-tuning (SFT) on chain-of-thought data often degenerates
+∗Corresponding author. wangz@dp.tech
+arXiv:2511.17473v1  [cs.CL]  21 Nov 2025
+
+A PREPRINT - NOVEMBER 24, 2025
+into imitating specific solution templates rather than learning transferable reasoning strategies [Lightman et al., 2023].
+Human-centric supervision thus struggles to simultaneously achieve low annotation cost, scalability, and transferability
+of reasoning ability.
+RLVR removes the need for step-level labels but provides only weak constraints on the intermediate reasoning trajectory.
+As a result, it is susceptible to process hallucinations: the model may generate plausible-looking yet incorrect or
+redundant reasoning steps, and such errors are often difficult to detect and correct using only terminal verification. In
+many mathematical and theorem-proving datasets, correctness at the step level is important in its own right, yet hard
+to verify via a unified, low-cost programmatic procedure. Complementary to process supervision, recent work has
+explored self-supervised signals or existing trajectories as denser rewards for reasoning, for example by using model
+confidence in reference answers as intrinsic rewards or by designing next-segment reasoning objectives from expert
+traces and pretraining corpora and converting them into RL training signals [Yu et al., 2025, Li et al., 2025, Deng et al.,
+2025]. These approaches mitigate reward sparsity without additional human annotations or domain-specific verifiers,
+suggesting that combining self-supervision with RL is a promising direction for strengthening multi-step reasoning.
+We ask whether it is possible to extract process-level signals directly from existing mathematical reasoning trajectories
+and convert them into verifiable rewards that are compatible with RLVR, without relying on additional human process
+annotations or explicit expert action sequences. Our starting point is the observation that self-supervised destruction–
+reconstruction objectives, such as those used in BERT[Devlin et al., 2019, Raffel et al., 2023], help models capture
+semantic and structural dependencies within context by masking and reconstructing missing spans. This property
+naturally aligns with modeling the constraints and dependencies between steps in multi-step reasoning.
+In this work, we propose MR-RLVR (Masked-and-Reordered RLVR), which augments RLVR with dense, structured
+process-level self-supervision derived from mathematical reasoning trajectories. Under a setting where only terminal
+rewards are externally verifiable, we construct internal process rewards that can be computed automatically and
+integrated into RL training. Concretely, we design two process-aware tasks on proof-style and computation-style
+trajectories: (1) Masked-Then-Fill, which masks key formulas, reasoning steps, or theorem invocations and requires the
+model to reconstruct the missing content given surrounding context; and (2) Step Reordering, which shuffles reasoning
+steps and asks the model to recover a coherent logical order. For both tasks, we define process-level rewards based on
+the match between generated spans and reference reasoning at the levels of mathematical entities and text, and on the
+agreement between predicted and reference step orders. These rewards can be computed automatically from existing
+trajectories and used directly as RL signals, without any additional human annotation.
+MR-RLVR adopts a simple two-stage training framework. In Stage I, we use only the process-level rewards described
+above to perform RLVR updates on mathematical corpora that jointly cover proof-style and computation-style reasoning,
+encouraging the policy to produce reasoning processes with more coherent local logic and clearer step dependencies.
+In Stage II, starting from the Stage I checkpoint, we fine-tune the model on computational math problems with
+programmatically verifiable final answers, using only terminally verifiable rewards. The model first learns better
+reasoning structure under dense process-level signals, and then adapts to verifiable tasks under sparse but precise
+terminal supervision. This combination aims to improve the stability and scalability of RLVR on complex mathematical
+reasoning tasks without increasing human annotation cost, and to reduce process hallucinations.
+Our contributions are summarized as follows:
+1. Process-level self-supervision as verifiable rewards. We propose a framework that designs Mask-Then-Fill
+and Step Reordering tasks on mathematical reasoning trajectories and converts their outcomes into process-
+level rewards based on mathematical-entity matching and ordering consistency. This allows RLVR to receive
+fine-grained process supervision without any human process annotations.
+2. Two-stage MR-RLVR training under terminal-verifiable supervision. We introduce a two-stage training
+procedure that first performs RLVR pretraining with process-level rewards on diverse proof and computational
+reasoning corpora, and then applies outcome-level RLVR fine-tuning on computational problems with verifiable
+final answers, alleviating exploration difficulties under sparse rewards.
+3. Empirical gains and data efficiency on mathematical reasoning benchmarks. On Qwen2.5-3B and
+DeepSeek-R1-Distill-Qwen-1.5B, MR-RLVR consistently outperforms a GRPO baseline on AIME24,
+AIME25, AMC23, and MATH500, achieving an average relative improvement of about 9.86% in Pass@1,
+5.27% in Pass@5 and 4.00% in Pass@8 under a fixed sampling budget. In low-data regimes, MR-RLVR also
+exhibits better sample efficiency than standard RLVR.
+2
+
+A PREPRINT - NOVEMBER 24, 2025
+2
+Related work
+PRM and RLVR for math reasoning.
+From the perspective of training signals, large-model training for mathematical
+reasoning typically follows two lines: process supervision and outcome-verifiable rewards. The former is exemplified
+by Process Reward Models (PRMs) combined with MCTS-style search, which score intermediate steps and use step-
+level value estimates to guide tree expansion and pruning, thereby achieving stable, interpretable, and search-capable
+reinforcement reasoning on math and code tasks [Lightman et al., 2023, Wang et al., 2024, Zhang et al., 2024, Guan et al.,
+2025]. However, such methods require expensive step-level annotations (or large-model scoring) as well as additional
+search infrastructure. In contrast, the RLVR line avoids explicit step labels and relies solely on programmable outcome
+verifiers that score final answers or executable code [Shao et al., 2024]. On automatically gradable benchmarks such
+as AIME, AMC, and MATH, systems including DeepSeek-Math, and Qwen2.5-Math have demonstrated substantial
+gains in mathematical and code reasoning under this paradigm [Guo et al., 2024, Shao et al., 2024, Guo et al., 2025,
+Yang et al., 2024, 2025]. Nevertheless, standard RLVR imposes almost no constraints on the intermediate reasoning
+process and is thus prone to process hallucinations and redundant steps. In comparison, MR-RLVR preserves the RLVR
+assumption of relying only on outcome-verifiable rewards, without introducing external PRMs or human step labels;
+instead, it automatically constructs self-supervised tasks such as masked reconstruction and step permutation on existing
+mathematical reasoning trajectories, converts their completion quality into process-level rewards usable by RL, and
+combines them with a second-stage RLVR training based on outcome rewards.
+Self-supervised process signals for reasoning tasks.
+A complementary line of work explores self-supervised process
+signals for reasoning tasks. ClozeMath adapts text-infilling and PrefixLM objectives to the mathematical setting
+by masking intermediate equations during supervised fine-tuning and requiring the model to recover them, thereby
+strengthening the modeling of key mathematical entities and local structure; however, its self-supervised signal is
+only used as an SFT loss and is not explicitly converted into RL rewards [Pham et al., 2025]. RLPR, RLPT, and
+SRL instead embed self-supervised signals into reinforcement learning or preference-optimization frameworks: RLPR
+uses the model’s (relative) generation probability of a reference answer as an intrinsic reward, extending RLVR to
+general domains without human scoring [Yu et al., 2025]; RLPT defines a next-chunk prediction objective on large-
+scale unlabeled text and employs an auxiliary model to score semantic consistency between the prediction and the
+ground-truth continuation as a reward [Li et al., 2025]; SRL decomposes expert solutions into sequences of actions
+and uses action-level similarity as rewards to guide stepwise imitation of expert trajectories [Deng et al., 2025]. These
+works demonstrate that probabilities, semantic consistency, and action similarity can all serve as effective intrinsic
+rewards, but their reward designs are mostly centered on the consistency or similarity of whole answers or relatively
+long segments, with limited specialization for key entities, local logical dependencies, and step ordering in mathematical
+reasoning. MR-RLVR instead directly designs fine-grained, structure-aware self-supervised tasks (masked refilling and
+step permutation) on mathematical reasoning trajectories and converts task outcomes into automatically computable
+process-level rewards that integrate seamlessly into an RLVR pipeline.
+3
+Preliminaries
+A large language model (LLM) can be regarded as a conditional probabilistic model πθ(y, z | x), where x ∈X
+denotes the input problem or context, z = (z1, . . . , zT ) represents the reasoning trajectory, and y ∈Y denotes the final
+output. When a ground-truth answer is available, it is denoted by y⋆. The learning signal is provided by a verifiable
+reward function r(x, z, y)∈[0, 1], which quantifies the degree to which a model-generated solution satisfies the task
+specification. This reward is computed automatically through a programmatic evaluation that checks the logical or
+factual consistency of the model output. Depending on the task, r may be instantiated through numerical tolerance
+scoring, symbolic or textual equivalence, structured output validation, or code-level unit and integration tests.
+RLVR objective.
+Reinforcement Learning from Verifiable Rewards (RLVR) maximizes the expected verifiable reward
+while penalizing divergence from a reference policy through a Kullback–Leibler (KL) regularization term. Formally,
+the optimization objective is
+max
+θ
+Ex∼D, (z,y)∼πθ(z,y|x)[r(x, z, y)] −β Ex∼D[KL(πθ(z, y | x) ∥πref(z, y | x))] ,
+(1)
+where πref is a fixed or exponentially moving-averaged (EMA) reference policy, and β > 0 controls the trade-off
+between maximizing the verifiable reward and maintaining proximity to the reference distribution. The first term
+encourages the model to generate reasoning paths and answers that satisfy programmatically verifiable conditions,
+whereas the KL penalty mitigates excessive policy drift and stabilizes training under the restricted data regime typical
+of verifiable tasks. This formulation parallels the general form of Reward-Regularized Policy Optimization (RRPO)
+and serves as the foundation for the GRPO update rule introduced below.
+3
+
+A PREPRINT - NOVEMBER 24, 2025
+GRPO formulation.
+Generalized Reinforcement Policy Optimization (GRPO)[Shao et al., 2024]optimizes the policy
+by maximizing a clipped surrogate objective over groups of sampled outputs, providing stable updates within the RLVR
+framework. For each input q, a set of responses {oi}G
+i=1 is drawn from the old policy πθold, and the policy parameters
+are optimized under the objective
+JGRPO(θ) = E
+
+1
+G
+G
+X
+i=1
+1
+|oi|
+|oi|
+X
+t=1
+min
+
+ρθ,i,t ˆAi,t, clip(ρθ,i,t, 1 −ϵ, 1 + ϵ) ˆAi,t
+
+
+−β DKL(πθ ∥πref) ,
+(2)
+where ρθ,i,t =
+πθ(oi,t|q,oi,<t)
+πθold(oi,t|q,oi,<t) is the per-token likelihood ratio and ˆAi,t is the corresponding advantage estimate.
+Outcome-level supervision assigns each sequence oi a normalized scalar reward ˆAi,t = (ri −mean(r))/ std(r), shared
+across all tokens in that sequence. The KL regularization term constrains deviation from reference model, and is
+estimated using the per-token unbiased form
+DKL(πθ ∥πref) = πref(oi,t | q, oi,<t)
+πθ(oi,t | q, oi,<t) −log πref(oi,t | q, oi,<t)
+πθ(oi,t | q, oi,<t) −1,
+(3)
+following the unbiased estimator proposed by Schulman et al. [2015]. This formulation retains the stability properties
+of PPO while optimizing directly toward verifiable reward signals.
+4
+Methodology
+MR-RLVR enables models to exploit intermediate reasoning even when only final answers are verifiable. Training pro-
+ceeds in two stages. In Stage I, we derive process-level rewards from reasoning traces via process-aware self-supervised
+tasks (Masked-Then-Fill and Step Reordering) and run an initial RLVR phase using only these process-level rewards.
+In Stage II, we fine-tune with RLVR supervised exclusively by programmatically verifiable final-answer rewards. This
+two-stage design first shapes the policy distribution with process-level signals and then trains under sparse outcome
+supervision, yielding more informative gradients and more stable exploration. Figure 1 illustrates the framework: Stage
+I uses only process-level rewards; Stage II uses only final-answer rewards.
+4.1
+Process-aware self-supervised data curation
+In the first stage, we construct training data for process-aware self-supervised tasks, designed to guide the model
+in learning local logical consistency and step dependencies within reasoning trajectories. Specifically, we sample
+mathematical proof and computational reasoning problems to form the process-level self-supervised training corpus,
+while only the computational reasoning subset is used in Stage II fine-tuning.
+For each problem x and its corresponding reasoning trajectory and answer (z, y), we not only filter semantically
+well-structured and symbolically valid reasoning texts, but also restructure overly verbose or redundant reasoning chains
+to obtain concise and logically coherent reasoning processes. Two structural transformations are then applied:
+(1)Masked-Then-Fill task.
+Key formulas, inference steps, or theorem invocations in the reasoning text are masked
+to create a list of masked positions M = {mk}, along with the corresponding ground-truth completions. This task
+requires the model to reconstruct missing reasoning content given contextual information.
+(2)Step Reordering task.
+The reasoning trajectory is decomposed into ordered steps {sj}, which are randomly
+permuted to form a perturbed sequence. The model is required to recover the correct order based on logical coherence.
+After these operations, we denote the processed reasoning sequence as ˆz. The model input consists of the problem
+statement x and the modified reasoning ˆz, while the supervision signal involves either token restoration or step order
+prediction.
+4.2
+Process-level reward design for self-supervision
+During the self-supervised phase, the model constructs a process-level reward signal based on either the Masked-Then-
+Fill or Step Reordering task (only one of them is used per training run).
+(1) Masked-Then-Fill reward.
+For masked samples, h masked locations are randomly selected for evaluation. The
+reward is defined as the mean semantic match score between model completions and ground truths, measured by
+4
+
+A PREPRINT - NOVEMBER 24, 2025
+Figure 1: Overview of the MR-RLVR two-stage training framework. Stage I uses process-level rewards from self-
+supervised tasks; Stage II uses final-outcome rewards.
+MathRuler for mathematical entity alignment and supplemented by textual similarity as fallback:
+rmask(x, ˆz, y) = 1
+h
+h
+X
+k=1
+Matchentity( ˆmk, m⋆
+k) .
+(4)
+(2) Step Reordering reward.
+For the step reordering task, we measure how well the model recovers the correct
+position of each reasoning step in the sequence. Let otrue denote the reference order over n reasoning steps, and opred
+the permutation predicted by the model. We denote by postrue(k) the index of step k in the reference order otrue, and by
+pospred(k) its index in the predicted order opred. We define a normalized position-based distance
+dpos(opred, otrue) = 1
+n
+n
+X
+k=1
+I
+
+pospred(k) ̸= postrue(k)
+
+,
+where I[·] is the indicator function. This distance dpos ∈[0, 1] measures the fraction of steps that are placed at incorrect
+positions.
+The corresponding step-order reward is then defined as
+rorder(x, ˜z, y) = 1 −dpos(opred, otrue),
+so that perfectly ordered sequences receive reward 1, while sequences in which all steps are misplaced receive reward 0.
+This reward naturally lies in [0, 1] and can be directly combined with the masked-then-fill reward within the MR-RLVR
+framework.
+Accordingly, the process-level reward is defined as
+rproc(x, ˜z, y) = Imask · rmask(x, ˜z, y) + Iorder · rorder(x, ˜z, y),
+(5)
+where Imask, Iorder ∈{0, 1} are indicator functions for the Masked-Then-Fill and Step Reordering tasks with Imask +
+Iorder = 1.
+5
+
+A PREPRINT - NOVEMBER 24, 2025
+4.3
+Stage II: fine-tuning with outcome-only rewards
+In the second stage, we initialize from the checkpoint obtained through process-level reinforcement learning and
+fine-tune on programmatically verifiable problem instances. The model now generates complete reasoning trajectories
+from the problem statement x and the model generates both reasoning z and answer y, receiving supervision from the
+final-outcome reward rfinal(y⋆, y).
+Only computational reasoning tasks are included here, as they feature open-ended reasoning trajectories but deterministic
+final answers. During fine-tuning, the model receives a binary verifiable reward:
+rfinal(y⋆, y) = I
+
+Verify(y⋆, y) = True
+
+,
+(6)
+where y⋆is the ground-truth answer and Verify(y⋆, y) denotes symbolic and numerical verification comparing the
+generated answer y against y⋆.
+This signal is used to perform RLVR optimization under the GRPO objective. The two-stage scheme first shapes the
+reasoning distribution using dense process-level supervision, then refines it with sparse but precise outcome rewards,
+yielding stable optimization and verifiably correct multi-step reasoning behavior.
+5
+Experiment
+5.1
+Experimental Setup
+Training Data Curation
+To accommodate diverse reasoning styles, we construct our training corpus from two
+data sources: DeepTheorem[Zhang et al., 2025] primarily contains theorem-proving problems, while DeepMath
+[He et al., 2025] focuses on computational reasoning tasks. We sample 10k problems equally from both datasets.
+Since the reasoning traces in DeepMath are generated by DeepSeek models and contain multiple internal verification
+steps that may lead to information leakage within trajectories, we refine all DeepMath samples using GPT-o3-mini
+to ensure clean, step-by-step reasoning without redundant self-verification. As identifying key theorems, formulas,
+and reasoning steps for masking or reordering is non-trivial, we employ DeepSeek-R1-0528 to process the refined
+reasoning trajectories and generate task-specific annotations: masked positions for the Masked-Then-Fill task and step
+boundaries for the Step Reordering task (prompt templates in Appendix A). To avoid trivial masking tasks, we retain
+only samples with at least 7 masked positions. From the filtered pool, we select 10k samples for each of the two tasks
+(Masked-Then-Fill and Step Reordering), randomly sampling 20k instances for Stage I training and 6k for validation.
+For Stage II fine-tuning, we select 5k computational reasoning samples from the Stage I training data as the training set,
+with 1.5k held out for validation, ensuring that Stage II focuses on verifiable computational problems with deterministic
+answers.
+Model Configuration
+We conduct experiments on Qwen2.5-3B-Base[Qwen et al., 2025] and DeepSeek-R1-Distill-
+Qwen-1.5B[Guo et al., 2025]. We employ the GRPO objective for reinforcement learning. All experiments are
+conducted within the verl framework [Sheng et al., 2025] on a single node with 8 NVIDIA A100 (80 GB) or A800 (80
+GB) GPUs. To optimize GPU memory usage, several parameters differ slightly between Qwen-3B and DeepSeek-R1-
+Distill-Qwen-1.5. Detailed experimental hyperparameters can be found in the Appendix B.
+Evaluation Setup
+We evaluate reasoning performance on four challenging mathematical benchmarks: AIME 2024,
+AIME 2025, AMC 2023 Li et al., 2024, and MATH500 Hendrycks et al., 2021. We report the unbiased estimator of
+Pass@k Chen et al. [2021], defined as
+Pass@k = Ex∼D
+"
+1 −
+ n−c
+k
+
+ n
+k
+
+#
+,
+(7)
+where n is the number of generated solutions per problem, c is the number of correct solutions, and k ∈{1, 5, 8} denotes
+the number of attempts allowed. We set n = 64 for all evaluations. During inference, we use nucleus sampling with
+temperature 0.6, top-p 0.95, and a maximum generation length of 4096 tokens. Answers are verified programmatically
+through symbolic computation using MathRuler hiyouga [2025] and text matching.
+5.2
+Main Results
+Table 1 presents the main experimental results comparing our MR-RLVR method against the GRPO baseline across
+four mathematical reasoning benchmarks. Overall, MR-RLVR demonstrates consistent performance improvements over
+6
+
+A PREPRINT - NOVEMBER 24, 2025
+Table 1: Performance comparison across mathematical reasoning benchmarks.
+Qwen2.5-3B
+Benchmark
+Pass@1 (%)
+Pass@5 (%)
+Pass@8 (%)
+Base
++GRPO
++MR-RLVR
+Base
++GRPO
++MR-RLVR
+Base
++GRPO
++MR-RLVR
+AIME24
+1.93
+5.63
+6.30 (↑12.04%)
+7.48
+14.29
+13.20 (↓7.61%)
+10.23
+17.29
+15.43 (↓10.74%)
+AIME25
+0.73
+2.03
+2.76 (↑35.98%)
+3.58
+8.53
+10.44 (↑22.44%)
+5.13
+12.10
+14.05 (↑16.11%)
+AMC23
+14.06
+36.13
+40.82 (↑12.98%) 41.70
+60.39
+64.48 (↑6.82%)
+50.89
+66.29
+69.80 (↑5.29%)
+MATH500
+27.75
+63.30
+65.87 (↑4.06%)
+62.97
+79.83
+80.94 (↑1.39%)
+70.97
+83.29
+83.85 (↑0.67%)
+DeepSeek-R1-Distill-Qwen-1.5B
+Benchmark
+Pass@1 (%)
+Pass@5 (%)
+Pass@8 (%)
+Base
++GRPO
++MR-RLVR
+Base
++GRPO
++MR-RLVR
+Base
++GRPO
++MR-RLVR
+AIME24
+9.17
+18.70
+19.43 (↑3.90%)
+21.93
+36.40
+36.96 (↑1.54%)
+26.00
+41.98
+42.08 (↑0.24%)
+AIME25
+10.62
+15.94
+17.24 (↑8.17%)
+23.10
+27.40
+31.72 (↑15.77%) 26.43
+29.50
+35.43 (↑20.12%)
+AMC23
+36.84
+62.30
+63.01 (↑1.14%)
+66.57
+84.23
+85.62 (↑1.65%)
+72.98
+89.30
+89.48 (↑0.20%)
+MATH500
+60.80
+78.05
+78.51 (↑0.59%)
+85.04
+90.08
+90.25 (↑0.19%)
+88.38
+91.85
+91.97 (↑0.13%)
+We report Pass@k (k ∈{1, 5, 8}) with n = 64 samples per problem. Arrows indicate relative improvement (%) over the GRPO
+baseline. Bold indicates the best performance within each model family.
+GRPO, particularly in challenging scenarios where baseline performance is relatively low. On the Qwen2.5-3B model,
+we observe substantial gains on AIME 2025, with Pass@1, Pass@5, and Pass@8 achieving relative improvements of
+35.98%, 22.44%, and 16.11%, respectively. Similar trends are evident in AIME24 Pass@1 (+12.04%) and across all
+metrics on AMC23 (+5.29% to +12.98%).
+Interestingly, the performance gains exhibit interesting patterns across different model architectures and task difficulties.
+In terms of average improvement magnitude, MR-RLVR yields significantly larger gains on Qwen2.5-3B (average
+8.29%) compared to DeepSeek-R1-Distill-Qwen-1.5B (average 4.47%). This discrepancy may be attributed to the
+fact that the former has only undergone basic pretraining without complex post-training procedures, thus offering
+greater room for optimization through verification enhancement. Another notable observation is that both models show
+relatively limited improvements on MATH500 (0.13%-4.06%). This is not only because the baseline performance is
+already high (Pass@1>78%), but more importantly, the problems in MATH500 are relatively simple and the models
+have largely mastered their solution patterns, resulting in minimal marginal gains from multi-round verification. In
+contrast, our method demonstrates much stronger value on competition-level problems such as AIME and AMC. We
+also observe minor performance degradation on AIME24 Pass@5/Pass@8 for Qwen2.5-3B, which we attribute to the
+inherent variance in the sampling process with n=64 samples.
+These results validate the effectiveness of our MR-RLVR framework in improving mathematical reasoning capabilities.
+The consistent gains on challenging benchmarks (AIME24, AIME25, AMC23) demonstrate that MR-RLVR success-
+fully enhances the model’s ability to generate and verify correct solutions, particularly in scenarios where baseline
+performance leaves substantial room for improvement. Meanwhile, the more modest improvements on relatively simple
+tasks like MATH500 indicate that our method provides maximum value when applied to high-difficulty problems at the
+boundary of model competence, which aligns well with the design principle of MR-RLVR, to tackle complex reasoning
+tasks not yet fully mastered by the model through iterative refinement.
+5.3
+More Analysis about MR-RLVR
+5.3.1
+Data Efficiency Analysis
+To investigate the data efficiency of MR-RLVR, we conduct experiments with different training data scales on DeepSeek-
+R1-Distill-Qwen-1.5B. Table 2 compares MR-RLVR against the GRPO baseline using 1k and 3k training samples.
+Results show that MR-RLVR consistently outperforms GRPO across different data regimes. With 1k samples, MR-
+RLVR demonstrates significant improvements over GRPO, especially on Pass@5 and Pass@8 metrics, while Pass@1
+shows minimal gains. On AIME24, MR-RLVR achieves 26.90% and 31.84% for Pass@5/Pass@8 compared to GRPO’s
+24.62% and 28.69%, representing relative gains of 9.26% and 10.99%, whereas Pass@1 remains unchanged at 11.09%.
+This pattern suggests that with limited training data, the MR-RLVR framework primarily improves the model’s ability
+to generate diverse high-quality candidates rather than directly enhancing single-sample accuracy. When scaled to
+3k samples, MR-RLVR maintains its advantage with a 10.08% relative improvement on AIME24 Pass@8 (40.97%
+7
+
+A PREPRINT - NOVEMBER 24, 2025
+Table 2: Performance comparison of DeepSeek-R1-Distill-Qwen-1.5B under different training data scales.
+Method
+AIME24
+AIME25
+AMC23
+MATH500
+P@1
+P@5
+P@8
+P@1
+P@5
+P@8
+P@1
+P@5
+P@8
+P@1
+P@5
+P@8
+Base Model
+9.17
+21.93 26.00 10.62 23.10 26.43 36.84 66.57 72.98 60.80 85.04 88.38
+Training with 1k samples
++GRPO
+11.09 24.62 28.69 11.98 24.56 28.02 41.99 70.81 77.11 65.24 86.28 89.01
++MR-RLVR 11.09 26.90 31.84 11.93 25.45 28.91 42.73 72.82 79.25 65.67 86.49 89.24
+Training with 3k samples
++GRPO
+16.67 32.41 37.22 15.31 28.67 31.97 58.01 81.86 86.91 76.40 89.77 91.79
++MR-RLVR 16.56 35.13 40.97 15.57 29.37 32.35 59.02 82.72 86.31 76.24 89.45 91.47
+Table 3: All experiments use DeepSeek-R1-Distill-Qwen-1.5B as the base model. Bold indicates better performance
+between GRPO and MR-RLVR at the same data scale.
+vs. 37.22%). This consistent advantage suggests that process-level self-supervision in MR-RLVR provides more
+sample-efficient learning signals than standard GRPO, enabling better generalization with limited training data. On
+the simpler MATH500 benchmark, the gap narrows, confirming that MR-RLVR’s benefits are most pronounced on
+challenging problems.
+5.4
+MR-RLVR Tasks for Data Augmentation
+Given the sample efficiency gains demonstrated by MR-RLVR, we further explore self-supervised pretraining tasks for
+expanding training signals without additional human annotations. We design two tasks, step reordering and masked-
+then-fill, that leverage existing mathematical reasoning corpora to automatically generate diverse reasoning trajectories.
+Table 6 and Table 7 presents two representative cases together with model outputs.
+Value of the step reordering task.
+As shown in Table 6, in the case involving the Lebesgue differentiation theorem,
+the model needs to restore 6 shuffled proof steps to their correct logical order. During this process, the model performs
+detailed logical analysis of each step and identifies inter-step dependencies. For instance, the model recognizes that Step
+2 (defining F(x)) is the starting point of the proof, Step 4 (providing the dominating function) is a necessary condition
+for applying the Dominated Convergence Theorem, and Step 1 is the key theorem application step. This analytical
+process constitutes a structured reconstruction of the original proof: the model not only produces the correct ordering
+but also generates an explanation of why this ordering is valid. Compared to the original shuffled steps, the model
+automatically generates logical interpretations of each step and explicit annotations of inter-step dependencies during
+the reordering process. These generated reasoning trajectories effectively complement the original concise reasoning
+process. While original proofs typically only provide key steps, the model’s analysis reveals how to identify the overall
+proof structure and how to determine logical dependencies between steps, thereby making implicit reasoning structures
+explicit. This automatically generated structured interpretation provides richer training signals for models to learn
+complete proof construction capabilities.
+Value of the masked-then-fill task.
+Table 7 presents a masked-then-fill case involving bitwise operations. The task
+requires the model to complete three masked key formulas. The model successfully derives the first two: simplifying
+A ⊕0xFFFFFFFF to ∼A, and determining A = 0x81010100 through bit analysis. However, at the third mask position
+(verification step), the model provides 0x7EFEFEFF⊕0x81010100 = 0xFFFFFFFF, while the original solution requires
+computing the addition 0x7EFEFEFF + 0x81010100. Although this equation is mathematically correct, since the
+XOR operation does yield 0xFFFFFFFF, it uses the wrong operator. More subtly, because these two numbers have
+no overlapping bits (no bit position is 1 in both numbers), addition and XOR happen to produce identical results in
+this case. This coincidentally correct situation reveals speculative behavior: the model may directly apply the same
+pattern after seeing XOR operators multiple times in the preceding text, or infer from context that the result should
+be 0xFFFFFFFF and then reverse-engineer a seemingly reasonable formula, rather than strictly following the required
+reasoning procedure. Such errors are more difficult to detect than obvious computational mistakes.
+Overall, the two tasks augment the training corpus in two complementary ways. First, correct trajectories generated
+during step reordering and masked-then-fill provide detailed and structured reasoning traces that can be directly reused
+as additional training data. Second, speculative errors surfaced by the **masked-then-fill task** can be turned into
+error-correction objectives, where models are trained to identify and fix logical flaws, thereby improving their self-
+8
+
+A PREPRINT - NOVEMBER 24, 2025
+checking capability. This pretraining stage therefore supplies more informative and sample-efficient learning signals
+than relying solely on supervised solutions.
+6
+Conclusion
+This paper presents MR-RLVR, a framework that enriches reinforcement learning from verifiable rewards with
+process-level self-supervision. Instead of relying solely on outcome-level rewards derived from final-answer checking,
+MR-RLVR constructs two types of process-level tasks, namely masked-then-fill and step reordering, on mathematical
+reasoning traces, thereby providing dense training signals for intermediate reasoning steps. These tasks encourage the
+model not only to produce correct final answers, but also to acquire reusable patterns and structures of reasoning, rather
+than merely memorizing superficial solution templates.
+We implement and evaluate MR-RLVR on Qwen2.5-3B and DeepSeek-R1-Distill-Qwen-1.5B, and conduct systematic
+experiments on a diverse set of mathematical benchmarks, including AIME24, AIME25, AMC23, and MATH500.
+Under a fixed sampling and decoding budget, MR-RLVR consistently outperforms standard RLVR. This indicates that
+process-level self-supervision becomes especially beneficial when problems require long-horizon, multi-step reasoning.
+Our data efficiency analysis further shows that, compared to relying solely on outcome-level rewards, MR-RLVR
+provides more informative learning signals in low-data regimes.
+For future work, we first note that the current implementation adopts fixed masking positions for masked-then-fill
+task and a fixed shuffling scheme for step reordering. An interesting direction is to explore dynamically sampling
+masking locations and reordering strategies during training, allowing data augmentation and process-level tasks to
+adapt to the model’s current state and further improve sample efficiency. Second, we plan to extend MR-RLVR to
+broader structured reasoning domains such as program synthesis and formal theorem proving, as well as to multimodal
+reasoning tasks involving images, diagrams, and geometric figures, where rich structure and verifiable signals naturally
+arise. In addition to masking and reordering, we aim to design more diverse process-level tasks, such as error correction
+tasks that explicitly require the model to identify and revise incorrect steps in a reasoning chain. Finally, MR-RLVR is
+highly complementary to explicit process reward models and test-time scaling techniques; integrating these components
+more tightly may further enhance the reliability and scalability of reasoning-focused language models. We hope that
+MR-RLVR offers a useful starting point for more principled integration of self-supervision and verifiable rewards in the
+training of reasoning-oriented large language models.
+References
+Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan, Henrique Ponde de Oliveira Pinto, Jared Kaplan, Harri Edwards,
+Yuri Burda, Nicholas Joseph, Greg Brockman, Alex Ray, Raul Puri, Gretchen Krueger, Michael Petrov, Heidy Khlaaf,
+Girish Sastry, Pamela Mishkin, Brooke Chan, Scott Gray, Nick Ryder, Mikhail Pavlov, Alethea Power, Lukasz Kaiser,
+Mohammad Bavarian, Clemens Winter, Philippe Tillet, Felipe Petroski Such, Dave Cummings, Matthias Plappert,
+Fotios Chantzis, Elizabeth Barnes, Ariel Herbert-Voss, William Hebgen Guss, Alex Nichol, Alex Paino, Nikolas
+Tezak, Jie Tang, Igor Babuschkin, Suchir Balaji, Shantanu Jain, William Saunders, Christopher Hesse, Andrew N.
+Carr, Jan Leike, Josh Achiam, Vedant Misra, Evan Morikawa, Alec Radford, Matthew Knight, Miles Brundage, Mira
+Murati, Katie Mayer, Peter Welinder, Bob McGrew, Dario Amodei, Sam McCandlish, Ilya Sutskever, and Wojciech
+Zaremba. Evaluating large language models trained on code, 2021. URL https://arxiv.org/abs/2107.03374.
+Yihe Deng, I-Hung Hsu, Jun Yan, Zifeng Wang, Rujun Han, Gufeng Zhang, Yanfei Chen, Wei Wang, Tomas Pfister,
+and Chen-Yu Lee. Supervised reinforcement learning: From expert trajectories to step-wise reasoning, 2025. URL
+https://arxiv.org/abs/2510.25992.
+Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova. Bert: Pre-training of deep bidirectional
+transformers for language understanding, 2019. URL https://arxiv.org/abs/1810.04805.
+Xinyu Guan, Li Lyna Zhang, Yifei Liu, Ning Shang, Youran Sun, Yi Zhu, Fan Yang, and Mao Yang. rstar-math: Small
+llms can master math reasoning with self-evolved deep thinking, 2025. URL https://arxiv.org/abs/2501.
+04519.
+Daya Guo, Qihao Zhu, Dejian Yang, Zhenda Xie, Kai Dong, Wentao Zhang, Guanting Chen, Xiao Bi, Y. Wu, Y. K. Li,
+Fuli Luo, Yingfei Xiong, and Wenfeng Liang. Deepseek-coder: When the large language model meets programming
+– the rise of code intelligence, 2024. URL https://arxiv.org/abs/2401.14196.
+Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song, Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi Wang,
+Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement learning. arXiv preprint
+arXiv:2501.12948, 2025.
+9
+
+A PREPRINT - NOVEMBER 24, 2025
+Zhiwei He, Tian Liang, Jiahao Xu, Qiuzhi Liu, Xingyu Chen, Yue Wang, Linfeng Song, Dian Yu, Zhenwen Liang,
+Wenxuan Wang, Zhuosheng Zhang, Rui Wang, Zhaopeng Tu, Haitao Mi, and Dong Yu. Deepmath-103k: A
+large-scale, challenging, decontaminated, and verifiable mathematical dataset for advancing reasoning, 2025. URL
+https://arxiv.org/abs/2504.11456.
+Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric Tang, Dawn Song, and Jacob
+Steinhardt. Measuring mathematical problem solving with the math dataset. arXiv preprint arXiv:2103.03874, 2021.
+hiyouga. Mathruler. https://github.com/hiyouga/MathRuler, 2025.
+Jia Li, Edward Beeching, Lewis Tunstall, Ben Lipkin, Roman Soletskyi, Shengyi Huang, Kashif Rasul, Longhui Yu,
+Albert Q Jiang, Ziju Shen, et al. Numinamath: The largest public dataset in ai4maths with 860k pairs of competition
+math problems and solutions. Hugging Face repository, 13(9):9, 2024.
+Siheng Li, Kejiao Li, Zenan Xu, Guanhua Huang, Evander Yang, Kun Li, Haoyuan Wu, Jiajia Wu, Zihao Zheng,
+Chenchen Zhang, Kun Shi, Kyrierl Deng, Qi Yi, Ruibin Xiong, Tingqiang Xu, Yuhao Jiang, Jianfeng Yan, Yuyuan
+Zeng, Guanghui Xu, Jinbao Xue, Zhijiang Xu, Zheng Fang, Shuai Li, Qibin Liu, Xiaoxue Li, Zhuoyu Li, Yangyu
+Tao, Fei Gao, Cheng Jiang, Bo Chao Wang, Kai Liu, Jianchen Zhu, Wai Lam, Wayyt Wang, Bo Zhou, and Di Wang.
+Reinforcement learning on pre-training data, 2025. URL https://arxiv.org/abs/2509.19249.
+Hunter Lightman, Vineet Kosaraju, Yura Burda, Harri Edwards, Bowen Baker, Teddy Lee, Jan Leike, John Schulman,
+Ilya Sutskever, and Karl Cobbe. Let’s verify step by step, 2023. URL https://arxiv.org/abs/2305.20050.
+Quang Hieu Pham, Thuy Duong Nguyen, Tung Pham, Anh Tuan Luu, and Dat Quoc Nguyen. Clozemath: Improving
+mathematical reasoning in language models by learning to fill equations, 2025. URL https://arxiv.org/abs/
+2506.03763.
+Qwen, :, An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan Li, Dayiheng Liu,
+Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jingren Zhou,
+Junyang Lin, Kai Dang, Keming Lu, Keqin Bao, Kexin Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu,
+Rui Men, Runji Lin, Tianhao Li, Tianyi Tang, Tingyu Xia, Xingzhang Ren, Xuancheng Ren, Yang Fan, Yang Su,
+Yichang Zhang, Yu Wan, Yuqiong Liu, Zeyu Cui, Zhenru Zhang, and Zihan Qiu. Qwen2.5 technical report, 2025.
+URL https://arxiv.org/abs/2412.15115.
+Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li,
+and Peter J. Liu. Exploring the limits of transfer learning with a unified text-to-text transformer, 2023. URL
+https://arxiv.org/abs/1910.10683.
+John Schulman, Philipp Moritz, Sergey Levine, Michael Jordan, and Pieter Abbeel. High-dimensional continuous
+control using generalized advantage estimation. arXiv preprint arXiv:1506.02438, 2015.
+Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li,
+Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models. arXiv
+preprint arXiv:2402.03300, 2024.
+Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and
+Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. In Proceedings of the Twentieth European Conference
+on Computer Systems, EuroSys ’25, page 1279–1297. ACM, March 2025. doi: 10.1145/3689031.3696075. URL
+http://dx.doi.org/10.1145/3689031.3696075.
+Peiyi Wang, Lei Li, Zhihong Shao, R. X. Xu, Damai Dai, Yifei Li, Deli Chen, Y. Wu, and Zhifang Sui. Math-shepherd:
+Verify and reinforce llms step-by-step without human annotations, 2024. URL https://arxiv.org/abs/2312.
+08935.
+An Yang, Beichen Zhang, Binyuan Hui, Bofei Gao, Bowen Yu, Chengpeng Li, Dayiheng Liu, Jianhong Tu, Jingren
+Zhou, Junyang Lin, Keming Lu, Mingfeng Xue, Runji Lin, Tianyu Liu, Xingzhang Ren, and Zhenru Zhang.
+Qwen2.5-math technical report: Toward mathematical expert model via self-improvement, 2024. URL https:
+//arxiv.org/abs/2409.12122.
+An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen Huang,
+Chenxu Lv, Chujie Zheng, Dayiheng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge, Haoran Wei, Huan Lin, Jialong
+Tang, Jian Yang, Jianhong Tu, Jianwei Zhang, Jianxin Yang, Jiaxi Yang, Jing Zhou, Jingren Zhou, Junyang Lin, Kai
+Dang, Keqin Bao, Kexin Yang, Le Yu, Lianghao Deng, Mei Li, Mingfeng Xue, Mingze Li, Pei Zhang, Peng Wang,
+Qin Zhu, Rui Men, Ruize Gao, Shixuan Liu, Shuang Luo, Tianhao Li, Tianyi Tang, Wenbiao Yin, Xingzhang Ren,
+Xinyu Wang, Xinyu Zhang, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yinger Zhang, Yu Wan, Yuqiong
+Liu, Zekun Wang, Zeyu Cui, Zhenru Zhang, Zhipeng Zhou, and Zihan Qiu. Qwen3 technical report, 2025. URL
+https://arxiv.org/abs/2505.09388.
+10
+
+A PREPRINT - NOVEMBER 24, 2025
+Tianyu Yu, Bo Ji, Shouli Wang, Shu Yao, Zefan Wang, Ganqu Cui, Lifan Yuan, Ning Ding, Yuan Yao, Zhiyuan Liu,
+Maosong Sun, and Tat-Seng Chua. Rlpr: Extrapolating rlvr to general domains without verifiers, 2025. URL
+https://arxiv.org/abs/2506.18254.
+Dan Zhang, Sining Zhoubian, Ziniu Hu, Yisong Yue, Yuxiao Dong, and Jie Tang. Rest-mcts*: Llm self-training via
+process reward guided tree search, 2024. URL https://arxiv.org/abs/2406.03816.
+Ziyin Zhang, Jiahao Xu, Zhiwei He, Tian Liang, Qiuzhi Liu, Yansi Li, Linfeng Song, Zhenwen Liang, Zhuosheng
+Zhang, Rui Wang, Zhaopeng Tu, Haitao Mi, and Dong Yu. Deeptheorem: Advancing llm reasoning for theorem
+proving through natural language and reinforcement learning, 2025. URL https://arxiv.org/abs/2505.23754.
+11
+
+A PREPRINT - NOVEMBER 24, 2025
+Appendices
+A
+Prompts
+A.1
+Prompts for Data Curation
+Prompt for masked-then-fill data curation
+You are a helpful assistant.
+Task: Extract the most key formulas or theorem names from the following original answer text and save them in
+JSON format.
+Output Format: Return the key formulas or theorem names in a JSON object with the following structure:
+{
+"theorems": [
+"Theorem or formula name 1",
+"Theorem or formula name 2",
+"Theorem or formula name 3",
+// Continue until all key formulas or theorem names are included
+]
+}
+Requirements:
+• Extract only the content from the original text without adding new formulas or theorems.
+• Use standard LaTeX format for all mathematical symbols and expressions.
+• Sort the extracted theorems by importance, placing the most important ones first and the less important
+ones later.
+• The output must comply with JSON format and be ready for use.
+Prompt for step reordering data curation
+You are a helpful assistant.
+Task: Split the following answer into independent logical steps while maintaining the original meaning of the
+content.
+Output Format: Return the steps in a JSON object with the following structure:
+{
+"steps": [
+"Step 1 description...",
+"Step 2 description...",
+"Step 3 description...",
+// Continue until all steps are included
+]
+}
+Requirements:
+• All steps must be generated from the original answer text without creating new steps or content.
+• Each step should maintain an independent logical meaning, allowing it to stand alone.
+• The steps should connect logically in a way that reconstructs the original answer when combined
+together.
+• Ensure clarity and conciseness in each step to facilitate understanding.
+• Use standard LaTeX format for all mathematical symbols and expressions.
+A.2
+Prompts for MR-RLVR
+blank
+12
+
+A PREPRINT - NOVEMBER 24, 2025
+Prompt for Masked-Then-Fill task
+System:
+A conversation between the User and the Assistant.
+The User supplies a mathematical statement together with a partial solution in which some formulas or theorems
+are masked with <formula_masked> tags.
+The Assistant’s task is to complete the missing portions of the solution by replacing the <formula_masked>
+tags with the appropriate mathematical formulas or theorems.
+Please adhere to the following structured approach:
+1. Begin by performing a comprehensive logical analysis to determine the precise formula
+required for each <formula_masked> tag. The objective is to ensure the logical coherence
+and completeness of the entire solution.
+2. Enclose your **detailed logical analysis**, explaining the derivation of each missing
+formula, within <think> tags, formatted as follows:
+<think>
+[Your detailed reasoning process, explaining how each missing formula was de-
+rived.]
+</think>
+3. Finally, upon completion of the analysis and derivation of all missing formulas, provide
+**only** the derived formulas, enclosed within \boxed{} notation:
+\boxed{formula_1; formula_2; ...; formula_n}
+The formulas within the \boxed{} answer must appear in the same order as their correspond-
+ing <formula_masked> tags in the original solution. All mathematical formulas should be
+presented using proper LaTeX notation.
+User:
+The user’s statement:
+The partial solution is:
+Prompt for Step reordering task
+System:
+A conversation between the User and the Assistant.
+The User supplies a mathematical statement and a solution whose steps are out of order (each step is already
+numbered with ’Step i’).
+The Assistant’s task is to determine the correct logical sequence of these steps.
+Please adhere to the following structured approach:
+1. Begin by performing a comprehensive logical analysis of the mathematical statement and all given
+steps to establish their correct sequential order. The objective is to reconstruct a logically sound and
+complete solution.
+2. Enclose your **detailed logical analysis**, explaining how you determined the correct sequence,
+within <think> tags, formatted as follows:
+<think>
+[Your detailed reasoning process, explaining how the logical sequence of steps was deter-
+mined.]
+</think>
+3. Finally, provide **only** the correct sequence of step numbers, enclosed within \boxed{} notation:
+\boxed{n1, n2, n3, ..., nk}
+The step numbers within the \boxed{} answer must represent the final, logically ordered sequence of
+the steps.
+User:
+The user’s statement:
+The shuffled solution:
+13
+
+A PREPRINT - NOVEMBER 24, 2025
+Prompt for Outcome-only Task
+System:
+A conversation between User and Assistant.
+The User provides a question, and the Assistant outputs the answer.
+The Assistant’s task is to solve the question and provide the final answer.
+Please adhere to the following structured approach:
+1. Provide a concise solution analysis to determine how to compute the answer and enclose a detailed,
+step-by-step derivation within <think> tags. Use the following format:
+<think>
+[Your detailed reasoning process analysis, explained through a step-by-step derivation.]
+</think>
+2. Finally, provide only the final result written in standard LaTeX and enclosed within \boxed{ }.
+User:
+he user’s question:
+B
+Implementation Details
+Parameter
+qwen-3b STAGE I
+qwen-3b STAGE II
+Learning Rate (lr)
+1 × 10−6
+1 × 10−6
+Rollout Number
+16
+16
+Rollout Temperature
+1.0
+1.0
+Prompt Length Token
+2048
+1024
+Response Length Token
+4096
+4096
+Training Batch Size
+512
+512
+PPO Mini Batch Size
+64
+64
+KL Loss Coefficient
+0.001
+0.001
+Training Epochs
+3
+3
+Table 4: The training hyperparameters of MR-RLVR for qwen-3b
+Parameter
+Deepseek-R1-distill-Q wen-1.5b STAGE I
+Deepseek-R1-distill-Q wen-1.5b STAGE II
+Learning Rate
+1 × 10−6
+1 × 10−6
+Rollout Number
+8
+16
+Temperature
+1.0
+1.0
+Prompt Length Token
+2048
+1024
+Response Length Token
+8192
+4096
+Training Batch Size
+512
+512
+PPO Mini Batch Size
+64
+64
+KL Loss Coefficient
+0.001
+0.001
+Training Epochs
+3
+3
+Table 5: The training hyperparameters of MR-RLVR for deepseek-dis-qwen-1.5b
+C
+Test Cases
+blank
+14
+
+A PREPRINT - NOVEMBER 24, 2025
+Case of Reordering Steps Task
+Problem: Leibniz Integral Rule under Lebesgue Conditions
+Let f : Rn →R satisfy the conditions of the Lebesgue differentiation theorem, and let S ⊂Rn be measurable
+with 0 < |S| < ∞.
+Prove: For all x such that ∂f
+∂x exists a.e. in S,
+d
+dx
+Z
+S
+f(x, y) dy =
+Z
+S
+∂f
+∂x(x, y) dy.
+Input:
+Step 0: State that for almost every y ∈S, the pointwise limit
+lim
+h→0
+f(x + h, y) −f(x, y)
+h
+= ∂f
+∂x(x, y)
+exists by hypothesis.
+Step 1: Apply the Dominated Convergence Theorem to interchange limit and integral, yielding
+lim
+h→0
+Z
+S
+f(x + h, y) −f(x, y)
+h
+dy =
+Z
+S
+∂f
+∂x(x, y) dy.
+Step 2: Define F(x) =
+R
+S f(x, y) dy and state the goal to show
+dF
+dx =
+Z
+S
+∂f
+∂x(x, y) dy.
+Step 3: Conclude that
+dF
+dx =
+Z
+S
+∂f
+∂x(x, y) dy.
+Step 4: Note that
+ ∂f
+∂x(x, y)
+ ≤g(y) and
+
+f(x + h, y) −f(x, y)
+h
+ ≤g(y)
+for sufficiently small h, where g is Lebesgue integrable over S.
+Step 5: Express the difference quotient for F(x) as
+F(x + h) −F(x)
+h
+=
+Z
+S
+f(x + h, y) −f(x, y)
+h
+dy
+for h ̸= 0.
+Output:
+Step 0: This is a crucial step in establishing the differentiability of f in the x-direction.
+Step 1: This is a key step in proving the differentiability of F(x).
+Step 2: This is the starting point of the proof.
+Step 3: This is the final result we are aiming to prove.
+Step 4: This is a necessary step to apply the Dominated Convergence Theorem.
+Step 5: This is a crucial step in establishing the differentiability of F(x).
+Based on this analysis, the correct logical sequence is:
+2 →5 →0 →4 →1 →3
+Table 6: Detailed Examination of Reordering Steps in the Proof of the Leibniz Integral Rule under Lebesgue Conditions
+15
+
+A PREPRINT - NOVEMBER 24, 2025
+Case of Masked-Then-Fill Task
+Problem: Find the hexadecimal value of A satisfying
+(0x7EFEFEFF + A) ⊕(A ⊕0xFFFFFFFF) = 0x81010100
+where + denotes bitwise addition and ⊕denotes XOR.
+Input:
+Step 1. Simplification
+Note that A ⊕0xFFFFFFFF =∼A for any 32-bit value. Rewrite the equation as:
+<formula_masked>
+Step 2. Binary Analysis
+Write 0x7EFEFEFF in binary:
+0x7EFEFEFF = 01111110 11111110 11111110 11111111
+Observe: zeros at bit positions 31, 24, 16, and 8.
+Step 3. Deriving A
+To avoid carries during addition, A should have 1’s only where 0x7EFEFEFF has 0’s:
+<formula_masked>
+Step 4. Verification
+Compute 0x7EFEFEFF + A. Since there is no overlap (no bit is 1 in both numbers), the addition result is:
+<formula_masked>
+Then verify:
+0xFFFFFFFF ⊕0x7EFEFEFF = 0x81010100
+Output:
+<formula_masked> →(0x7EFEFEFF + A)⊕∼A = 0x81010100
+✓Correct
+<formula_masked> →A = 0x81010100
+✓Correct
+<formula_masked> →0x7EFEFEFF ⊕0x81010100 = 0xFFFFFFFF
+× Wrong operator! Should be ’+’
+Expected: 0x7EFEFEFF + 0x81010100 = 0xFFFFFFFF
+Table 7: Detailed Examination of Mask-Then-Fill for Finding the Hexadecimal Value of A Based on Bitwise Operations
+16

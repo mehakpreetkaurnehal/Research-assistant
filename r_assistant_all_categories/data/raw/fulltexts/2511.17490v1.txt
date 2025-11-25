@@ -1,0 +1,2067 @@
+Video-R4: Reinforcing Text-Rich Video Reasoning with Visual Rumination
+Yolo Yunlong Tang1, Daiki Shimada2, Hang Hua3, Chao Huang1, Jing Bi1,
+Rogerio Feris3, Chenliang Xu1
+1University of Rochester, 2Sony Group Corporation, 3MIT-IBM Watson AI Lab
+{yunlong.tang, jing.bi, chenliang.xu}@rochester.edu, chuang65@cs.rochester.edu
+Daiki.Shimada@sony.com, hang.hua1@ibm.com, rsferis@us.ibm.com
+Abstract
+Understanding text-rich videos requires reading small,
+transient textual cues that often demand repeated inspec-
+tion. Yet most video QA models rely on single-pass percep-
+tion over fixed frames, leading to hallucinations and fail-
+ures on fine-grained evidence.
+Inspired by how humans
+pause, zoom, and re-read critical regions, we introduce
+Video-R4 (Reinforcing Text-Rich Video Reasoning with Vi-
+sual Rumination), a video reasoning LMM that performs vi-
+sual rumination: iteratively selecting frames, zooming into
+informative regions, re-encoding retrieved pixels, and up-
+dating its reasoning state. We construct two datasets with
+executable rumination trajectories: Video-R4-CoT-17k for
+supervised practice and Video-R4-RL-30k for reinforcement
+learning.
+We propose a multi-stage rumination learning
+framework that progressively finetunes a 7B LMM to learn
+atomic and mixing visual operations via SFT and GRPO-
+based RL. Video-R4-7B achieves state-of-the-art results on
+M4-ViteVQA and further generalizes to multi-page docu-
+ment QA, slides QA, and generic video QA, demonstrating
+that iterative rumination is an effective paradigm for pixel-
+grounded multimodal reasoning.
+1. Introduction
+Understanding text-rich videos requires precise reading of
+small, transient textual cues that often appear only in spe-
+cific frames or localized regions. Recent video question
+answering and text-centric video benchmarks have high-
+lighted these challenges in news videos, driving scenes,
+egocentric recordings, and UI or slide walkthroughs [29,
+41, 42, 65, 84, 89, 95], while broader surveys on video
+understanding with large multimodal models (LMMs) un-
+derline the difficulty of scaling such capabilities to long,
+complex videos [60]. Despite advances in video-focused
+LMMs and long-video benchmarks [16, 20, 25, 33, 43, 45,
+54, 67, 75], most systems operate under a single-pass per-
+ception paradigm, processing a fixed set of frames and re-
+Figure 1. Video-R4 performs iterative visual rumination by se-
+lecting frames, zooming into regions, and re-encoding pixels,
+forming a closed-loop read–retrieve–refocus–reinforce cycle for
+grounded video reasoning.
+lying heavily on text-only chain-of-thought to fill in miss-
+ing details. This design leads to brittle behavior in text-
+rich scenarios.
+Once a set of frames has been selected
+and encoded, the model typically cannot revisit frames,
+re-examine regions, or refine beliefs when initial percep-
+tions are incomplete. Text-only chain-of-thought prompt-
+ing can improve reasoning [9, 37, 61, 62, 71, 85, 90], but
+when predictions are not grounded in pixels, it can also am-
+plify hallucinations about content that was never observed.
+Meanwhile, coordinate-grounded approaches in TextVQA,
+TextVideoQA, and document VQA predict frame indices,
+1
+arXiv:2511.17490v1  [cs.CV]  21 Nov 2025
+
+Figure 2. Our Video-R4-7B model achieves state-of-the-art performance on the text-rich video understanding dataset M4-ViteVQA, and is
+also compatible with the LMMs with the same size on the general video QA benchmarks.
+bounding boxes, or layout regions as intermediate evi-
+dence [21, 24, 29, 58, 59, 64, 93, 94], yet these coordinates
+are usually treated as static endpoints rather than actionable
+instructions: the referenced pixels are rarely brought back
+into the model’s context to be re-read and compared.
+In contrast, human viewers naturally adopt an iterative
+“pause-zoom-check” strategy when watching text-heavy
+videos such as screen recordings, lecture slides, or UI de-
+mos. We pause at a relevant moment, zoom into a region,
+reread the text, compare across frames, and revise our un-
+derstanding as new evidence emerges.
+This observation
+forms the core inspiration for our work: if an LMM were
+equipped with the ability to act on the video, select frames,
+zoom into regions, fetch higher-resolution pixels, and in-
+corporate them back into its context, it could escape the
+limitations of one-shot perception and move toward pixel-
+grounded, multi-step reasoning.
+Motivated by this, we propose Video-R4 (Reinforcing
+Text-Rich Video Reasoning with Visual Rumination), a
+video reasoning LMM that performs visual rumination. As
+shown in Figure 1, the model executes cycles of selecting
+informative frames, zooming into fine-grained regions, re-
+encoding the retrieved pixels, and updating its internal rea-
+soning state. This closed-loop—read, retrieve, refocus, re-
+inforce—turns temporal selection and spatial zoom into ex-
+plicit decision steps, allowing the model to accumulate and
+verify evidence across multiple iterations rather than relying
+on a single perception of the video. Our design is comple-
+mentary to recent RL-based reasoning efforts in language/-
+multimodal models [9, 13, 14, 18, 23, 28, 34, 37, 44, 47,
+55, 56, 79], but specifically targets text-rich video reason-
+ing with an explicit control interface for visual operations.
+Training such behavior is nontrivial: multi-step rumi-
+nation requires not only learning how to use visual opera-
+tions, but also when and why to apply them. To this end,
+we curate executable trajectories from the M4-ViteVQA
+dataset [89] and design a multi-stage rumination learning
+framework that progressively teaches atomic and compo-
+sitional operations via GRPO-style reinforcement learning
+built on PPO [52]. Our reward design draws on ideas from
+diversity- and representativeness-based video summariza-
+tion [92] and recent curiosity-driven and vision-centric rein-
+forcement learning for pixel-space reasoning [47, 57]. This
+staged curriculum emerges as a strong inductive bias, yield-
+ing faster convergence and significantly higher final perfor-
+mance than collapsed or single-stage methods. Empirically,
+Video-R4 sets a new state of the art on M4-ViteVQA [89]
+and generalizes well beyond its training domain. Despite
+being trained exclusively on text-rich videos, the model
+transfers effectively to multi-page document QA and slides
+QA benchmarks [24, 58, 59, 64], as well as to general
+video QA benchmarks such as MVBench, Video-MME,
+and Video-MMMU [16, 20, 33]. These results suggest that
+iterative visual rumination forms a broadly useful paradigm
+for multimodal reasoning over both videos and long docu-
+ments. In summary, our contributions are:
+• We construct two curated datasets for executable text-
+rich video reasoning: Video-R4-CoT-17k for supervised
+rumination pratice and Video-R4-RL-30k for reinforce-
+ment learning, enabling study of temporal selection, spa-
+tial zooming, and multi-step evidence acquisition.
+• We introduce Video-R4, a video reasoning LMM that
+performs iterative visual rumination by selecting frames,
+zooming into regions, re-encoding pixels, and updating
+its reasoning state, and continually updating its internal
+state to support pixel-grounded reasoning.
+2
+
+Figure 3. Data curation pipeline for creating the Video-R4-CoT-17k for supervised deliberate rumination practice fine-tuning (DRP-SFT)
+and compositional rumination practice fine-tuning (CRP-SFT), as well as the Video-R4-RL-30k dataset for reinforcement learning. The
+light blue parts are intended to be used as the model’s inputs, while the pink parts are expected to be produced by the model as outputs.
+• We develop a multi-stage rumination learning frame-
+work that incrementally teaches atomic operations, com-
+positional sequences, and operation control via GRPO-
+based reinforcement learning.
+This staged curriculum
+yields faster convergence and substantially stronger final
+performance than single-stage or collapsed alternatives.
+• We achieve state-of-the-art performance on M4-
+ViteVQA and demonstrate robust transfer to multi-page
+document QA, slides QA, and general video QA, high-
+lighting the broad applicability of iterative visual rumina-
+tion beyond the training domain.
+2. Method: Video-R4
+2.1. Data Curation
+Data Source.
+As shown in Figure 3, we start from the
+training split of M4-ViteVQA, a text-rich VideoQA bench-
+mark with more than fifty thousand question-answering
+pairs and diverse real-world scenes [89].
+Each sample
+provides a video, one question, and its answer, together
+with pre-extracted OCR tokens and object detection results.
+These annotations retain text content, frame indices, object
+labels, and bounding boxes, which form the evidence pool
+for rumination trajectory synthesis.
+Evidence Matching.
+We aim to recover the evidence
+needed to answer each question and thereby prepare explicit
+chains of thought. Starting from the gold answer, we apply
+rule-based string matching between answers and OCR to-
+kens, as well as between linguistic mentions of entities and
+object labels. We adopt fuzzy matching with edit distance to
+handle recognition noise and minor wording variation [31].
+For matched samples, we record supporting frame indices
+and bounding boxes and mark whether the matched text
+or object is truly helpful for solving the question. For un-
+matched samples, we estimate question difficulty and keep
+moderately difficult cases as candidates for Video-R4-RL-
+30k and drop the rest of the samples, which can make the
+GRPO-based RL more stable. The full matching rules de-
+tails are given in the appendix.
+Rumination Trajectory Synthesis.
+Given matched ev-
+idence, we synthesize rumination trajectories using a
+lightweight chain-of-thought template. The template inter-
+leaves internal thinking steps and visual operations applied
+to the video. We define two atomic visual operations in-
+spired by recent work on video reasoning [9, 14]. Clipping
+selects several key frames by their indices and prompts the
+model to describe each frame. Cropping focuses on one
+frame and extracts a salient region with a bounding box, fol-
+lowed by a region-level caption. All frames and regions are
+restricted to those produced by the matching stage, ensur-
+ing that every step remains grounded in observed evidence.
+We then fill the template using a strong video-capable mul-
+timodal model and further check temporal consistency and
+answer correctness [1, 10]. Valid trajectories become super-
+vision for the chain of thought dataset Video-R4-CoT-17k.
+Quality Control.
+We develop an annotation interface that
+displays each trajectory alongside visualized key frames,
+cropped regions, and the corresponding question-answer
+pair. Annotators quickly scan the rumination steps, ver-
+ify that every visual operation points to the right evidence,
+and confirm that the final answer follows from the collected
+clues. Samples with hallucinated or missing evidence are
+edited or removed. Beyond M4-ViteVQA, we gather addi-
+tional text-centric VideoQA instances from public datasets
+and convert them into the same format [29, 57, 65, 95]. Af-
+ter automatic and manual filtering, we obtain about 17k tra-
+jectories for Video-R4-CoT-17k and about 30k reinforce-
+ment learning samples for Video-R4-RL-30k.
+3
+
+2.2. Preliminary of GRPO
+We adopt Group Relative Policy Optimization (GRPO) [18]
+as the core policy optimization algorithm. Firstly, the pol-
+icy πθ samples a group of G distinct candidate responses
+(or trajectories) {o1, . . . , oG} for a given input query q. Af-
+ter calculating with predefined reward functions, we obtain
+their corresponding rewards {R1, . . . , RG}. We compute
+the group-wise mean and standard deviation, and define the
+relative quality of the i-th response as:
+Ai = Ri −mean({Rj}G
+j=1)
+std({Rj}G
+j=1)
+(1)
+The policy is optimized to increase the probability of ac-
+tions with higher group-relative advantage and decrease
+those with lower advantage. Following PPO [52], we ap-
+ply a clipped objective to stabilize updates:
+JGRPO(θ) = Eq,{oi}
+"
+1
+G
+G
+X
+i=1
+ 
+min
+ 
+πθ(oi | q)
+πθold(oi | q)Ai,
+clip
+ 
+πθ(oi | q)
+πθold(oi | q), 1 −ϵ, 1 + ϵ
+!
+Ai
+!
+−γ DKL(πθ ∥πref)
+#
+,
+(2)
+where DKL is KL-divergence term to prevent the optimized
+policy πθ from far from the original LMM πref, and γ is
+a regularization coefficient. This group-relative formula-
+tion reduces variance compared to individual-sample pol-
+icy gradient updates, improves optimization robustness, and
+encourages relative action ranking rather than relying solely
+on absolute reward magnitudes.
+2.3. Reward Design
+Our reward function combines four components: the origi-
+nal reward R (e.g., answer correctness and format), Diver-
+sity Reward Rdiv, Representativeness Reward Rrep, and Cu-
+riosity Reward Rcur. The overall reward is:
+R′ = R + λdivRdiv + λrepRrep + λcurRcur,
+(3)
+where the choice of the coefficients, λdiv, λrep, and λcur, can
+be found in the appendix (Section 10).
+Diversity Reward.
+Following prior unsupervised sum-
+marization objectives [92], we encourage selected regions
+to be mutually dissimilar in feature space. Let V denote
+the set of features of the input frames and ˆV = ˆV f ∪ˆV r
+denote the set of features of the selected frames ( ˆV f) and
+regions ( ˆV r), where ˆV f ⊆V . We define representativeness
+reward to encourage the policy to avoid redundant region
+selections:
+Rdiv( ˆV r) =
+1
+| ˆV r|(| ˆV r| −1)
+| ˆV r|
+X
+i=1
+| ˆV r−1|
+X
+j̸=i
+d(vi, vj),
+(4)
+where d(·, ·) denotes cosine similarity:
+d(vi, vj) = 1 −
+v⊤
+i vj
+∥vi∥2∥vj∥2
+.
+(5)
+This objective computes the average pairwise distance be-
+tween all selected region features in ˆV r. The normaliza-
+tion by | ˆV r|(| ˆV r| −1) makes the scale of Rdiv compa-
+rable across different numbers of selected regions, so the
+policy is not trivially rewarded for increasing | ˆV r|. Us-
+ing cosine-based distance further makes the reward depend
+on the orientation of features rather than their magnitude,
+which aligns it with semantic differences captured by the
+encoder. As a result, Rdiv biases the training dynamics to-
+ward solutions where the selected crops are spread out in
+the feature space instead of collapsing to a narrow cluster.
+Representativeness Reward.
+To ensure the selected
+frames ˆV f remain informative, we encourage them to rep-
+resent the global video frame set V with the representative-
+ness reward:
+Rrep(V, ˆV f) = exp
+
+−1
+|V |
+|V |
+X
+i=1
+min
+vj∈ˆV f[−1] ∥vi −vj∥2
+
+,
+(6)
+where ∥· ∥2 denotes the Euclidean distance in the feature
+space and ˆV f[−1] is the set of frame features selected in
+the last clipping operation. To reduce computational re-
+dundancy, we only use ˆV f[−1] to compute Rrep. This re-
+ward measures how well the selected frames cover the en-
+tire video in feature space: for each frame vi ∈V , we keep
+only the distance to its closest selected frame in ˆV f[−1] and
+average these distances over all frames. When the selected
+frames are placed near the implicit cluster centers of V ,
+most frames are close to at least one selection, the aver-
+age distance is small, and Rrep stays close to 1 [92]. Con-
+versely, if the policy selects outliers or redundant frames,
+many frames remain far from any selection, the average dis-
+tance grows and the exponential term sharply reduces the
+reward, pushing the policy toward a compact set of proto-
+typical frames that best represent the video.
+Curiosity Reward.
+To balance exploration and the ten-
+dency to overuse the visual operations, we incorporate a cu-
+riosity reward [57]:
+Rcur( ˆVi) = α
+
+H −1
+K
+K
+X
+j=1
+I
+
+| ˆVj| > 0
+
+
+
++
+· I
+
+| ˆVi| > 0
+
+−β
+
+| ˆVi| −N
+
++ ,
+(7)
+where K is the number of rollouts, (·)+ is the ReLU func-
+tion, I[·] is the indicator function, α and β are coeficients,
+4
+
+Figure 4. Overview of multi-stage rumination training framework.
+and H is the threshold. The first term becomes positive
+only when the overall fraction of rollouts that invoke the
+visual operation falls below H, and the factor I[| ˆVi| > 0]
+ensures that only rollouts that actually call the tool receive
+this bonus. This encourages the policy to explore visual tool
+calls when they are globally under-utilized, rather than col-
+lapsing to a purely text-only strategy. In contrast, the sec-
+ond term is activated only when | ˆVi| exceeds N, imposing
+a linear penalty on excessive calls and preventing the policy
+from over-relying on the visual operation. Together, these
+two terms guide the policy toward a regime where the tool
+is used when beneficial, but neither ignored nor abused.
+2.4. Training Framework
+As illustrated in Figure 4, we train Video-R4 with a four-
+stage rumination training framework: Deliberate Rumina-
+tion Practice (DRP) SFT, a first GRPO-based RL stage,
+Compositional Rumination Practice (CRP) SFT, and a sec-
+ond RL stage.
+Deliberate Rumination Practice (DRP).
+The first stage
+focuses on learning each atomic visual operation in isola-
+tion. In Deliberate Rumination Practice SFT (DRP-SFT),
+every training trajectory exposes only one type of rumina-
+tion: either cropping over a single frame or clipping over
+a video. For image-centric trajectories, the input consists
+of one frame, and the model can repeatedly crop regions,
+zoom in, and reason over the re-encoded crops. For video-
+centric trajectories, the input is an ordered list of frames,
+and the model can select short consecutive clips from the
+sequence and reason over the selected frames. DRP-SFT
+uses about 7k trajectories, including 5k image-based crop-
+ping and 2k video-based clipping examples. We minimize
+token-level cross-entropy on both natural-language tokens
+and operation arguments, so the model learns when to call
+cropping or clipping (under a single available tool per tra-
+jectory) and how to propose spatial or temporal regions con-
+ditioned on its current rumination state. This stage pro-
+duces a DRP-initialized checkpoint with strong but still
+non-compositional cropping and clipping skills.
+Compositional Rumination Practice (CRP).
+The sec-
+ond stage teaches the model to interleave cropping and
+clipping within a single reasoning trajectory. In Composi-
+tional Rumination Practice SFT (CRP-SFT), we fine-tune
+from the DRP-SFT checkpoint on 10k trajectories from
+Video-R4-CoT-17k, where both atomic operations are avail-
+able.
+These trajectories exhibit typical patterns such as
+first clipping to locate a relevant segment, then cropping on
+key frames to read fine-grained text, and finally clipping
+again to verify an earlier hypothesis. Compared with DRP-
+SFT, CRP-SFT shifts the objective from mastering individ-
+ual tools to learning longer read–ground–verify procedures,
+where the model must choose which operation to invoke,
+how many times to use it, and how to schedule and chain
+multiple crops and clips over time.
+Multi-stage Rumination Learning.
+Beyond supervised
+chain-of-thought trajectories, we further refine rumination
+behavior using GRPO-based RL with the reward R′ defined
+in Section 2.3. We take the Video-R4-RL-30k collection
+from our data curation pipeline and split it into two sub-
+sets of 15k trajectories. Our final schedule is DRP-SFT →
+RLd →CRP-SFT →RLc.
+In the first reinforcement
+stage RLd, we start from the DRP-SFT checkpoint and ap-
+ply GRPO on the first 15k trajectories. This stage encour-
+ages the model to explore cropping and clipping under the
+outcome-based reward R′ while staying close to the deliber-
+ate single-tool rumination patterns learned in DRP. We then
+run CRP-SFT on the 10k compositional trajectories so that
+longer mixed-operation strategies are distilled back into the
+policy. Finally, the second reinforcement stage RLc initial-
+izes from the CRP-SFT checkpoint and optimizes on the re-
+5
+
+Table 1. Performance comparison on the testset of the M4-ViteVQA dataset. Best non-human scores in bold. The parameters of the
+LMM-based models are 7B or 8B. All the RL-based models compared are based on Qwen2.5-VL. The human performances are from [89].
+Models
+LMM-
+Based
+Visual-
+Grounded
+RL-
+Based
+Task 1 - Split 1
+Task 1 - Split 2
+Task 2
+Acc. (%)
+ANLS (%)
+Acc. (%)
+ANLS (%)
+Acc. (%)
+ANLS (%)
+JustAsk [72]
+✗
+✗
+✗
+10.05
+14.10
+5.47
+8.60
+3.60
+6.70
+All-in-one-B [67]
+✗
+✗
+✗
+10.87
+14.80
+5.66
+7.80
+3.28
+4.60
+Video-LLaVA-7B [38]
+✓
+✗
+✗
+15.43
+17.15
+11.19
+12.02
+9.38
+11.80
+T5-ViteVQA [89]
+✗
+✗
+✗
+22.17
+29.10
+16.68
+23.80
+9.29
+13.60
+VideoLLaMA2-7B [11]
+✓
+✗
+✗
+20.76
+23.55
+18.33
+20.45
+16.54
+21.08
+Qwen2-VL-7B [68]
+✓
+✗
+✗
+35.22
+45.84
+27.25
+38.45
+21.23
+28.79
+TEA-L [83]
+✗
+✓
+✗
+34.78
+43.71
+28.43
+38.13
+18.83
+28.90
+NVILA-8B [48]
+✓
+✗
+✗
+37.73
+47.23
+30.10
+41.52
+22.89
+30.34
+GAT-L [84]
+✗
+✓
+✗
+38.30
+48.23
+30.90
+41.81
+22.13
+30.75
+Video-R1-7B [15]
+✓
+✗
+✓
+37.10
+48.25
+33.67
+44.94
+43.16
+53.37
+Qwen2.5-VL [1]
+✓
+✗
+✗
+26.53
+44.91
+24.34
+39.60
+32.81
+50.82
+Pixel-Reasoner [57]
+✓
+✓
+✓
+52.91
+61.44
+48.88
+58.23
+58.97
+65.32
+Video-R4-7B (ours)
+✓
+✓
+✓
+56.17
+65.22
+52.69
+61.89
+64.21
+69.99
+Human
+–
+–
+–
+85.27
+89.30
+78.41
+82.80
+82.26
+85.10
+maining 15k trajectories, sharpening decisions about when
+to stop, when to re-zoom, and how aggressively to explore
+alternative clips and crops.
+3. Experiments
+3.1. Experiment Setups
+Benchmarks.
+We experiment with the text-rich video
+reasoning on the testset of the M4-ViteVQA [89] dataset.
+Models are also tested on three commonly-used general
+video QA benchmarks: MVBench [33], Video-MME [16],
+and Video-MMMU [20]. The generalization ability is eval-
+uated on the multi-page document QA benchmark MP-
+DocVQA [64] and slides QA benchmark SlidesVQA [59].
+Evaluation Metrics.
+For text-rich video QA and multi-
+page document QA, we use accuracy (exact match,
+EM) [51, 73] and Average Normalized Levenshtein Simi-
+larity (ANLS) [8]. For general video QA, we use accuracy.
+For slides QA, we use EM [51, 73] and Macro-averaged F1
+score. The details about EM, ANLS, and (Macro-averaged)
+F1 can be found in the appendix (Section 8).
+Baselines.
+We
+compare
+Video-R4-7B
+against
+three
+groups of representative methods: (1) Conventional video
+QA and long-context language models that do not rely
+on multimodal LMMs, including JustAsk [72], All-in-one-
+B [67], T5-ViteVQA [89], and long-sequence Transformers
+such as Longformer [2] and Big-Bird [78]. (2) Instruction-
+tuned video LMMs without explicit reasoning-by-grounding
+or RL, e.g., Video-LLaVA [38], VideoLLaMA2 [11],
+Qwen2-VL [68], Qwen2.5-VL [1], and NVILA [48]; and
+visual-grounded designs tailored for text-rich videos, such
+as TEA-L [83] and GAT-L [84]. (3) RL-tuned reasoning
+LMMs built on strong LMM backbones, including Video-
+R1 [15] and Pixel-Reasoner [57]. We also report human
+performance from the M4-ViteVQA benchmark [89]. Un-
+less otherwise noted, LMM-based competitors use 7B/8B
+backbones, matching our model size for a fair comparison.
+3.2. Main Results
+Text-Rich Video QA.
+Table 1 summarizes results on the
+M4-ViteVQA testset [89]. Video-R4-7B establishes a new
+state of the art among non-human systems across all three
+evaluation splits. The largest margin appears on Task 2,
+where Video-R4-7B reaches 64.21 Acc against 43.16 for
+Video-R1 [15]. The Improvements are consistent in both
+accuracy and ANLS metrics. Beyond the aggregate scores,
+we also observe that allowing the model to execute a longer
+sequence of visual operations at inference monotonically
+improves accuracy. When the inference allows deeper vi-
+sual rumination, performance scales up. This aligns with
+the broader test-time scaling phenomenon and indicates that
+longer visual rumination increases the chance of finding and
+verifying small text cues rather than relying on a single pass.
+Finding 1: Allowing longer rumination and more
+pixel-grounded steps consistently boosts accuracy,
+demonstrating test-time scaling effect.
+Ablation Study.
+Table 2 compares training recipes. The
+full schedule DRP-SFT →RLd →CRP-SFT →RLc
+achieves the best end performance and also converges faster
+early on than direct CRP-SFT or DRP-SFT followed by
+CRP-SFT. The benefit remains even when later losses be-
+come similar. On Task 2, Acc moves from 51.92 for DRP-
+6
+
+Table 2. Ablation results of Video-R4 training framework, tested on the testset of M4-ViteVQA dataset. Best scores in bold and second-
+best in underline.
+Training Framework
+Task 1 - Split 1
+Task 1 - Split 2
+Task 2
+Acc. (%)
+ANLS (%)
+Acc. (%)
+ANLS (%)
+Acc. (%)
+ANLS (%)
+DRP-SFT →RLd →CRP-SFT →RLc (full)
+56.17
+65.22
+52.69
+61.89
+64.21
+69.99
+DRP-SFT →RLd →CRP-SFT →RLc (w/o Rrep)
+55.70
+65.04
+52.54
+61.86
+62.65
+71.08
+DRP-SFT →RLd →CRP-SFT →RLc (w/o Rdiv)
+55.56
+65.24
+52.26
+62.13
+62.41
+70.11
+DRP-SFT →RLd →CRP-SFT →RLc (w/o Rcur)
+54.35
+63.92
+50.90
+61.10
+61.92
+69.20
+DRP-SFT →RLd →CRP-SFT →RLc (w/o Rdiv, Rrep)
+55.73
+64.99
+52.02
+61.35
+62.24
+68.38
+DRP-SFT →CRP-SFT →RLc
+54.98
+63.74
+51.50
+60.80
+60.44
+68.59
+CRP-SFT →RLc
+54.23
+63.75
+51.26
+60.39
+61.43
+68.28
+DRP-SFT →RLd →CRP-SFT
+50.08
+64.15
+46.17
+60.67
+56.27
+68.81
+CRP-SFT
+46.76
+62.67
+40.47
+59.68
+49.47
+66.33
+DRP-SFT →CRP-SFT
+44.58
+63.09
+42.23
+60.58
+51.92
+69.07
+DRP-SFT
+32.80
+57.92
+32.07
+54.74
+33.74
+63.70
+Base Model (Qwen2.5-VL-7B-Instruct)
+26.53
+44.91
+24.34
+39.60
+32.81
+50.82
+SFT →CRP-SFT and 61.43 for CRP-SFT →RLc to 64.21
+with the full recipe.
+During RL the policy develops a
+marked preference for cropping over clipping. Cropping
+isolates and enlarges a single informative frame, which re-
+duces redundancy and helps read fine text, consistent with
+how humans pause and zoom when analyzing videos. Re-
+ward ablations indicate a trade-off between repetition and
+diversity controls, which shape the balance between careful
+reading and broad exploration.
+Finding 2: The DRP →RL →CRP →RL schedule
+yields the best performance, indicating that atomic,
+first then compositional learning, interleaved with
+RL, is most effective.
+3.3. Generalization Experiments
+General Video QA.
+Without dataset-specific tuning,
+Video-R4-7B transfers competitively to general video QA
+as summarized in Table 3.
+It is near the top on
+MVBench [33] and Video-MME [16] and sets a new best
+52.2 on Video-MMMU [20].
+Video-MMMU contains
+many educational/lecture videos that are intrinsically text-
+rich, and the read–ground–verify routine learned on M4-
+ViteVQA appears to be well-aligned with these data.
+Finding 3: RL encourages a preference for crop-
+ping over clipping, as zooming provides more in-
+formative and less redundant evidence, mirroring
+how humans pause and inspect frames.
+Multi-page Document & Slides QA.
+After training on
+text-rich video QA, Video-R4-7B transfers to long docu-
+ment understanding with no additional tuning.
+On MP-
+DocVQA, the zero-shot result of Video-R4-7B is 53.21 Acc
+and 62.22 ANLS, surpassing both the zero-shot and trained
+Hi-VT5 variants [64]. On the testset of SlidesVQA, Video-
+R4-7B reaches 43.0 EM and 52.2 F1 versus 33.5 and 41.7
+for M3D [59] as shown in Table 3. These demonstrate that
+once trained to locate, read, and verify dispersed textual ev-
+idence over time, the model can reuse the same procedure
+across pages and slides with minimal friction.
+Finding 4: Training on text-rich videos transfers
+well to multi-page documents, slides, and gen-
+eral video QA, with strong gains on the text-heavy
+Video-MMMU benchmark.
+4. Related Work
+Text-Rich Video Understanding.
+Early work on text-
+rich visual understanding primarily studied single images,
+where TextVQA systems integrate OCR, layout cues, and
+semantic reasoning to read scene text [3, 17, 21, 93, 94].
+TextVideoQA extends this problem to dynamic scenes, re-
+quiring models to track temporal changes and transient text
+signals [29, 65, 88, 95]. M4-ViteVQA [88] provides the
+first large-scale benchmark, while later datasets such as
+RoadTextVQA and NewsVideoQA [29, 65] study domain-
+specific settings. Beyond general video LMMs, several ar-
+chitectures explicitly optimize grounding over text regions:
+TEA-L and GAT-L introduce tracking and graph reason-
+ing over OCR boxes [83, 84], and Pixel-Reasoner employs
+pixel-level cropping actions for fine-grained evidence ac-
+quisition [57]. Related tasks such as multi-page document
+QA and slides QA tackle long-range textual grounding us-
+ing hierarchical or layout-aware encoders [2, 24, 59, 64, 78].
+In contrast, Video-R4 builds on a generic video LMM and
+learns explicit spatio-temporal operations through RL.
+Video Understanding with LMMs.
+Visual instruction
+tuning has established a strong foundation for aligning
+7
+
+Table 3. Fine-tuning on Video-R4-CoT-17k and Video-R4-RL-30k, Video-R4 demonstrates strong generalization capabilities, effectively
+handling not only general video QA but also multi-page document QA and slides QA, without the need for further dataset-specific training.
+(a) Results on general video QA benchmarks.
+Models
+MVBench
+Video-MME
+Video-MMMU
+Video-LLaVA-7B [38]
+42.9
+39.9
+–
+VideoLLaMA2-7B [11]
+54.6
+46.6
+–
+Qwen2.5-VL-7B [1]
+57.4
+53.1
+47.8
+Video-R1-7B [15]
+62.7
+57.4
+49.8
+Pixel-Reasoner [57]
+65.4
+54.6
+47.7
+Video-R4-7B (ours)
+64.5
+54.5
+52.2
+(b) Results on the validation set of the MP-DocVQA dataset.
+Models
+Zero-Shot
+Acc. (%)
+ANLS (%)
+LayoutLMv3 [24]
+✗
+38.47
+45.38
+Big-Bird [78]
+✗
+41.06
+49.29
+Hi-VT5 (w/o train) [64]
+✓
+42.10
+58.64
+Longformer [2]
+✗
+43.91
+52.87
+Hi-VT5 [64]
+✗
+48.28
+62.01
+Video-R4-7B (ours)
+✓
+53.21
+62.22
+(c) Results on the test set of SlidesVQA.
+Models
+Zero-
+Shot
+Dev
+Test
+EM
+F1
+EM
+F1
+Q-only [59]
+✓
+9.4
+11.4
+10.7
+13.5
+UniVL [49]
+✓
+8.8
+12.1
+10.6
+14.1
+PreasM [74]
+✗
+36.3
+41.9
+30.7
+38.2
+T5 [50]
+✗
+35.2
+41.3
+29.3
+37.9
+T5 + zlay [50]
+✗
+36.9
+43.2
+31.0
+39.7
+LayoutT5 [58]
+✗
+38.9
+44.8
+31.7
+39.9
+LayoutLMv2 [66]
+✗
+26.5
+33.4
+21.4
+29.3
+FiD [27]
+✗
+37.6
+42.9
+30.4
+38.9
+FiD + zlay [27]
+✗
+38.1
+43.3
+30.6
+38.9
+M3D [59]
+✗
+41.3
+47.1
+33.5
+41.7
+Video-R4-7B (ours)
+✓
+49.5
+56.0
+43.0
+52.2
+Human
+–
+–
+–
+89.8
+93.0
+image–language models with general-purpose language
+backbones [10, 32, 39, 40, 63, 86, 96].
+Building upon
+this paradigm, video LMMs extend 2D visual alignment
+to temporal sequences.
+Early methods rely on sparse
+frame sampling and lightweight temporal fusion [32, 45],
+while recent systems strengthen spatial–temporal model-
+ing, token compression, and long-context handling. Video-
+LLaVA [38] and VideoLLaMA2 [11] incorporate temporal
+attention and audio streams; Qwen2-VL and Qwen2.5-VL
+adopt dynamic-resolution inputs for higher-fidelity video
+perception [1, 68]; NVILA further scales visual backbones
+for video LMMs [48]. For long or streaming videos, works
+such as LongVA [80], Video-XL and successors [43, 54],
+VideoChat/VideoChatFlash [35, 36], InternVideo2 [69],
+and MVBench/Video-MME [16, 33] explore compression,
+memory, and benchmarking. Most existing approaches [4],
+however, still treat video understanding as a single-pass per-
+ception task over fixed frames, without modeling iterative
+zoom-and-check behaviors on text-rich regions. Video-R4
+instead performs closed-loop visual rumination, enabling
+deliberate evidence gathering and multi-step grounding.
+Large Multimodal Model Reasoning.
+LLM reasoning
+has progressed from chain-of-thought supervision [6, 7,
+71, 85, 90] to outcome-driven RL, where rule-based re-
+wards and GRPO enable strong long-form reasoning with-
+out dense annotations [9, 18, 28, 37].
+This paradigm
+has inspired advances in text reasoning [76, 77, 82] and
+domain-specific R1-style models in math, finance, and
+medicine [30, 46, 53, 81]. For vision–language models, re-
+cent work applies verifiable visual rewards to teach multi-
+step perceptual reasoning [5, 12, 13, 22, 23, 44, 47, 79, 91].
+Closer to our task, [14, 70, 87] explore temporal ground-
+ing in videos using GRPO objectives.
+Video-R4 differs
+by reasoning with a structured tool interface and a tailored
+reward scheme. Our diversity/representativeness rewards
+shape spatial–temporal coverage, while a curiosity reward
+regulates tool frequency.
+Combined with the DRP/CRP
+rumination curriculum, this encourages human-like zoom-
+and-read behaviors crucial for recovering small, dispersed
+text in long videos and multi-page documents.
+5. Conclusion
+We presented Video-R4, a video reasoning agent that ac-
+quires evidence through iterative visual rumination. By de-
+composing video understanding into frame selection, spa-
+tial zooming, and re-encoding cycles, Video-R4 overcomes
+the limitations of single-pass perception and enables reli-
+able grounding on text-rich, fine-grained visual cues. To
+support this paradigm, we curated Video-R4-CoT-17k and
+Video-R4-RL-30k, providing the first executable supervi-
+sion for multi-step video rumination. Our multi-stage train-
+ing strategy, combining supervised trajectories with GRPO-
+based reinforcement learning, proves essential for stabiliz-
+ing and improving rumination behavior. Empirical results
+show that Video-R4 achieves state-of-the-art performance
+on M4-ViteVQA and generalizes to broader multimodal
+reasoning tasks. We believe rumination-based LMMs can
+extend to longer videos, multimodal evidence fusion, and
+more open-ended reasoning, pushing LMMs toward robust,
+human-like video understanding.
+Acknowledgements.
+This work was supported by Sony
+Group Corporation. We would like to thank Sayaka Naka-
+mura and Jerry Jun Yokono for their insightful discussion.
+8
+
+References
+[1] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin
+Ge, Sibo Song, Kai Dang, Peng Wang, Shijie Wang, Jun
+Tang, et al. Qwen2. 5-vl technical report. arXiv preprint
+arXiv:2502.13923, 2025. 3, 6, 8, 2, 5
+[2] Iz Beltagy, Matthew E Peters, and Arman Cohan.
+Long-
+former: The long-document transformer.
+arXiv preprint
+arXiv:2004.05150, 2020. 6, 7, 8
+[3] Jing Bi, Jiebo Luo, and Chenliang Xu. Procedure planning
+in instructional videos via contextual modeling and model-
+based policy learning. In Proceedings of the IEEE/CVF In-
+ternational Conference on Computer Vision (ICCV), pages
+15611–15620, 2021. 7
+[4] Jing Bi, Yunlong Tang, Luchuan Song, Ali Vosoughi,
+Nguyen Nguyen, and Chenliang Xu.
+Eagle: Egocentric
+aggregated language-video engine.
+In Proceedings of the
+32nd ACM International Conference on Multimedia, page
+1682–1691. ACM, 2024. 8
+[5] Jing Bi, Junjia Guo, Susan Liang, Guangyu Sun, Luchuan
+Song, Yunlong Tang, Jinxi He, Jiarui Wu, Ali Vosoughi,
+Chen Chen, and Chenliang Xu. Verify: A benchmark of vi-
+sual explanation and reasoning for investigating multimodal
+reasoning fidelity, 2025. 8
+[6] Jing Bi, Susan Liang, Xiaofei Zhou, Pinxin Liu, Junjia Guo,
+Yunlong Tang, Luchuan Song, Chao Huang, Guangyu Sun,
+Jinxi He, Jiarui Wu, Shu Yang, Daoan Zhang, Chen Chen,
+Lianggong Bruce Wen, Zhang Liu, Jiebo Luo, and Chenliang
+Xu. Why reasoning matters? a survey of advancements in
+multimodal reasoning (v1), 2025. 8
+[7] Jing Bi, Guangyu Sun, Ali Vosoughi, Chen Chen, and Chen-
+liang Xu. Diagnosing visual reasoning: Challenges, insights,
+and a path forward, 2025. 8
+[8] Ali Furkan Biten, Ruben Tito, Andres Mafla, Lluis Gomez,
+Marc¸al Rusinol, Ernest Valveny, CV Jawahar, and Dimos-
+thenis Karatzas. Scene text visual question answering. In
+Proceedings of the IEEE/CVF international conference on
+computer vision, pages 4291–4301, 2019. 6, 2
+[9] Qiguang Chen, Libo Qin, Jinhao Liu, Dengyun Peng, Jian-
+nan Guan, Peng Wang, Mengkang Hu, Yuhang Zhou, Te
+Gao, and Wanxiang Che. Towards reasoning era: A survey of
+long chain-of-thought for reasoning large language models.
+arXiv preprint arXiv:2503.09567, 2025. 1, 2, 3, 8
+[10] Zhe Chen, Weiyun Wang, Hao Tian, Shenglong Ye, Zhang-
+wei Gao, Erfei Cui, Wenwen Tong, Kongzhi Hu, Jiapeng
+Luo, Zheng Ma, et al. How far are we to gpt-4v? closing
+the gap to commercial multimodal models with open-source
+suites. Science China Information Sciences, 67(12):220101,
+2024. 3, 8
+[11] Zesen Cheng, Sicong Leng, Hang Zhang, Yifei Xin, Xin
+Li, Guanzheng Chen, Yongxin Zhu, Wenqi Zhang, Ziyang
+Luo, Deli Zhao, et al.
+Videollama 2: Advancing spatial-
+temporal modeling and audio understanding in video-llms.
+arXiv preprint arXiv:2406.07476, 2024. 6, 8, 5
+[12] Yihe Deng, Hritik Bansal, Fan Yin, Nanyun Peng, Wei
+Wang, and Kai-Wei Chang.
+Openvlthinker: An early ex-
+ploration to complex vision-language reasoning via iterative
+self-improvement. arXiv preprint arXiv:2503.17352, 2025.
+8
+[13] Kaixuan Fan, Kaituo Feng, Haoming Lyu, Dongzhan Zhou,
+and Xiangyu Yue. Sophiavl-r1: Reinforcing mllms reason-
+ing with thinking reward. arXiv preprint arXiv:2505.17018,
+2025. 2, 8
+[14] Kaituo Feng, Kaixiong Gong, Bohao Li, Zonghao Guo, Yib-
+ing Wang, Tianshuo Peng, Benyou Wang, and Xiangyu Yue.
+Video-r1: Reinforcing video reasoning in mllms.
+arXiv
+preprint arXiv:2503.21776, 2025. 2, 3, 8
+[15] Kaituo Feng, Kaixiong Gong, Bohao Li, Zonghao Guo,
+Yibing Wang, Tianshuo Peng, Junfei Wu, Xiaoying Zhang,
+Benyou Wang, and Xiangyu Yue.
+Video-r1: Reinforcing
+video reasoning in mllms. arXiv preprint arXiv:2503.21776,
+2025. 6, 8, 5
+[16] Chaoyou Fu, Yuhan Dai, Yongdong Luo, Lei Li, Shuhuai
+Ren, Renrui Zhang, Zihan Wang, Chenyu Zhou, Yunhang
+Shen, Mengdan Zhang, et al.
+Video-mme: The first-ever
+comprehensive evaluation benchmark of multi-modal llms in
+video analysis. In Proceedings of the Computer Vision and
+Pattern Recognition Conference, pages 24108–24118, 2025.
+1, 2, 6, 7, 8
+[17] Dan Guo, Kun Li, Bin Hu, Yan Zhang, and Meng Wang.
+Benchmarking micro-action recognition: Dataset, method,
+and application. IEEE Trans. Circuits Syst. Video Technol.,
+34(7):6238–6252, 2024. 7
+[18] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song,
+Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi
+Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning
+capability in llms via reinforcement learning. arXiv preprint
+arXiv:2501.12948, 2025. 2, 4, 8
+[19] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-
+Zhu, Yuanzhi Li, Shean Wang, Lu Wang, Weizhu Chen, et al.
+Lora: Low-rank adaptation of large language models. ICLR,
+1(2):3, 2022. 4
+[20] Kairui Hu, Penghao Wu, Fanyi Pu, Wang Xiao, Yuanhan
+Zhang, Xiang Yue, Bo Li, and Ziwei Liu. Video-mmmu:
+Evaluating knowledge acquisition from multi-discipline pro-
+fessional videos. arXiv preprint arXiv:2501.13826, 2025. 1,
+2, 6, 7
+[21] Ronghang Hu, Amanpreet Singh, Trevor Darrell, and Mar-
+cus Rohrbach.
+Iterative answer prediction with pointer-
+augmented multimodal transformers for textvqa.
+In Proc.
+IEEE/CVF Conf. Comput. Vis. Pattern Recognit, pages
+9992–10002, 2020. 2, 7
+[22] Chao Huang, Zeliang Zhang, Jiang Liu, Ximeng Sun, Jialian
+Wu, Xiaodong Yu, Ze Wang, Chenliang Xu, Emad Barsoum,
+and Zicheng Liu. Directional reasoning injection for fine-
+tuning mllms. arXiv preprint arXiv:2510.15050, 2025. 8
+[23] Wenxuan Huang, Bohan Jia, Zijie Zhai, Shaosheng Cao,
+Zheyu Ye, Fei Zhao, Zhe Xu, Yao Hu, and Shaohui Lin.
+Vision-r1: Incentivizing reasoning capability in multimodal
+large language models.
+arXiv preprint arXiv:2503.06749,
+2025. 2, 8
+[24] Yupan Huang, Tengchao Lv, Lei Cui, Yutong Lu, and Furu
+Wei. Layoutlmv3: Pre-training for document ai with unified
+text and image masking. In Proceedings of the 30th ACM
+9
+
+international conference on multimedia, pages 4083–4091,
+2022. 2, 7, 8
+[25] Zhenpeng Huang, Xinhao Li, Jiaqi Li, Jing Wang, Xi-
+angyu Zeng, Cheng Liang, Tao Wu, Xi Chen, Liang Li, and
+Limin Wang. Online video understanding: A comprehensive
+benchmark and memory-augmented method. arXiv preprint
+arXiv:2501.00584, 2024. 1
+[26] Aaron Hurst, Adam Lerer, Adam P Goucher, Adam Perel-
+man, Aditya Ramesh, Aidan Clark, AJ Ostrow, Akila Weli-
+hinda, Alan Hayes, Alec Radford, et al. Gpt-4o system card.
+arXiv preprint arXiv:2410.21276, 2024. 2
+[27] Gautier Izacard and Edouard Grave. Leveraging passage re-
+trieval with generative models for open domain question an-
+swering. In Proceedings of the 16th conference of the eu-
+ropean chapter of the association for computational linguis-
+tics: main volume, pages 874–880, 2021. 8
+[28] Aaron Jaech, Adam Kalai, Adam Lerer, Adam Richard-
+son, Ahmed El-Kishky, Aiden Low, Alec Helyar, Aleksander
+Madry, Alex Beutel, Alex Carney, et al. Openai o1 system
+card. arXiv preprint arXiv:2412.16720, 2024. 2, 8
+[29] Soumya Jahagirdar, Minesh Mathew, Dimosthenis Karatzas,
+and CV Jawahar. Watching the news: Towards videoqa mod-
+els that can read. In IEEE/CVF Winter Conf. Appl. Comput.
+Vision, pages 4441–4450, 2023. 1, 2, 3, 7
+[30] Yuxiang Lai, Jike Zhong, Ming Li, Shitian Zhao, and Xi-
+aofeng Yang. Med-r1: Reinforcement learning for general-
+izable medical reasoning in vision-language models. arXiv
+preprint arXiv:2503.13939, 2025. 8
+[31] Vladimir I Levenshtein. Binary codes capable of correcting
+deletions, insertions and reversals. Soviet Physics Doklady,
+10:707–710, 1966. 3, 2
+[32] Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi.
+BLIP-2:
+Bootstrapping language-image pre-training with
+frozen image encoders and large language models. In Pro-
+ceedings of the 40th International Conference on Machine
+Learning, pages 19730–19742. PMLR, 2023. 8
+[33] Kunchang Li, Yali Wang, Yinan He, Yizhuo Li, Yi Wang,
+Yi Liu, Zun Wang, Jilan Xu, Guo Chen, Ping Luo, et al.
+Mvbench: A comprehensive multi-modal video understand-
+ing benchmark. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages 22195–
+22206, 2024. 1, 2, 6, 7, 8
+[34] Wendi Li and Yixuan Li. Process reward model with q-value
+rankings. arXiv preprint arXiv:2410.11287, 2024. 2
+[35] Xinhao Li, Yi Wang, Jiashuo Yu, Xiangyu Zeng, Yuhan
+Zhu, Haian Huang, Jianfei Gao, Kunchang Li, Yinan He,
+Chenting Wang, et al. Videochat-flash: Hierarchical com-
+pression for long-context video modeling.
+arXiv preprint
+arXiv:2501.00574, 2024. 8
+[36] Xinhao Li, Yi Wang, Jiashuo Yu, Xiangyu Zeng, Yuhan
+Zhu, Haian Huang, Jianfei Gao, Kunchang Li, Yinan He,
+Chenting Wang, et al. Videochat-flash: Hierarchical com-
+pression for long-context video modeling.
+arXiv preprint
+arXiv:2501.00574, 2024. 8
+[37] Zhong-Zhi Li, Duzhen Zhang, Ming-Liang Zhang, Jiaxin
+Zhang, Zengyan Liu, Yuxuan Yao, Haotian Xu, Junhao
+Zheng, Pei-Jie Wang, Xiuyi Chen, et al.
+From system 1
+to system 2: A survey of reasoning large language models.
+arXiv preprint arXiv:2502.17419, 2025. 1, 2, 8
+[38] Bin Lin, Yang Ye, Bin Zhu, Jiaxi Cui, Munan Ning, Peng
+Jin, and Li Yuan. Video-llava: Learning united visual repre-
+sentation by alignment before projection. In Proceedings of
+the 2024 Conference on Empirical Methods in Natural Lan-
+guage Processing, pages 5971–5984, 2024. 6, 8, 5
+[39] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee.
+Visual instruction tuning. In Thirty-seventh Conference on
+Neural Information Processing Systems, 2023. 8
+[40] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee.
+Visual instruction tuning. Advances in neural information
+processing systems, 36:34892–34916, 2023. 8
+[41] Pinxin Liu, Luchuan Song, Junhua Huang, Haiyang Liu, and
+Chenliang Xu. Gesturelsm: Latent shortcut based co-speech
+gesture generation with spatial-temporal modeling, 2025. 1
+[42] Pinxin Liu, Pengfei Zhang, Hyeongwoo Kim, Pablo Garrido,
+Ari Shapiro, and Kyle Olszewski. Contextual gesture: Co-
+speech gesture video generation through context-aware ges-
+ture representation. In Proceedings of the 33rd ACM Inter-
+national Conference on Multimedia, page 9803–9812, New
+York, NY, USA, 2025. Association for Computing Machin-
+ery. 1
+[43] Xiangrui Liu, Yan Shu, Zheng Liu, Ao Li, Yang Tian, and
+Bo Zhao.
+Video-xl-pro: Reconstructive token compres-
+sion for extremely long video understanding. arXiv preprint
+arXiv:2503.18478, 2025. 1, 8
+[44] Yuqi Liu, Bohao Peng, Zhisheng Zhong, Zihao Yue, Fanbin
+Lu, Bei Yu, and Jiaya Jia. Seg-zero: Reasoning-chain guided
+segmentation via cognitive reinforcement.
+arXiv preprint
+arXiv:2503.06520, 2025. 2, 8
+[45] Zuyan Liu, Yuhao Dong, Ziwei Liu, Winston Hu, Ji-
+wen Lu, and Yongming Rao.
+Oryx mllm: On-demand
+spatial-temporal understanding at arbitrary resolution. arXiv
+preprint arXiv:2409.12961, 2024. 1, 8
+[46] Zhaowei Liu, Xin Guo, Fangqi Lou, Lingfeng Zeng, Jinyi
+Niu, Zixuan Wang, Jiajie Xu, Weige Cai, Ziwei Yang, Xue-
+qian Zhao, et al. Fin-r1: A large language model for financial
+reasoning through reinforcement learning.
+arXiv preprint
+arXiv:2503.16252, 2025. 8
+[47] Ziyu Liu, Zeyi Sun, Yuhang Zang, Xiaoyi Dong, Yuhang
+Cao, Haodong Duan, Dahua Lin, and Jiaqi Wang. Visual-
+rft:
+Visual reinforcement fine-tuning.
+arXiv preprint
+arXiv:2503.01785, 2025. 2, 8
+[48] Zhijian Liu, Ligeng Zhu, Baifeng Shi, Zhuoyang Zhang,
+Yuming Lou, Shang Yang, Haocheng Xi, Shiyi Cao, Yuxian
+Gu, Dacheng Li, et al. Nvila: Efficient frontier visual lan-
+guage models. In Proceedings of the Computer Vision and
+Pattern Recognition Conference, pages 4122–4134, 2025. 6,
+8, 5
+[49] Huaishao Luo, Lei Ji, Botian Shi, Haoyang Huang, Nan
+Duan, Tianrui Li, Jason Li, Taroon Bharti, and Ming Zhou.
+Univl: A unified video and language pre-training model for
+multimodal understanding and generation.
+arXiv preprint
+arXiv:2002.06353, 2020. 8
+[50] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee,
+Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and
+10
+
+Peter J Liu. Exploring the limits of transfer learning with a
+unified text-to-text transformer. Journal of machine learning
+research, 21(140):1–67, 2020. 8
+[51] Pranav Rajpurkar, Jian Zhang, Konstantin Lopyrev, and
+Percy Liang. Squad: 100,000+ questions for machine com-
+prehension of text. arXiv preprint arXiv:1606.05250, 2016.
+6, 4
+[52] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Rad-
+ford, and Oleg Klimov. Proximal policy optimization algo-
+rithms. arXiv preprint arXiv:1707.06347, 2017. 2, 4
+[53] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao
+Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li,
+Y Wu, et al. Deepseekmath: Pushing the limits of mathe-
+matical reasoning in open language models. arXiv preprint
+arXiv:2402.03300, 2024. 8
+[54] Yan Shu, Zheng Liu, Peitian Zhang, Minghao Qin, Jun-
+jie Zhou, Zhengyang Liang, Tiejun Huang, and Bo Zhao.
+Video-xl: Extra-long vision language model for hour-scale
+video understanding.
+arXiv preprint arXiv:2409.14485,
+2024. 1, 8
+[55] Luchuan Song, Lele Chen, Celong Liu, Pinxin Liu, and
+Chenliang Xu. Texttoon: Real-time text toonify head avatar
+from single video. In SIGGRAPH Asia 2024 Conference Pa-
+pers, pages 1–11, 2024. 2
+[56] Luchuan Song, Yang Zhou, Zhan Xu, Yi Zhou, Deepali
+Aneja, and Chenliang Xu. Streamme: Simplify 3d gaussian
+avatar within live stream. In Proceedings of the Special Inter-
+est Group on Computer Graphics and Interactive Techniques
+Conference Conference Papers, pages 1–10, 2025. 2
+[57] Alex Su, Haozhe Wang, Weiming Ren, Fangzhen Lin, and
+Wenhu Chen. Pixel reasoner: Incentivizing pixel-space rea-
+soning with curiosity-driven reinforcement learning. arXiv
+preprint arXiv:2505.15966, 2025. 2, 3, 4, 6, 7, 8, 5
+[58] Ryota Tanaka, Kyosuke Nishida, and Sen Yoshida.
+Vi-
+sualmrc: Machine reading comprehension on document im-
+ages. In Proceedings of the AAAI Conference on Artificial
+Intelligence, pages 13878–13888, 2021. 2, 8
+[59] Ryota Tanaka, Kyosuke Nishida, Kosuke Nishida, Taku
+Hasegawa, Itsumi Saito, and Kuniko Saito.
+Slidevqa: A
+dataset for document visual question answering on multiple
+images. In Proceedings of the AAAI Conference on Artificial
+Intelligence, pages 13636–13645, 2023. 2, 6, 7, 8
+[60] Yunlong Tang, Jing Bi, Siting Xu, Luchuan Song, Susan
+Liang, Teng Wang, Daoan Zhang, Jie An, Jingyang Lin,
+Rongyi Zhu, et al. Video understanding with large language
+models: A survey. IEEE Transactions on Circuits and Sys-
+tems for Video Technology, 2025. 1
+[61] Yunlong Tang, Junjia Guo, Hang Hua, Susan Liang,
+Mingqian Feng, Xinyang Li, Rui Mao, Chao Huang, Jing
+Bi, Zeliang Zhang, et al. Vidcomposition: Can mllms ana-
+lyze compositions in compiled videos? In Proceedings of the
+Computer Vision and Pattern Recognition Conference, pages
+8490–8500, 2025. 1
+[62] Yunlong Tang, Pinxin Liu, Mingqian Feng, Zhangyun Tan,
+Rui Mao, Chao Huang, Jing Bi, Yunzhong Xiao, Susan
+Liang, Hang Hua, et al. Mmperspective: Do mllms under-
+stand perspective? a comprehensive benchmark for perspec-
+tive perception, reasoning, and robustness. In The Thirty-
+ninth Annual Conference on Neural Information Processing
+Systems Datasets and Benchmarks Track, 2025. 1
+[63] Yolo Yunlong Tang, Jing Bi, Pinxin Liu, Zhenyu Pan,
+Zhangyun Tan, Qianxiang Shen, Jiani Liu, Hang Hua, Jun-
+jia Guo, Yunzhong Xiao, Chao Huang, Zhiyuan Wang, Su-
+san Liang, Xinyi Liu, Yizhi Song, Junhua Huang, Jia-Xing
+Zhong, Bozheng Li, Daiqing Qi, Ziyun Zeng, Ali Vosoughi,
+Luchuan Song, Zeliang Zhang, Daiki Shimada, Han Liu,
+Jiebo Luo, and Chenliang Xu. Video-lmm post-training: A
+deep dive into video reasoning with large multimodal mod-
+els, 2025. 8
+[64] Rub`en Tito, Dimosthenis Karatzas, and Ernest Valveny. Hi-
+erarchical multimodal transformers for multipage docvqa.
+Pattern Recognition, 144:109834, 2023. 2, 6, 7, 8
+[65] George Tom, Minesh Mathew, Sergi Garcia-Bordils, Dimos-
+thenis Karatzas, and CV Jawahar.
+Reading between the
+lanes: Text videoqa on the road. In Proc. Int. Conf. Doc.
+Anal. Recognit., pages 137–154, 2023. 1, 3, 7
+[66] Ming Tu, Kevin Huang, Guangtao Wang, Jing Huang, Xi-
+aodong He, and Bowen Zhou. Select, answer and explain:
+Interpretable multi-hop reading comprehension over multi-
+ple documents. In Proceedings of the AAAI conference on
+artificial intelligence, pages 9073–9080, 2020. 8
+[67] Jinpeng
+Wang,
+Yixiao
+Ge,
+Rui
+Yan,
+Yuying
+Ge,
+Kevin
+Qinghong
+Lin,
+Satoshi
+Tsutsui,
+Xudong
+Lin,
+Guanyu Cai, Jianping Wu, Ying Shan, Xiaohu Qie, and
+Mike Zheng Shou.
+All in one: Exploring unified video-
+language pre-training.
+In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition
+(CVPR), pages 6598–6608, 2023. 1, 6, 5
+[68] Peng Wang, Shuai Bai, Sinan Tan, Shijie Wang, Zhihao Fan,
+Jinze Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin
+Ge, et al. Qwen2-vl: Enhancing vision-language model’s
+perception of the world at any resolution.
+arXiv preprint
+arXiv:2409.12191, 2024. 6, 8, 5
+[69] Yi Wang, Kunchang Li, Xinhao Li, Jiashuo Yu, Yinan He,
+Guo Chen, Baoqi Pei, Rongkun Zheng, Zun Wang, Yansong
+Shi, et al. Internvideo2: Scaling foundation models for mul-
+timodal video understanding. In European Conference on
+Computer Vision, pages 396–416. Springer, 2024. 8
+[70] Ye Wang, Boshen Xu, Zihao Yue, Zihan Xiao, Ziheng Wang,
+Liang Zhang, Dingyi Yang, Wenxuan Wang, and Qin Jin.
+Timezero: Temporal video grounding with reasoning-guided
+lvlm. arXiv preprint arXiv:2503.13377, 2025. 8
+[71] Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten
+Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, et al.
+Chain-of-thought prompting elicits reasoning in large lan-
+guage models. Advances in neural information processing
+systems, 35:24824–24837, 2022. 1, 8
+[72] Antoine Yang, Antoine Miech, Josef Sivic, Ivan Laptev,
+and Cordelia Schmid. Just ask: Learning to answer ques-
+tions from millions of narrated videos. In Proceedings of
+the IEEE/CVF International Conference on Computer Vision
+(ICCV), pages 1686–1697, 2021. 6, 5
+[73] Zhilin Yang, Peng Qi, Saizheng Zhang, Yoshua Bengio,
+William Cohen, Ruslan Salakhutdinov, and Christopher D
+11
+
+Manning.
+Hotpotqa: A dataset for diverse, explainable
+multi-hop question answering. In Proceedings of the 2018
+conference on empirical methods in natural language pro-
+cessing, pages 2369–2380, 2018. 6
+[74] Ori Yoran, Alon Talmor, and Jonathan Berant. Turning ta-
+bles: Generating examples from semi-structured tables for
+endowing language models with reasoning skills. In Pro-
+ceedings of the 60th Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers), pages
+6016–6031, 2022. 8
+[75] Huaying Yuan, Zheng Liu, Minhao Qin, Hongjin Qian, Y
+Shu, Zhicheng Dou, and Ji-Rong Wen. Memory-enhanced
+retrieval augmentation for long video understanding. arXiv
+preprint arXiv:2503.09149, 2025. 1
+[76] Jiakang Yuan, Tianshuo Peng, Yilei Jiang, Yiting Lu, Ren-
+rui Zhang, Kaituo Feng, Chaoyou Fu, Tao Chen, Lei
+Bai, Bo Zhang, et al.
+Mme-reasoning: A comprehensive
+benchmark for logical reasoning in mllms. arXiv preprint
+arXiv:2505.21327, 2025. 8
+[77] Lifan Yuan, Ganqu Cui, Hanbin Wang, Ning Ding, Xingyao
+Wang, Jia Deng, Boji Shan, Huimin Chen, Ruobing Xie,
+Yankai Lin, et al. Advancing llm reasoning generalists with
+preference trees. arXiv preprint arXiv:2404.02078, 2024. 8
+[78] Manzil Zaheer, Guru Guruganesh, Kumar Avinava Dubey,
+Joshua Ainslie, Chris Alberti, Santiago Ontanon, Philip
+Pham, Anirudh Ravula, Qifan Wang, Li Yang, et al. Big
+bird: Transformers for longer sequences. Advances in neu-
+ral information processing systems, 33:17283–17297, 2020.
+6, 7, 8
+[79] Jingyi Zhang, Jiaxing Huang, Huanjin Yao, Shunyu Liu,
+Xikun Zhang, Shijian Lu, and Dacheng Tao. R1-vl: Learn-
+ing to reason with multimodal large language models via
+step-wise group relative policy optimization. arXiv preprint
+arXiv:2503.12937, 2025. 2, 8
+[80] Peiyuan Zhang, Kaichen Zhang, Bo Li, Guangtao Zeng,
+Jingkang Yang, Yuanhan Zhang, Ziyue Wang, Haoran Tan,
+Chunyuan Li, and Ziwei Liu. Long context transfer from
+language to vision. arXiv preprint arXiv:2406.16852, 2024.
+8
+[81] Pengfei Zhang, Pinxin Liu, Pablo Garrido, Hyeongwoo Kim,
+and Bindita Chaudhuri.
+Kinmo: Kinematic-aware human
+motion understanding and generation.
+In Proceedings of
+the IEEE/CVF International Conference on Computer Vision
+(ICCV), pages 11187–11197, 2025. 8
+[82] Xiaoying Zhang, Hao Sun, Yipeng Zhang, Kaituo Feng,
+Chaochao Lu, Chao Yang, and Helen Meng. Critique-grpo:
+Advancing llm reasoning with natural language and numeri-
+cal feedback. arXiv preprint arXiv:2506.03106, 2025. 8
+[83] Yan Zhang, Gangyan Zeng, Huawen Shen, Daiqing Wu, Yu
+Zhou, and Can Ma. Track the answer: Extending textvqa
+from image to video with spatio-temporal clues. In Proceed-
+ings of the AAAI Conference on Artificial Intelligence, pages
+10275–10283, 2025. 6, 7, 5
+[84] Yan Zhang, Gangyan Zeng, Daiqing Wu, Huawen Shen, Bin-
+bin Li, Yu Zhou, Can Ma, and Xiaojun Bi. Gather and trace:
+Rethinking video textvqa from an instance-oriented perspec-
+tive. In Proceedings of the 33rd ACM International Confer-
+ence on Multimedia, pages 876–885, 2025. 1, 6, 7, 5
+[85] Zhuosheng Zhang,
+Aston Zhang,
+Mu Li,
+Hai Zhao,
+George Karypis, and Alex Smola.
+Multimodal chain-of-
+thought reasoning in language models.
+arXiv preprint
+arXiv:2302.00923, 2023. 1, 8
+[86] Zeliang Zhang, Xiaodong Liu, Hao Cheng, Chenliang Xu,
+and Jianfeng Gao.
+Diversifying the expert knowledge for
+task-agnostic pruning in sparse mixture-of-experts. In Find-
+ings of the Association for Computational Linguistics: ACL
+2025, pages 86–102, 2025. 8
+[87] Jiaxing Zhao, Xihan Wei, and Liefeng Bo. R1-omni: Ex-
+plainable omni-multimodal emotion recognition with rein-
+forcement learning. arXiv e-prints, pages arXiv–2503, 2025.
+8
+[88] Minyi Zhao, Bingjia Li, Jie Wang, Wanqing Li, Wenjing
+Zhou, Lan Zhang, Shijie Xuyang, Zhihang Yu, Xinkun Yu,
+Guangze Li, et al. Towards video text visual question an-
+swering: Benchmark and baseline. In Adv. Neural Inf. Pro-
+cess. Syst., pages 35549–35562. 7
+[89] Minyi Zhao, Bingjia Li, Jie Wang, Wanqing Li, Wenjing
+Zhou, Lan Zhang, Shijie Xuyang, Zhihang Yu, Xinkun Yu,
+Guangze Li, et al. Towards video text visual question an-
+swering: Benchmark and baseline. Advances in Neural In-
+formation Processing Systems, 35:35549–35562, 2022. 1, 2,
+3, 6, 5
+[90] Denny Zhou, Nathanael Sch¨arli, Le Hou, Jason Wei, Nathan
+Scales, Xuezhi Wang, Dale Schuurmans, Claire Cui, Olivier
+Bousquet, Quoc Le, et al. Least-to-most prompting enables
+complex reasoning in large language models. arXiv preprint
+arXiv:2205.10625, 2022. 1, 8
+[91] Hengguang Zhou, Xirui Li, Ruochen Wang, Minhao Cheng,
+Tianyi Zhou, and Cho-Jui Hsieh. R1-zero’s” aha moment”
+in visual reasoning on a 2b non-sft model. arXiv preprint
+arXiv:2503.05132, 2025. 8
+[92] Kaiyang Zhou, Yu Qiao, and Tao Xiang. Deep reinforce-
+ment learning for unsupervised video summarization with
+diversity-representativeness reward. In Proceedings of the
+AAAI conference on artificial intelligence, 2018. 2, 4
+[93] Sheng Zhou, Dan Guo, Jia Li, Xun Yang, and Meng Wang.
+Exploring sparse spatial relation in graph inference for text-
+based vqa.
+IEEE Trans. Image Process., 32:5060–5074,
+2023. 2, 7
+[94] Sheng Zhou, Dan Guo, Xun Yang, Jianfeng Dong, and Meng
+Wang. Graph pooling inference network for text-based vqa.
+ACM Trans. Multimedia Comput. Commun. Appl., 20(4):1–
+21, 2024. 2, 7
+[95] Sheng Zhou, Junbin Xiao, Qingyun Li, Yicong Li, Xun
+Yang, Dan Guo, Meng Wang, Tat-Seng Chua, and Angela
+Yao. Egotextvqa: Towards egocentric scene-text aware video
+question answering. arXiv preprint arXiv:2502.07411, 2025.
+1, 3, 7
+[96] Deyao Zhu, Jun Chen, Xiaoqian Shen, Xiang Li, and Mo-
+hamed Elhoseiny.
+Minigpt-4: Enhancing vision-language
+understanding with advanced large language models. arXiv
+preprint arXiv:2304.10592, 2023. 8
+12
+
+Video-R4: Reinforcing Text-Rich Video Reasoning with Visual Rumination
+Supplementary Material
+6. Limitations
+Despite these results, Video-R4 still has several limitations.
+First, the data curation pipeline relies on pre-extracted OCR
+results and object detections, so recognition errors or miss-
+ing text can directly hurt both rumination trajectories and
+final answers. Second, the current tool interface supports
+only frame selection and spatial cropping with a bounded
+trajectory length, which may be insufficient for very long
+or fast-changing videos that require richer operations (e.g.,
+tracking, retiming, or audio-aware cues). Third, our train-
+ing data are primarily derived from M4-ViteVQA and a few
+related text-centric datasets, and experiments are conducted
+on a 7B backbone, leaving open questions about robustness
+under more diverse domains and larger model scales. Fi-
+nally, the GRPO reward combines hand-designed proxies
+such as diversity, representativeness, and curiosity, which
+only approximate human notions of faithfulness and inter-
+pretability. Future work could relax these assumptions by
+broader operation types, more diverse optimization meth-
+ods, and rewards.
+7. Dataset Details
+Dataset Statistics.
+Figure 5 presents the overall statistics
+of Video-R4-CoT-17k. The dataset is predominantly video-
+based, with images forming a smaller subset. The word
+cloud highlights frequent reasoning-related expressions
+such as “visual”, “information”, and various operation-
+oriented verbs. The question length distribution centers on
+medium-length prompts, while the plots of visual opera-
+tion counts and conversation turns show that CoT trajecto-
+ries typically require several visual operations and involve
+multi-round interactions. Figure 6 summarizes the statistics
+of Video-R4-RL-30k. The corresponding word cloud shows
+a more object-focused vocabulary (e.g., “object”, “person”,
+“left”, “color”), consistent with the concise, direct style
+characteristic of RL-refined queries.
+Rule-Based Evidence Matching.
+The Rule-Based Evi-
+dence Matching algorithm is shown in Algorithm 1. For
+each training instance q, we denote by qtext the ques-
+tion text and by qans the answer expression, which may
+be a single string or a small set of candidates; the as-
+sociated video is v(q).
+Each instance carries two su-
+pervisory attributes: the temporal specification src1(q) ∈
+{Single frame, Multi frame}, indicating whether evidence
+is restricted to one frame or may span multiple frames,
+and the modality specification src2(q) ∈{Text, Visual},
+indicating whether evidence is primarily textual (OCR) or
+Figure 5. Overall statistics of the Video-R4-CoT-17k dataset, in-
+cluding the ratio of video versus image samples, word cloud of
+frequently appearing terms, question length distribution, distribu-
+tion of visual operation counts per sample, and conversation turn
+count distribution.
+visual (objects).
+We write Aq = tok(qans) and Wq =
+tok(qtext) for the normalized token sets of the answer
+and question, respectively. For a video v, let Fv be the
+1
+
+Figure 6. Overall statistics of the Video-R4-RL-30k dataset.
+set of candidate frames considered during evidence min-
+ing.
+For every frame f ∈Fv, we assume paragraph-
+level OCR regions Pv,f, fine-grained OCR text detections
+Tv,f = {(sv,f,i, btext
+v,f,i)}i with strings and corresponding
+boxes, and object detections Ov,f
+= {(ℓv,f,k, bobj
+v,f,k)}k
+with discrete labels and boxes.
+Matching and geometry
+are treated abstractly via the primitives scoretext(s, A) ∈
+[0, 1] for text–answer relevance, scorename(n, U) ∈[0, 1]
+for name–token compatibility, iou(b1, b2) for box overlap,
+extend(b) for deterministic enlargement, and merge(B) for
+minimal axis-aligned merging of a box set B. The goal is,
+for each question q, to return a subset Rq ⊆Fv(q) of rele-
+vant frames and a per-frame evidence region Bev
+q,f obtained
+by combining textual and, when applicable, object cues. We
+denote by btext
+q,f the best OCR-derived box selected in frame
+f for question q before paragraph refinement.
+Template-Based Context Synthesis.
+We construct a set
+of multi-turn dialogues for each annotation through pre-
+defined templates. Each dialogue contains a system mes-
+sage, a question, the path to the input video, and a se-
+quence of turns. The turns follow a chain-of-thought for-
+mat. Each turn provides an analysis of the visual infor-
+mation obtained through the visual operation applied in the
+previous step. The first turn, instead, provides an overall
+description of the input video. The turn then continues with
+a brief reasoning segment that connects to the next action
+and ends with a statement describing the next visual opera-
+tion, where the format of the visual operation follows [57],
+with “<tool call>” labels to prompt the visual operations,
+and tool names and parameters are needed for a single func-
+tion call. For clipping, the parameters are the indices of
+the selected frames. For cropping, the parameters include
+a frame index and the bounding box coordinates. The fi-
+nal turn predicts the answer to the question with “ { }” for-
+mat. The template produces a dialogue that contains several
+placeholders. These placeholders include the input video
+caption and a descriptive analysis of the visual observations
+obtained in each turn. They will be filled in during the fol-
+lowing stages.
+LMM-Based CoT Synthesis and Refinement.
+We use
+Qwen2.5-VL [1] to generate video captions, clip captions,
+and region captions. The input includes the original video
+frame sequence for the video captions and the text prompts.
+For clip and region captions, the original video frame se-
+quence, the clips/regions in the current turn, and the text in
+the context serve as input. The think processes are then gen-
+erated, focusing on whether the current visual cues obtained
+can answer the question sufficiently. Then we replace all
+the placeholders in the templates to get the multi-turn CoT
+trajectories. We use GPT-4o [26] to further refine the trajec-
+tories to make them more coherent, natural, and reasonable.
+Quality Control Tool.
+We develop a quality control tool
+to quickly review all the QA queries and the corresponding
+synthesized trajectories. As shown in Figure 8, the tool sup-
+ports quick browsing, sample saving, dropping functions,
+and a fixing mode, where human annotators can directly re-
+vise the content of the chain-of-thought trajectories, includ-
+ing both text and visual cues.
+8. Evaluation Metrics
+Average Normalized Levenshtein Similarity (ANLS).
+Exact-match metrics are brittle for text-centric VQA be-
+cause minor OCR errors can flip a correct rationale into
+an incorrect string. Therefore, [8] proposed ANLS, which
+turns the normalized Levenshtein distance [31] between a
+prediction and reference into a similarity score with a cut-
+off.
+Let oqi be the model’s answer for question qi, and
+{aij}M
+j=1 the set of M ground-truth strings.
+Denote by
+NL(·, ·)∈[0, 1] the normalized Levenshtein distance. With
+a threshold τ = 0.5, the per-pair similarity is
+s(aij, oqi) =
+(
+1 −NL(aij, oqi)
+if NL(aij, oqi) < τ,
+0
+otherwise.
+(8)
+Then take the best match across references for each question
+and average over N questions:
+ANLS = 1
+N
+N
+X
+i=1
+
+max
+j
+s(aij, oqi)
+
+.
+(9)
+2
+
+Algorithm 1 Rule-Based Evidence Matching
+1: for each question q do
+2:
+initialize Rq ←∅
+3:
+for each frame f ∈Fv(q) do
+4:
+find best OCR match btext
+q,f using scoretext(·, Aq)
+5:
+if a match exists then Rq ←Rq ∪{f}
+6:
+end if
+7:
+end for
+8:
+for each f ∈Rq do
+9:
+refine btext
+q,f by selecting p⋆∈Pv,f with maximal iou, then set btext
+q,f ←extend(p⋆)
+10:
+end for
+11:
+if src2(q) = Text then
+12:
+choose single or multiple frames according to src1(q)
+13:
+output refined text boxes {btext
+q,f }
+14:
+continue
+15:
+end if
+16:
+for each f ∈Rq do
+17:
+collect object boxes whose names match Aq ∪Wq via scorename
+18:
+merge all matched boxes with btext
+q,f : Bev
+q,f ←merge(·)
+19:
+end for
+20:
+select single or multiple frames according to src1(q)
+21:
+output Rq and {Bev
+q,f}
+22: end for
+Figure 7. Comparison of training behaviors across fine-tuning strategies. Subfigures (a) and (b) show that models pre-finetuned on DRP-
+SFT data converge more quickly and achieve lower final loss when training on CRP-SFT, indicating that decomposing visual operations
+before interleaved training is beneficial. (c) Video-R4-7B progressively increases its response length during RL, suggesting emergent
+allocation of more thinking time. (d) Correspondingly, the average reward improves and remains stable across iterations.
+3
+
+Predictions with edit distance ≥τ (over half the charac-
+ters wrong) receive zero credit, while smaller deviations are
+rewarded proportionally. This softly penalizes OCR noise
+while still emphasizing exactness.
+Exact Match (EM).
+This metric quantifies the proportion
+of predictions that exactly coincide with any of the ground
+truth answers, thereby providing a strict measure of answer
+correctness [51].
+(Macro-averaged) F1 score.
+This metric assesses the
+token-level overlap between a prediction and the ground
+truth answer by treating both as bags of tokens and com-
+puting their F1 score. For each question, the highest F1
+score across all ground truth answers is selected, and the fi-
+nal metric is obtained by averaging these maxima over the
+full set of questions [51].
+9. More Evidence to Support our Findings
+Figure 7 (c) demonstrates Video-R4-7B naturally learns to
+solve reasoning tasks with more thinking time, which is ev-
+idence to support our Finding 1. Figure 7 (a) and (b) show
+the training curve of CRP-SFT under different settings,
+demonstrating that the models pre-finetuned on DRP-SFT
+data have a faster convergence. Even though losses con-
+verge during fine-tuning across different settings, the model
+fine-tuned on DRP-SFT data achieves better final perfor-
+mance on the benchmarks. This shows that it is helpful to
+learn different types of visual operations separately before
+interleaving them during training. As shown in Table 4, re-
+sults on the validation set of M4-ViteVQA are also reported,
+demonstrating that Video-R4-7B establishes a new state-of-
+the-art in text-rich video understanding and reasoning.
+10. Training Details
+For DRP-SFT, we use 7k data from Video-R4-CoT-17k for
+fine-tuning. The learning rate of 1 × 10−6 is adopted. We
+fully fine-tune the model instead of using LoRA [19]. For
+the RL after DRP-SFT, we use accuracy and the curios-
+ity reward.
+There are 15k samples from Video-R4-RL-
+30k used during the stage. Following [57], the curiosity
+reward’s hyperparameters are set as follows: α = 0.5,
+β = 0.05, and H = 0.3. GRPO [18] is adopted as the pol-
+icy optimization method. Eight responses are sampled for
+each sample. For the CRP-SFT, 10k samples from Video-
+R4-CoT-10k are used, and other hyperparameters are the
+same as those in DRP-SFT. For the RL after CRP-SFT, we
+adopt accuracy, diversity, representativeness, and curiosity
+reward, with the coefficients λdiv = λrep = λcur = 1 [92].
+All the models are trained on one H100 80G GPU.
+Figure 8. Interface of the quality control tool used to review QA
+queries and synthesized chain-of-thought trajectories. The tool en-
+ables rapid browsing, frame inspection, saving or dropping sam-
+ples, and in-place editing of both textual and visual reasoning steps
+to streamline annotation and correction workflows.
+11. More Visualization Results
+As shown in Figures 9 and 10, we present additional visu-
+alizations of the trajectory samples.
+4
+
+Table 4. Performance comparison on the M4-ViteVQA validation set and testset.
+Models
+Task 1 - Split 1
+Task 1 - Split 2
+Task 2
+Val
+Test
+Val
+Test
+Val
+Test
+Acc.(%)
+ANLS(%)
+Acc.(%)
+ANLS(%)
+Acc.(%)
+ANLS(%)
+Acc.(%)
+ANLS(%)
+Acc.(%)
+ANLS(%)
+Acc.(%)
+ANLS(%)
+JustAsk [72]
+10.81
+15.40
+10.05
+14.10
+7.16
+10.00
+5.47
+8.60
+4.86
+6.70
+3.60
+6.70
+All-in-one-B [67]
+11.47
+15.30
+10.87
+14.80
+6.85
+9.20
+5.66
+7.80
+4.20
+5.00
+3.28
+4.60
+Video-LLaVA-7B [38]
+15.82
+17.77
+15.43
+17.15
+13.14
+14.29
+11.19
+12.02
+10.89
+13.23
+9.38
+11.80
+T5-ViteVQA [89]
+23.17
+30.10
+22.17
+29.10
+17.59
+23.10
+16.68
+23.80
+12.30
+16.10
+9.29
+13.60
+VideoLLaMA2-7B [11]
+20.04
+21.73
+20.76
+23.55
+18.30
+19.63
+18.33
+20.45
+19.68
+23.62
+16.54
+21.80
+Qwen2-VL-7B [68]
+36.77
+46.56
+35.22
+45.84
+28.55
+39.34
+27.25
+38.45
+22.95
+32.65
+21.23
+28.79
+TEA-L [83]
+37.49
+46.38
+34.78
+43.71
+28.27
+36.32
+28.43
+38.13
+22.83
+30.21
+18.83
+28.90
+NVILA-8B [48]
+37.89
+47.67
+37.73
+47.23
+30.25
+40.58
+30.10
+41.52
+23.79
+32.89
+22.89
+30.34
+GAT-L [84]
+38.01
+47.53
+38.30
+48.23
+31.35
+41.33
+30.90
+41.81
+24.54
+33.30
+22.13
+30.75
+Qwen2.5-VL [1]
+22.22
+48.67
+26.53
+44.91
+17.84
+46.72
+24.34
+39.60
+22.31
+42.21
+32.81
+50.82
+Video-R1-7B [15]
+38.10
+50.80
+37.10
+48.25
+38.40
+49.62
+33.67
+44.94
+47.77
+58.52
+43.16
+53.37
+Pixel-Reasoner [57]
+54.44
+63.57
+52.91
+61.44
+54.69
+62.58
+48.88
+58.23
+63.78
+69.93
+58.97
+65.32
+Video-R4-7B (ours)
+57.33
+66.92
+56.17
+65.22
+57.65
+65.15
+52.69
+61.89
+69.03
+75.45
+64.21
+69.99
+Human
+–
+–
+85.27
+89.30
+–
+–
+78.41
+82.80
+–
+–
+82.26
+85.10
+Figure 9. Trajectories visualization.
+5
+
+Figure 10. More visualization with longer trajectories.
+6

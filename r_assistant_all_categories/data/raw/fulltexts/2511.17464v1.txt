@@ -1,0 +1,2371 @@
+A Patient-Centric Blockchain Framework for Secure Electronic Health
+Record Management: Decoupling Data Storage from Access Control
+Tanzim Hossain Romel1, Kawshik Kumar Paul1, Tanberul Islam Ruhan1, Maisha Rahman Mim1,
+and Abu Sayed Md. Latiful Hoque1
+1Department of Computer Science & Engineering, Bangladesh University of Engineering &
+Technology, Dhaka, Bangladesh
+Abstract
+We present a patient-centric architecture for electronic
+health record (EHR) sharing that separates content stor-
+age from authorization and audit. Encrypted FHIR re-
+sources are stored off-chain; a public blockchain records
+only cryptographic commitments and patient-signed,
+time-bounded permissions using EIP-712.
+Keys are
+distributed via public-key wrapping, enabling storage
+providers to remain honest-but-curious without risking
+confidentiality.
+We formalize security goals (confiden-
+tiality, integrity, cryptographically attributable autho-
+rization, and auditability of authorization events) and
+provide a Solidity reference implementation deployed as
+single-patient contracts. On-chain costs for permission
+grants average 78,000 gas (L1), and end-to-end access
+latency for 1 MB records is 0.7–1.4 s (mean values for
+S3 and IPFS respectively), dominated by storage re-
+trieval. Layer-2 deployment reduces gas usage by 10–
+13×, though data availability charges dominate actual
+costs. We discuss metadata privacy, key registry require-
+ments, and regulatory considerations (HIPAA/GDPR),
+demonstrating a practical route to restoring patient con-
+trol while preserving security properties required for sen-
+sitive clinical data.
+Keywords:
+Blockchain, Electronic Health Records,
+Access Control, Healthcare Privacy, Smart Contracts,
+FHIR, Cryptographic Protocols
+1
+Introduction
+The digitization of healthcare has transformed medical
+practice, enabling evidence-based decision-making and
+population health management at unprecedented scales.
+However, health records remain trapped in organiza-
+tional silos with incompatible systems. When patients
+seek care from multiple providers or relocate, critical
+medical history becomes inaccessible, leading to dupli-
+cated tests, adverse drug interactions, and suboptimal
+treatment decisions.
+1.1
+The Centralization Problem
+Contemporary health information exchange architec-
+tures exhibit three fundamental weaknesses. First, they
+create single points of failure where system compromise
+can affect millions of patient records. Major healthcare
+data breaches have exposed the medical information of
+hundreds of millions of individuals [1]. Second, central-
+ized systems require patients to trust intermediary or-
+ganizations with unfettered access. While policies con-
+strain behavior, insider threats persist, and audit logs
+maintained by audited entities offer limited assurance.
+Third, patients exercise minimal control over sharing,
+contradicting principles of autonomy and informed con-
+sent.
+1.2
+Blockchain as an Architectural Primitive
+Blockchain technology addresses specific weaknesses
+through replicated, append-only ledgers where transac-
+tions are cryptographically verified rather than institu-
+tionally authorized. However, naive blockchain applica-
+tion introduces problems: storing protected health infor-
+mation on public blockchains violates privacy through
+transparency and immutability, and transaction costs
+make large document storage impractical.
+The key insight is architectural separation: encrypted
+records reside in off-chain storage optimized for large
+objects, while blockchain serves exclusively as authoriza-
+tion layer and integrity mechanism. This exploits com-
+plementary strengths while avoiding respective weak-
+nesses.
+1.3
+Deployment Model
+Our architecture deploys one contract per patient
+rather than a multi-tenant registry. This design choice
+provides strong isolation between patients’ data, sim-
+plifies permission management, and aligns with patient
+sovereignty principles. While this increases deployment
+costs (one-time contract creation), it eliminates cross-
+patient vulnerabilities and simplifies auditing. Health-
+1
+arXiv:2511.17464v1  [cs.CR]  21 Nov 2025
+
+care institutions can deploy patient contracts on their
+behalf with appropriate delegation mechanisms.
+The
+contract does not use the ERC-721 token standard, in-
+stead implementing a simpler patient-specific authoriza-
+tion model.
+1.4
+Contributions
+1. Formal Architecture: We specify how off-chain
+encrypted storage combined with on-chain access
+control achieves confidentiality against curious stor-
+age providers, integrity verification, and patient-
+controlled authorization with cryptographic attri-
+bution.
+2. Reference
+Implementation:
+Complete
+Ethereum smart contract handling record reg-
+istration,
+permission
+granting
+through
+signed
+messages with explicit nonce management, time-
+bounded access with revocation, update/rotation
+capabilities,
+and
+comprehensive
+auditability
+through event logs.
+3. Healthcare Integration: Integration with HL7
+FHIR standards, showing how FHIR resources serve
+as plaintext while supporting de-identified data re-
+lease.
+4. Performance Characterization: Empirical eval-
+uation showing gas costs, latency profiles, and scal-
+ability across Layer-1 and Layer-2 deployments.
+2
+Background
+2.1
+Threat Model
+We consider adversaries with varying capabilities:
+1. Storage Provider (S): Honest-but-curious cloud
+provider (IPFS, AWS S3) who stores encrypted
+records. S follows protocol but attempts to learn
+patient information from stored data.
+2. Network Adversary (N): Observes blockchain
+transactions and network traffic.
+Cannot break
+cryptographic primitives but can analyze patterns,
+timing, and metadata.
+3. Revoked Recipient (R): Previously authorized
+healthcare provider whose access was revoked. Pos-
+sesses historical wrapped keys and may have cached
+plaintext from authorized period.
+4. Malicious Provider (M):
+Healthcare provider
+attempting unauthorized access or privilege escala-
+tion beyond granted permissions.
+We
+assume
+cryptographic
+primitives
+are
+secure:
+adversaries cannot break AES-256-GCM, ECIES on
+secp256k1 (using standard KDF/MAC/encoding from
+audited libraries), or forge ECDSA signatures.
+2.2
+Cryptographic Building Blocks
+Symmetric Encryption: AES-256-GCM provides au-
+thenticated encryption with associated data (AEAD).
+Given key K, nonce N, plaintext M, and associated data
+AD: Enc(K, N, M, AD) →(C, T) where C is ciphertext,
+T is authentication tag.
+Nonce Requirements:
+AES-GCM security criti-
+cally depends on nonce uniqueness.
+Implementations
+MUST use cryptographically secure random number
+generators (CSPRNG) or counter-mode deterministic
+random bit generators (CTR-DRBG) to ensure unique-
+ness. Consider XChaCha20-Poly1305 if nonce manage-
+ment is operationally risky, as it provides a larger nonce
+space and better misuse-resistance.
+Public Key Encryption: ECIES (Elliptic Curve In-
+tegrated Encryption Scheme) on secp256k1 curve pro-
+vides IND-CCA2 secure public key encryption. We use
+the following configuration for standards compliance:
+• KDF: ANSI X9.63 with SHA-256
+• DEM: AES-128-CTR
+• MAC: HMAC-SHA-256
+• Point encoding: Uncompressed (0x04 prefix)
+• Ephemeral key included in ciphertext
+Digital
+Signatures:
+ECDSA
+signatures
+on
+secp256k1 provide authentication and non-repudiation.
+EIP-712 structured data signing prevents signature
+malleability across contexts.
+Cryptographic Hash Functions: We use SHA-256
+for content digests throughout the system.
+SHA-256
+provides 256-bit collision resistance and is the standard
+for IPFS content addressing and general cryptographic
+applications.
+The digest d is consistently defined as
+d = SHA-256(C||T||N||AD) where C is ciphertext, T
+is authentication tag, N is nonce, and AD is associated
+data.
+2.3
+Blockchain Infrastructure
+Smart Contracts: Ethereum smart contracts execute
+deterministically based on transaction inputs. Gas fees
+incentivize efficient code and prevent denial-of-service.
+Layer-2 Solutions: Rollups (Optimistic/ZK) reduce
+costs by batching transactions.
+However, data avail-
+ability charges often dominate L2 costs, particularly for
+calldata-heavy operations like storing wrapped keys.
+2
+
+Events:
+Smart contract events provide efficient,
+queryable logs. Events cost 375 gas base + 375 gas per
+topic + 8 gas/byte for data.
+2.4
+Healthcare Standards
+HL7 FHIR: Fast Healthcare Interoperability Resources
+define standard formats for clinical data. Resources in-
+clude Patient, Observation, Medication, Procedure, etc.
+We use FHIR R4.
+HIPAA: Requires access controls, audit logs, and
+data encryption. Our architecture maps to HIPAA’s ad-
+ministrative (identity-based access control with explicit
+authorization), physical (N/A for digital systems), and
+technical safeguards (encryption at rest and in transit).
+GDPR: European privacy regulation granting data
+subject rights. Blockchain immutability creates tension
+with “right to be forgotten”—we address through mini-
+mal on-chain data, treating blockchain entries as legally-
+required audit logs potentially exempt from erasure un-
+der Article 17(3)(b), and implementing data minimiza-
+tion strategies.
+3
+System Architecture
+3.1
+Overview
+The system separates concerns across three layers:
+1. Storage Layer:
+Distributed storage (IPFS) or
+cloud storage (S3) holds encrypted health records.
+Storage providers see only ciphertext.
+2. Blockchain Layer:
+Ethereum smart contracts
+manage metadata, permissions, and audit trails.
+Each patient has a dedicated contract instance.
+3. Application Layer: Client applications handle en-
+cryption/decryption, signature generation, and user
+interfaces.
+3.2
+Key Management Architecture
+Key Registry Contract: A separate registry contract
+maintains current encryption public keys for all partici-
+pants. The invariant is that getKey(user) returns the
+latest non-revoked key and its version. Clients MUST
+fetch the key immediately prior to wrapped key com-
+putation to avoid time-of-check-time-of-use (TOCTOU)
+issues:
+1
+interface
+IKeyRegistry {
+2
+function
+registerKey(bytes
+memory
+publicKey)
+external;
+3
+function
+rotateKey(bytes
+memory
+newPublicKey )
+external;
+4
+function
+getKey(address
+user)
+5
+external
+view
+returns (bytes
+memory , uint256
+version);
+6
+function
+revokeKey ()
+external;
+Figure 1: System architecture showing separation be-
+tween on-chain authorization and off-chain encrypted
+storage. Digest d = SHA-256(C||T||N||AD).
+7
+8
+event
+KeyRegistered (address
+indexed
+user , bytes
+publicKey);
+9
+event
+KeyRotated (address
+indexed
+user ,
+10
+bytes
+newKey , uint256
+version);
+11
+event
+KeyRevoked (address
+indexed
+user);
+12
+}
+Listing 1: Key Registry Interface
+3.3
+Data Model
+Each health record consists of:
+• Record ID (rid):
+Unique identifier within pa-
+tient’s contract
+• Plaintext (M): FHIR resource bundle in JSON
+format
+• Symmetric Key (SymmK):
+AES-256 key for
+record encryption
+• Ciphertext (C):
+Encrypted record stored off-
+chain
+3
+
+• Storage Pointer (ptr): IPFS CID or S3 URL
+• Content Digest (d): SHA-256 hash of complete
+ciphertext blob: d = SHA-256(C||T||N||AD)
+• Wrapped Keys (W): ECIES-encrypted SymmK
+for authorized parties
+• Permissions:
+Time-bounded access grants with
+wrapped keys
+3.4
+AEAD Metadata Considerations
+When using AEAD, the associated data (AD) parameter
+authenticates but does NOT encrypt additional context.
+To prevent metadata leakage:
+1. Minimal AD: Use only non-sensitive, constant val-
+ues (e.g., version number, fixed resource type iden-
+tifier)
+2. Encrypted Metadata:
+Include sensitive meta-
+data (timestamps, detailed resource types) within
+the encrypted payload M itself
+3. Constant Format:
+Ensure AD format doesn’t
+vary in ways that leak information through length
+or structure
+4
+Protocol Workflows
+4.1
+Workflow 1: Record Creation
+Patient creates new health record:
+1. Prepare Plaintext: Construct FHIR bundle M
+containing clinical data.
+2. Generate
+Symmetric
+Key:
+Generate
+ran-
+dom AES-256 key:
+SymmK ←{0, 1}256 using
+CSPRNG.
+3. Encrypt
+Record:
+Using AES-256-GCM with
+CSPRNG-generated nonce:
+(C, T) ←AES-GCM-Enc(SymmK, N, M, ADminimal)
+where ADminimal contains only non-sensitive ver-
+sion identifier.
+4. Upload to Storage: Store (C, T, N, ADminimal)
+to IPFS/S3. Receive storage pointer ptr.
+5. Compute
+Digest:
+d
+←
+SHA-256(C||T||N||ADminimal).
+6. Wrap Key for Owner: Using patient’s public key
+from registry:
+Wowner ←ECIES-Enc(PKP , SymmK)
+7. Register
+On-Chain:
+Call
+addRecord(ptr, d, Wowner).
+Contract stores meta-
+data, assigns rid, emits RecordAdded(rid, d, ptr).
+4.2
+Workflow 2: Permission Grant
+Patient grants time-bounded access using EIP-712 signa-
+tures. Note that patients MUST generate unique nonces
+for each grant (e.g., 256-bit random values) to enable
+parallel permission grants. Figure 2 illustrates this work-
+flow:
+1. Retrieve Recipient Key: Query key registry for
+recipient’s current public key PKR immediately be-
+fore wrapping.
+2. Wrap
+Symmetric
+Key:
+WR
+←
+ECIES-Enc(PKR, SymmK).
+3. Generate Unique Nonce:
+Patient generates
+unique nonce (256-bit random recommended).
+4. Prepare Typed Data: Construct EIP-712 mes-
+sage with explicit nonce:
+{
+recordId: rid,
+grantee: addr_R,
+expiration: timestamp,
+wrappedKey: W_R,
+nonce: uniqueRandomNonce
+}
+5. Sign
+Message:
+σ
+←
+ECDSA-Sign(SKP , TypedDataHash(message)).
+6. Recipient
+Submits:
+Recipient
+calls
+grantPermissionBySig(rid, expiration, WR, nonce, σ).
+7. Contract
+Verification:
+Contract verifies sig-
+nature,
+checks nonce hasn’t been used,
+stores
+permission,
+marks
+nonce
+as
+consumed,
+emits
+PermissionGranted.
+4.3
+Workflow 3: Record Access
+Authorized recipient retrieves and decrypts record as
+shown in Figure 3.
+Note that the contract optionally
+gates metadata for UX consistency; confidentiality relies
+solely on encryption:
+1. Request
+Metadata:
+Call
+getRecordMetadata(rid)
+which
+returns
+(ptr, d)
+if authorized.
+The gating is for user experi-
+ence; the same data is available in public events.
+Patient
+additionally
+receives
+Wowner
+through
+getOwnerWrappedKey(rid).
+2. Retrieve Ciphertext: Fetch (C, T, N, AD) from
+storage using ptr.
+3. Verify
+Integrity:
+Compute
+d′
+=
+SHA-256(C||T||N||AD). Verify d′ = d.
+4
+
+Figure 2:
+Permission grant workflow using EIP-712
+signed messages with explicit nonce management. Each
+nonce can be used only once.
+4. Unwrap Key: Decrypt wrapped key using recipi-
+ent’s private key:
+SymmK ←ECIES-Dec(SKR, WR)
+5. Decrypt
+Record:
+M
+←
+AES-GCM-Dec(SymmK, N, C, T, AD).
+6. Optional:
+Log
+Access:
+Call
+logAccess(rid, SHA-256(accessDetails)) to create
+on-chain access receipt (not just authorization).
+4.4
+Workflow 4: Permission Revocation
+Patient revokes access:
+1. Submit
+Revocation:
+Patient
+calls
+revokePermission(rid, addrR).
+Contract
+sets
+permissions[rid][addrR].revoked = true and emits
+PermissionRevoked(rid, addrR).
+2. Future
+Access
+Blocked:
+Subsequent
+getRecordMetadata(rid)
+calls
+by
+addrR
+fail
+permission check.
+Limitation: Revocation prevents future access but
+cannot retract already-decrypted plaintext. If recipient
+downloaded M before revocation, they retain that data.
+This is fundamental to cryptographic access control and
+must be clearly communicated to patients.
+Figure 3: Record access workflow. Contract gates meta-
+data for UX consistency (data also in events). Digest
+verification: d = SHA-256(C||T||N||AD).
+4.5
+Workflow 5: Record Update/Key Rotation
+For stronger guarantees when trust relationships end or
+to update record content:
+1. Generate New Key: SymmK′ ←{0, 1}256.
+2. Re-encrypt Record:
+Encrypt updated content
+M ′ with SymmK′, upload to storage, get new ptr′.
+3. Compute
+New
+Digest:
+d′
+=
+SHA-256(C′||T ′||N ′||AD′).
+4. Update
+On-Chain:
+Call
+updateRecord(rid, ptr′, d′, W ′
+owner).
+5. Invalidate
+Old
+Version:
+Previous
+(ptr, d, SymmK)
+become
+obsolete.
+Revoked
+recipients cannot access new version.
+6. Emit
+Event:
+Contract
+emits
+RecordUpdated(rid, d′, ptr′) for audit trail.
+5
+Smart Contract Implementation
+5.1
+Design Rationale
+The smart contract serves three roles: (1) Metadata
+Registry—storing storage pointers and content digests;
+(2) Authorization Engine—verifying permissions be-
+fore metadata release; (3) Audit Log—emitting events
+for all operations.
+We deploy one contract per patient using a sim-
+ple authorization model without token standards. This
+provides:
+5
+
+• Strong isolation between patients
+• Simplified
+permission
+model
+(no
+cross-patient
+checks)
+• Clear ownership semantics
+• Independent upgrade paths per patient
+While this increases deployment costs, it eliminates
+shared-state vulnerabilities and aligns with patient
+sovereignty.
+5.2
+Core Data Structures
+1
+contract
+PatientHealthRecords
+is
+EIP712 {
+2
+address
+public
+immutable
+patient;
+3
+uint256
+private
+_recordCounter ;
+4
+5
+struct
+RecordMetadata {
+6
+string
+storagePointer ;
+7
+bytes32
+contentDigest ;
+8
+bytes
+wrappedKeyOwner ;
+9
+uint64
+createdAt;
+10
+uint64
+updatedAt;
+11
+}
+12
+13
+struct
+Permission {
+14
+uint64
+expiration;
+15
+bool
+revoked;
+16
+bytes
+wrappedKey;
+17
+}
+18
+19
+mapping(uint256 => RecordMetadata ) private
+_records;
+20
+mapping(uint256 => mapping(address => Permission))
+21
+public
+permissions;
+22
+mapping(bytes32 => bool) public
+usedNonces ;
+23
+24
+modifier
+onlyPatient () {
+25
+require(msg.sender == patient , "Only
+patient")
+;
+26
+_;
+27
+}
+28
+29
+modifier
+validRecordId (uint256
+rid) {
+30
+require(rid > 0 && rid
+<= _recordCounter ,
+31
+"Invalid
+record
+ID");
+32
+_;
+33
+}
+34
+35
+//
+Event
+Declarations
+36
+event
+RecordAdded (uint256
+indexed rid , bytes32
+digest , string
+ptr);
+37
+event
+RecordUpdated (uint256
+indexed rid , bytes32
+digest , string
+ptr);
+38
+event
+PermissionGranted (uint256
+indexed rid ,
+39
+address
+indexed
+grantee , uint64
+expiration);
+40
+event
+PermissionRevoked (uint256
+indexed rid ,
+41
+address
+indexed
+grantee);
+42
+event
+EmergencyAccessGranted (bytes32
+indexed
+grantId ,
+43
+uint256
+indexed rid , address
+physician1 ,
+address
+physician2 ,
+44
+uint8
+justificationCode , uint64
+expiration ,
+uint64
+requestTime);
+45
+event
+EmergencyAccessConfirmed (bytes32
+indexed
+grantId ,
+46
+uint256
+indexed rid , address
+physician ,
+47
+bytes32
+justificationHash );
+48
+event
+AccessLogged (uint256
+indexed rid ,
+49
+address
+indexed
+accessor , bytes32
+detailsHash )
+;
+50
+}
+Listing 2: Smart Contract Data Structures
+5.3
+Record Registration
+1
+function
+addRecord(
+2
+string
+memory ptr ,
+3
+bytes32
+digest ,
+4
+bytes
+memory
+wrappedKey
+5
+) external
+onlyPatient
+returns (uint256) {
+6
+_recordCounter ++;
+7
+uint256
+rid = _recordCounter ;
+8
+9
+_records[rid] = RecordMetadata ({
+10
+storagePointer : ptr ,
+11
+contentDigest : digest ,
+12
+wrappedKeyOwner : wrappedKey ,
+13
+createdAt: uint64(block.timestamp),
+14
+updatedAt: uint64(block.timestamp)
+15
+});
+16
+17
+emit
+RecordAdded (rid , digest , ptr);
+18
+return
+rid;
+19
+}
+Listing 3: Record Registration Function
+Gas cost: ∼180,000 gas first record (cold storage),
+∼165,000 gas subsequent records.
+5.4
+Signature-Based Permission Grant with Ex-
+plicit Nonce
+Gas cost: ∼78,000 gas. The ecrecover precompile it-
+self costs ∼3,000 gas; storage operations and calldata
+processing account for the remainder.
+5.5
+Permission Verification and Metadata Ac-
+cess
+5.6
+Record Update and Key Rotation
+5.7
+Permission Revocation
+Gas cost: ∼31,000 gas.
+5.8
+Emergency Access Pattern
+When patients are incapacitated and cannot grant per-
+missions, emergency access is critical. The two-physician
+multisignature pattern ensures medical necessity while
+maintaining accountability.
+The wrapped keys for
+emergency physicians are generated by an institutional
+guardian service (HSM-backed) that unwraps the pa-
+tient’s owner key (or uses a pre-established envelope key)
+and re-wraps for each authorized physician—see §9.2
+for institutional key management details. The contract
+merely anchors authorization and audit.
+1
+mapping(address => bool) public
+emergencyPhysicians ;
+2
+mapping(bytes32 => EmergencyGrant ) public
+emergencyGrants ;
+3
+4
+struct
+EmergencyRequest {
+5
+uint256
+rid;
+6
+uint8
+justificationCode ;
+7
+uint64
+requestTime ;
+8
+uint64
+maxSkewSeconds ;
+9
+}
+6
+
+1
+function
+grantPermissionBySig (
+2
+uint256 rid ,
+3
+uint64
+expiration ,
+4
+bytes
+memory
+wrappedKey ,
+5
+uint256
+nonce ,
+6
+bytes
+memory
+signature
+7
+) external
+validRecordId (rid) {
+8
+//
+Construct
+nonce
+hash
+to
+prevent
+reuse
+9
+bytes32
+nonceHash = keccak256(
+10
+abi. encodePacked (patient , nonce)
+11
+);
+12
+require (! usedNonces[nonceHash], "Nonce
+already
+used");
+13
+14
+//
+Recover
+signer
+with
+provided
+nonce
+15
+address
+signer = _recoverSigner (
+16
+rid , msg.sender , expiration ,
+17
+wrappedKey , nonce , signature
+18
+);
+19
+require(signer == patient , "Invalid
+signature");
+20
+21
+//
+Check
+expiration
+is
+future
+22
+require( expiration
+> block.timestamp ,
+23
+" Expiration
+must be future");
+24
+25
+//
+Mark
+nonce
+as
+used
+26
+usedNonces[nonceHash] = true;
+27
+28
+//
+Store
+permission
+29
+permissions[rid ][msg.sender] = Permission ({
+30
+expiration: expiration ,
+31
+revoked: false ,
+32
+wrappedKey: wrappedKey
+33
+});
+34
+35
+emit
+PermissionGranted (rid , msg.sender , expiration
+);
+36
+}
+37
+38
+function
+_recoverSigner (
+39
+uint256 rid , address
+grantee , uint64
+expiration ,
+40
+bytes
+memory wk , uint256
+nonce , bytes
+memory
+sig
+41
+) internal
+view
+returns (address) {
+42
+bytes32
+structHash = keccak256(abi.encode(
+43
+PERMISSION_TYPEHASH ,
+44
+rid , grantee , expiration ,
+45
+keccak256(wk), nonce
+46
+));
+47
+bytes32
+hash = _hashTypedDataV4 (structHash );
+48
+return
+ECDSA.recover(hash , sig);
+49
+}
+Listing 4:
+Permission Grant with Explicit Nonce
+Management
+10
+11
+struct
+EmergencyGrant {
+12
+uint256
+recordId;
+13
+address
+physician1;
+14
+address
+physician2;
+15
+uint64
+expiration;
+16
+bool
+confirmed;
+17
+}
+18
+19
+function
+emergencyGrantAccess (
+20
+uint256 rid ,
+21
+address
+physician2 ,
+22
+uint8
+justificationCode ,
+23
+uint64
+requestTime ,
+24
+uint64
+maxSkewSeconds ,
+25
+bytes
+memory
+wrappedKey1 ,
+26
+bytes
+memory
+wrappedKey2 ,
+27
+bytes
+memory
+signature1 ,
+28
+bytes
+memory
+signature2
+29
+) external
+validRecordId (rid) {
+30
+require( emergencyPhysicians [msg.sender],
+31
+"Not
+emergency
+physician");
+32
+require( emergencyPhysicians [physician2],
+33
+"Not
+emergency
+physician");
+1
+function
+hasValidPermission (uint256
+rid)
+2
+public
+view
+validRecordId (rid)
+3
+returns (bool) {
+4
+//
+Patient
+always
+has
+access
+5
+if (msg.sender ==
+patient) return
+true;
+6
+7
+Permission
+memory p = permissions [rid ][ msg.sender
+];
+8
+return !p.revoked
+&&
+9
+p.expiration
+> 0 &&
+10
+p.expiration
+> block.timestamp; //
+Strict
+inequality
+11
+}
+12
+13
+function
+getRecordMetadata (uint256
+rid)
+14
+external
+view
+validRecordId (rid)
+15
+returns (string
+memory ptr , bytes32
+digest) {
+16
+require( hasValidPermission (rid),
+17
+"Not
+authorized");
+18
+19
+RecordMetadata
+memory
+rec = _records[rid ];
+20
+ptr = rec. storagePointer ;
+21
+digest = rec. contentDigest ;
+22
+//
+Note: This
+gating
+is for UX; data
+is
+public
+in
+events
+23
+}
+24
+25
+// New
+function
+for
+owner
+to
+retrieve
+their
+wrapped
+key
+26
+function
+getOwnerWrappedKey (uint256
+rid)
+27
+external
+view
+onlyPatient
+validRecordId (rid)
+28
+returns (bytes
+memory) {
+29
+return
+_records[rid ]. wrappedKeyOwner ;
+30
+}
+Listing 5: Permission Check with Owner Key Retrieval
+34
+require(msg.sender != physician2 ,
+35
+"Different
+physicians
+required");
+36
+37
+//
+Check
+time
+skew
+tolerance
+38
+uint256
+timeDiff = (block.timestamp
+> requestTime )
+?
+39
+block.timestamp
+- uint256( requestTime ) :
+40
+uint256( requestTime ) - block.timestamp;
+41
+require(timeDiff
+<= uint256( maxSkewSeconds ),
+42
+"Request
+time
+outside
+tolerance");
+43
+44
+//
+Verify
+both
+signatures
+over EIP -712
+struct
+45
+bytes32
+requestHash = _hashTypedDataV4 (
+46
+keccak256(abi.encode(
+47
+EMERGENCY_REQUEST_TYPEHASH ,
+48
+rid ,
+49
+justificationCode ,
+50
+requestTime ,
+51
+maxSkewSeconds
+52
+))
+53
+);
+54
+55
+address
+signer1 = ECDSA.recover(requestHash ,
+signature1 );
+56
+address
+signer2 = ECDSA.recover(requestHash ,
+signature2 );
+57
+require(signer1
+== msg.sender &&
+signer2
+==
+physician2 ,
+58
+"Invalid
+signatures");
+59
+60
+//
+Create 2-hour
+emergency
+grant
+61
+uint64
+emergencyExpiration = uint64(block.
+timestamp + 2 hours);
+62
+63
+//
+Store
+wrapped
+keys
+for
+both
+physicians
+64
+permissions [rid ][ msg.sender] = Permission ({
+65
+expiration : emergencyExpiration ,
+66
+revoked: false ,
+67
+wrappedKey : wrappedKey1
+68
+});
+69
+70
+permissions [rid ][ physician2 ] = Permission ({
+7
+
+1
+function
+updateRecord (
+2
+uint256 rid ,
+3
+string
+memory
+newPtr ,
+4
+bytes32
+newDigest ,
+5
+bytes
+memory
+newOwnerWrappedKey
+6
+) external
+onlyPatient
+validRecordId (rid) {
+7
+RecordMetadata
+storage
+rec = _records[rid ];
+8
+9
+rec. storagePointer = newPtr;
+10
+rec. contentDigest = newDigest;
+11
+rec. wrappedKeyOwner = newOwnerWrappedKey ;
+12
+rec.updatedAt = uint64(block.timestamp);
+13
+14
+emit
+RecordUpdated (rid , newDigest , newPtr);
+15
+}
+Listing 6: Record Update Function
+1
+function
+revokePermission (
+2
+uint256 rid , address
+grantee
+3
+) external
+onlyPatient
+validRecordId (rid) {
+4
+require( permissions [rid ][ grantee ]. expiration
+> 0,
+5
+"No
+permission
+to
+revoke");
+6
+7
+permissions [rid ][ grantee ]. revoked = true;
+8
+emit
+PermissionRevoked (rid , grantee);
+9
+}
+Listing 7: Permission Revocation
+71
+expiration: emergencyExpiration ,
+72
+revoked: false ,
+73
+wrappedKey: wrappedKey2
+74
+});
+75
+76
+//
+Compute
+deterministic
+grant
+ID
+77
+bytes32
+grantId = keccak256(abi.encode(
+78
+rid , requestTime , msg.sender , physician2
+79
+));
+80
+81
+//
+Record
+emergency
+grant
+for
+audit
+82
+emergencyGrants [grantId] = EmergencyGrant ({
+83
+recordId: rid ,
+84
+physician1: msg.sender ,
+85
+physician2: physician2 ,
+86
+expiration: emergencyExpiration ,
+87
+confirmed: false
+88
+});
+89
+90
+emit
+EmergencyAccessGranted (
+91
+grantId ,
+//
+Include
+grantId
+for
+easy
+confirmation
+92
+rid ,
+93
+msg.sender ,
+94
+physician2 ,
+95
+justificationCode ,
+96
+emergencyExpiration ,
+97
+requestTime
+98
+);
+99
+}
+100
+101
+function
+confirmEmergencyAccess (
+102
+bytes32
+grantId ,
+103
+bytes32
+justificationHash
+104
+) external {
+105
+EmergencyGrant
+storage
+grant = emergencyGrants [
+grantId ];
+106
+require(msg.sender
+== grant.physician1
+||
+107
+msg.sender == grant.physician2 ,
+108
+"Not
+authorized
+physician");
+109
+require (! grant.confirmed , "Already
+confirmed");
+110
+require(block.timestamp
+<= grant.expiration + 24
+hours ,
+111
+" Confirmation
+window
+expired");
+112
+113
+grant.confirmed = true;
+114
+emit
+EmergencyAccessConfirmed (
+115
+grantId ,
+//
+Include
+grantId
+for
+tracking
+116
+grant.recordId ,
+117
+msg.sender ,
+118
+justificationHash
+119
+);
+120
+}
+Listing 8: Corrected Emergency Access Implementation
+5.9
+Optional Access Logging
+1
+event
+AccessLogged (uint256
+indexed rid ,
+2
+address
+indexed
+accessor , bytes32
+detailsHash );
+3
+4
+function
+logAccess(uint256 rid , bytes32
+detailsHash )
+5
+external {
+6
+require( hasValidPermission (rid), "Not
+authorized ")
+;
+7
+emit
+AccessLogged (rid , msg.sender , detailsHash );
+8
+}
+Listing 9: Optional Read Receipt Logging
+5.10
+Security Properties
+Read Gating:
+getRecordMetadata enforces autho-
+rization via hasValidPermission for UX consistency.
+The same metadata is available in public events; con-
+fidentiality relies entirely on encryption, not on gating.
+The permissions mapping is public for transparency
+and indexing; confidentiality relies solely on encryp-
+tion—exposing wrappedKey ciphertexts does not endan-
+ger plaintext.
+Complete Owner Access: Patient can always re-
+trieve their wrapped key via getOwnerWrappedKey, en-
+suring they never lose access to their own records.
+Transparency Trade-off: Storage pointers ptr and
+digests d are public in events and contract storage. This
+is acceptable because pointers reference encrypted con-
+tent.
+Without wrapped keys, adversaries obtain only
+ciphertext.
+Replay Protection:
+Explicit nonce management
+prevents signature replay. Each nonce can be used ex-
+actly once. Patients must generate unique nonces (e.g.,
+256-bit random values) for each grant to enable paral-
+lel permission grants without ordering hazards. Clients
+MUST generate a fresh 256-bit random nonce per grant
+and persist it until on-chain confirmation to avoid acci-
+dental reuse.
+Time-Bounded
+Access:
+All
+permissions
+have
+expiration
+timestamps.
+Expired
+permissions
+fail
+hasValidPermission checks automatically, using strict
+inequality (> rather than ≥) for clear expiration seman-
+tics.
+6
+Security Analysis
+6.1
+Confidentiality Against Storage Providers
+Theorem 1 (Storage Provider Confidentiality). Assum-
+ing AES-GCM provides IND-CCA2 security and ECIES
+8
+
+(with specified parameters) provides IND-CCA2 security,
+no honest-but-curious storage provider S can distinguish
+encrypted health records from random strings with non-
+negligible advantage.
+Proof Sketch. By
+contradiction.
+Suppose
+adver-
+sary
+S
+has
+non-negligible
+advantage
+ϵ
+in
+dis-
+tinguishing
+encrypted
+records.
+Storage
+contains
+(C, T, N, ADminimal)
+where
+(C, T)
+are
+outputs
+of
+AES-GCM-Enc(SymmK, N, M, ADminimal)
+and
+ADminimal contains only non-sensitive version identi-
+fiers.
+By IND-CCA2 security of AES-GCM, (C, T) is
+computationally indistinguishable from random strings
+without SymmK.
+Since S cannot obtain SymmK
+(wrapped keys W are ECIES ciphertexts using specified
+KDF/MAC, also indistinguishable from random without
+private keys), S cannot distinguish (C, T) from random.
+This contradicts the assumption of advantage ϵ > 0.
+□
+6.2
+Integrity Verification
+Theorem 2 (Tamper Detection). Assuming SHA-256
+is collision-resistant, any modification to stored records
+is detected with probability ≥1 −2−128.
+Proof Sketch. On-chain
+digest
+d
+=
+SHA-256(C||T||N||AD)
+commits
+to
+encrypted
+blob.
+To pass verification, adversary must produce
+(C′, T ′, N ′, AD′) where SHA-256(C′||T ′||N ′||AD′) = d
+with (C′, T ′) ̸= (C, T). This requires finding collision in
+SHA-256. With 256-bit output and collision resistance,
+success probability is ≤2−128 (birthday bound). □
+Authentication Tag: AES-GCM’s tag T provides
+additional integrity protection. Even if adversary finds
+hash collision, forging valid tag without SymmK has
+negligible probability (AES-GCM provides 128-bit au-
+thentication security).
+6.3
+Authorization Authenticity
+Theorem 3 (Cryptographically Attributable Autho-
+rization). Assuming ECDSA over secp256k1 provides
+existential unforgeability under chosen message attacks
+(EUF-CMA), no adversary without patient’s private key
+SKP can forge valid permission signatures with non-
+negligible probability.
+Proof Sketch. Suppose adversary A forges signature
+σ′ for message (rid, addrR, expiration, WR, nonce) that
+passes verification. By EUF-CMA security of ECDSA,
+this occurs with negligible probability without SKP .
+EIP-712 domain separator binds signature to specific
+contract and chain,
+preventing cross-contract/cross-
+chain replay. Unique nonces prevent same-message re-
+play. □
+Table 1: Threat Coverage
+Threat
+Defense
+Residual Risk
+Storage snooping
+Encryption
+None
+Data tampering
+Digest verification
+None
+Unauthorized access
+On-chain authz
+None
+Permission forgery
+EIP-712 signatures
+None
+Replay attacks
+Unique nonces
+None
+Audit log tampering
+Blockchain immutability
+None
+Patient key theft
+—
+High
+Malicious patient
+—
+Inherent
+Storage unavailability
+Redundancy
+Low
+DoS on blockchain
+Fees deter, multi-L2
+Medium
+6.4
+Replay Attack Prevention
+Nonces provide replay protection:
+Property 1 (Unique Nonce Consumption). For each
+patient, each nonce can be used exactly once. Signature
+σ for (rid, addrR, expiration, WR, nonce) is valid only
+if nonce has not been previously used. After successful
+grant, nonce is marked as consumed, invalidating all fu-
+ture signatures using the same nonce.
+Time-Based Replay: Expiration timestamps pre-
+vent long-term replay. Even if adversary captures signa-
+ture, using it after expiration fails require(expiration
+> block.timestamp) check.
+6.5
+Auditability
+Property
+2
+(Authorization
+Audit
+Trail
+Completeness).
+All
+authorization-changing
+operations
+emit
+events:
+RecordAdded,
+PermissionGranted,
+PermissionRevoked,
+RecordUpdated, EmergencyAccessGranted. Events are
+permanently stored in blockchain logs, queryable by any
+observer.
+The system provides complete authorization
+history (who was granted access), not complete access
+history (who actually retrieved/viewed records) unless
+optional logAccess is used.
+Blockchain immutability ensures events cannot be
+deleted or modified after confirmation.
+Patients, reg-
+ulators, or auditors can reconstruct complete authoriza-
+tion history by filtering events for specific records or ad-
+dresses.
+6.6
+Threat Analysis Summary
+Table 1 summarizes threat coverage.
+9
+
+Table 2: Cryptographic Operation Latency
+Operation
+Mean (ms)
+95th % (ms)
+AES-GCM Enc (1 KB)
+0.42
+0.58
+AES-GCM Enc (100 KB)
+2.1
+2.7
+AES-GCM Enc (1 MB)
+18.3
+22.1
+AES-GCM Enc (10 MB)
+181.5
+205.3
+AES-GCM Dec (1 MB)
+16.8
+20.5
+ECIES Key Wrap
+3.2
+4.1
+ECIES Key Unwrap
+3.5
+4.3
+ECDSA Sign (EIP-712)
+2.8
+3.6
+ECDSA Verify
+3.1
+3.9
+SHA-256 (1 MB)
+12.1
+14.8
+7
+Performance Evaluation
+7.1
+Experimental Setup
+Blockchain:
+Ethereum Sepolia testnet, September-
+October 2024. Transactions via Web3.js v4.2.1.
+Storage: IPFS (go-ipfs v0.18) on 8-core, 16 GB RAM
+server.
+AWS S3 for comparison.
+Client in Dhaka,
+Bangladesh; IPFS nodes in Singapore; S3 in us-east-1.
+Client:
+Intel Core i7-1165G7 @ 2.80GHz, 16 GB
+RAM, Ubuntu 22.04. Web Crypto API for AES-GCM,
+eth-crypto for ECIES/ECDSA.
+Workload: Synthea v3.2.0 generated FHIR R4 re-
+sources. Record sizes: 1 KB (observations) to 10 MB
+(imaging reports). 50 trials per measurement for mean
+and 95th percentile.
+7.2
+Cryptographic Operations
+Table 2 shows operation latencies.
+AES-GCM achieves ∼55 MB/s throughput, linear in
+plaintext size.
+Hardware AES acceleration (AES-NI)
+provides these speeds on modern processors. Public-key
+operations (ECIES, ECDSA) take 3-4 ms regardless of
+record size—operate on fixed-size keys/hashes. For typ-
+ical sharing (one signature, one key wrap), total crypto-
+graphic overhead ¡10 ms, negligible vs network latency.
+7.3
+On-Chain Gas Costs
+Table 3 reports gas consumption.
+Layer-2 solutions reduce gas consumption 10-13×
+through batching and off-chain computation. However,
+data availability charges for posting calldata to L1 can
+dominate actual costs during high congestion periods.
+Fees on rollups are dominated by L1 data-availability;
+published ’gas used’ reductions (Table 3) do not directly
+translate linearly to USD costs.
+Cost Breakdown:
+grantPermissionBySig costs:
+signature verification (∼3,000 gas for ecrecover precom-
+pile), storage writes (∼40,000 gas for new permission),
+Table 3: Smart Contract Gas Consumption
+Operation
+Gas
+Ethereum Mainnet (L1)
+Contract Deployment
+2,341,829
+addRecord (first)
+183,742
+addRecord (subsequent)
+166,542
+grantPermissionBySig
+78,331
+revokePermission
+31,204
+updateRecord
+45,123
+emergencyGrantAccess
+156,432
+confirmEmergencyAccess
+35,211
+Layer-2 (Arbitrum One)
+addRecord
+14,392
+grantPermissionBySig
+6,127
+Layer-2 (zkSync Era)
+addRecord
+11,243
+grantPermissionBySig
+5,894
+Table 4: End-to-End Access Latency (1 MB Records)
+Component
+Mean (ms)
+95th % (ms)
+Blockchain query
+245
+312
+IPFS retrieval
+1,087
+1,523
+Integrity verification (SHA-256)
+12
+15
+Key unwrapping (ECIES)
+4
+5
+AES-GCM decryption
+17
+21
+Total (IPFS)
+1,365
+1,876
+S3 retrieval
+423
+589
+Total (S3)
+701
+942
+state updates (∼20,000 gas), events (∼10,000 gas), exe-
+cution overhead (∼5,000 gas).
+Economic Viability: At $3,000/ETH and 30 gwei
+gas price, permission grant costs ∼$7 on L1, ∼$0.54 on
+L2. Healthcare institutions or insurance can subsidize
+L1 costs; L2 enables direct patient payment models with
+substantially lower costs.
+7.4
+End-to-End Access Latency
+Table 4 shows total record access time.
+Storage retrieval dominates latency.
+IPFS exhibits
+higher variance due to distributed nature—retrieval from
+distant/slow peers. S3 provides consistent performance
+through CDN. Cryptographic operations contribute ¡5%
+total latency. The abstract reports mean values (0.7–1.4
+s) for typical performance expectations.
+Scalability:
+For 10 MB records, total latency in-
+creases to ∼3.5 s (IPFS) or ∼2.1 s (S3). Encryption/de-
+cryption scale linearly but remain small fraction.
+For
+typical clinical documents (10-500 KB), latency stays <1
+s.
+10
+
+7.5
+Storage Overhead
+Encryption overhead: AES-GCM adds 12 bytes (nonce)
++ 16 bytes (tag) = 28 bytes per record. For 1 MB plain-
+text: overhead 0.003%. Content-addressing (IPFS CID)
+adds 32-byte identifier. Total storage penalty negligible.
+On-chain storage per record: 32 bytes (digest) + 50
+bytes (storage pointer string) + 110-150 bytes (wrapped
+key, implementation-dependent with ECIES ephemeral
+public key + IV + MAC + ciphertext) ≈192-232
+bytes. Persistent storage on Ethereum is charged per 32-
+byte storage slot (20,000 gas for first-write). Dynamic
+types (strings/bytes) span multiple slots.
+In practice,
+addRecord costs ∼166-184k gas on L1 (Table 3), dom-
+inated by storage writes and event emission; this mea-
+sured figure is more representative than per-byte esti-
+mates.
+8
+Privacy and Regulatory Compliance
+8.1
+Metadata Privacy
+Public Information: Storage pointers ptr and con-
+tent digests d are public on-chain, visible in events
+and contract storage.
+This transparency is by de-
+sign—pointers reference exclusively encrypted content.
+Without wrapped keys, adversaries obtain only cipher-
+text.
+Metadata Leakage:
+On-chain data reveals:
+(1)
+Which addresses participate in health data sharing; (2)
+How many records each patient has; (3) When records
+are created/accessed; (4) Which recipients have permis-
+sions.
+Mitigation: Recipients concerned about linkability
+should use fresh addresses per patient via HD wallet
+derivation (BIP-32/BIP-44).
+Patients can use mixing
+services or privacy-preserving layer-2s (zkSync) to ob-
+scure transaction origins.
+However, complete meta-
+data privacy contradicts auditability—trade-off between
+transparency and privacy must be balanced per deploy-
+ment requirements.
+8.2
+HIPAA Compliance
+Health Insurance Portability and Accountability Act
+(HIPAA) mandates safeguards for protected health in-
+formation (PHI). Our system addresses HIPAA require-
+ments:
+Administrative Safeguards: Patients define access
+policies through cryptographic permissions. Audit logs
+track all authorization events.
+Risk analysis identifies
+vulnerabilities (key management, storage availability).
+Physical Safeguards: Encrypted storage prevents
+PHI exposure during theft/breach.
+Hardware wallets
+protect private keys.
+Technical Safeguards:
+Authentication (ECDSA
+signatures), encryption (AES-256), integrity (SHA-256),
+audit trails (blockchain events for authorization his-
+tory), transmission security (TLS for off-chain commu-
+nication).
+Access Control: Identity-based access through per-
+mission grants.
+Patient controls who accesses what,
+when. Emergency access mechanisms (Section 6.8) bal-
+ance safety with privacy.
+Audit Logs (§164.312(b)): Blockchain events cre-
+ate tamper-proof audit trail of all authorization events.
+The system provides complete authorization history
+(who was granted access) though not access history (who
+actually retrieved records) unless optional logAccess is
+used.
+8.3
+GDPR Compliance
+General Data Protection Regulation (GDPR) grants
+data subjects rights over personal data. Our architec-
+ture supports GDPR requirements:
+Right to Access: Patients always have permission
+to their records via getOwnerWrappedKey.
+Can query
+blockchain for complete metadata and retrieve encrypted
+data anytime.
+Right
+to
+Portability:
+FHIR
+format
+enables
+standards-based data export. Patients can download en-
+crypted records, decrypt with their keys, and transfer to
+other systems.
+Right to Erasure: Complex due to blockchain im-
+mutability. We implement a three-tier approach:
+1. Off-chain data can be deleted from storage
+2. On-chain pointers can be nullified through contract
+updates
+3. Permission/audit events remain as legally-required
+logs
+Organizations should establish legal basis treating
+blockchain entries as audit logs potentially exempt
+from erasure under regulatory compliance requirements
+(GDPR Article 17(3)(b)).
+Data Minimization: Only encrypted pointers and
+hashes stored on-chain.
+No protected health informa-
+tion appears in blockchain. Metadata in associated data
+minimized to version identifiers.
+Consent Management: EIP-712 signatures provide
+explicit, informed, unambiguous consent for each data
+sharing event with cryptographic proof.
+8.4
+De-Identified Data for Research
+Healthcare research requires large datasets while pro-
+tecting privacy. We support de-identification pipelines
+creating research-safe datasets.
+11
+
+De-Identification Methods:
+We implement Safe
+Harbor method (HIPAA) removing 18 identifier cate-
+gories:
+names, addresses (except ZIP regions), dates
+(except year), phone numbers, emails, SSNs, medical
+record numbers, account numbers, certificate numbers,
+vehicle identifiers, device identifiers, URLs, IP addresses,
+biometric identifiers, full-face photos, and other unique
+identifiers.
+Pipeline Architecture: Patients select records for
+research contribution. De-identification service: (1) De-
+crypts records using patient-authorized temporary key;
+(2) Applies transformations (identifier removal, quasi-
+identifier generalization, date shifting); (3) Re-encrypts
+with research consortium key; (4) Uploads to research
+database with new permissions.
+Performance: Evaluation on 1,000 Synthea FHIR
+bundles (mean 127 KB): de-identification takes mean
+47.3 ms/record (95th: 68.5 ms). Processing 1M records
+requires ∼13 hours sequential, parallelizable to <1 hour
+with 32-core cluster.
+Re-Identification Risk:
+Even de-identified data
+carries re-identification risk through quasi-identifiers.
+We apply k-anonymity (k ≥5) [25] and evaluate with
+ARX Data Anonymization Tool. Results show:
+• Maximum risk: 0.18% (highest risk individual)
+• Average risk: 0.04% (across all records)
+• Population uniqueness: 0.09%
+These metrics meet standard thresholds for de-
+identified data release while maintaining research utility.
+9
+Discussion and Future Work
+9.1
+Deployment Barriers
+Integration Challenges:
+Most EHR systems don’t
+natively support blockchain. Middleware or API gate-
+ways can bridge, but introduce operational dependen-
+cies. Standards development and vendor cooperation are
+essential.
+User Experience: Non-technical patients need in-
+tuitive interfaces hiding cryptographic complexity. Wal-
+let software must balance security (key protection) with
+usability (avoiding lock-out).
+Social recovery mecha-
+nisms—where trusted contacts help restore access—show
+promise but need careful design to avoid vulnerabilities.
+Economic Models: Gas costs require sustainable
+funding. Options: (1) Healthcare institutions subsidize
+as infrastructure cost; (2) Insurance covers as benefit;
+(3) Patients pay directly (raises equity concerns); (4)
+Tiered models with basic access funded by institutions.
+Contract deployment costs (∼2.3M gas on L1, ∼$200 at
+typical prices) can be amortized over patient lifetime.
+9.2
+Institutional Key Management
+Per-recipient key wrapping becomes impractical for large
+institutions (hospitals with hundreds of staff). We pro-
+pose institutional guardian keys:
+Design:
+Organizations represented by single en-
+cryption key managed institutionally.
+Patient wraps
+SymmK once for hospital’s key.
+Hospital maintains
+internal access control determining which staff can de-
+crypt. Reduces on-chain operations from O(n) per insti-
+tution (where n = staff count) to O(1).
+Implementation:
+Institution
+deploys
+guardian
+contract:
+(1)
+Registers
+encryption
+public
+key;
+(2)
+Maintains
+staff
+roster;
+(3)
+Provides
+requestDecryption(rid, patientContract)
+for
+staff;
+(4) Verifies caller is authorized staff; (5) Uses institu-
+tional private key (in HSM) to unwrap SymmK and
+re-wrap for requesting clinician.
+Trade-offs:
+Trades patient-controlled fine-grained
+access for scalability/usability.
+Patients trust institu-
+tion to enforce internal policies rather than controlling
+individual clinicians directly. Matches real-world prac-
+tice: patients authorize “my hospital” rather than enu-
+merating every provider.
+On-chain audit still records
+institutional-level grants/revocations.
+9.3
+Advanced Cryptographic Enhancements
+Proxy
+Re-Encryption:
+Allows patients to dele-
+gate re-encryption to semi-trusted proxy, enabling effi-
+cient re-sharing without patient remaining online or re-
+encrypting. Introduces operational complexity but could
+improve usability for frequent re-sharing.
+Attribute-Based Encryption: Encodes access poli-
+cies directly in ciphertexts, automatically enforcing con-
+ditions like “any cardiologist in my hospital.” Introduces
+computational overhead and complex key management.
+Zero-Knowledge Proofs: Enables proving permis-
+sion validity without revealing access control policy.
+Provider could prove they have valid access without dis-
+closing which permission grant they use, obscuring meta-
+data about sharing patterns.
+9.4
+Cross-Chain Interoperability
+Healthcare is global involving diverse stakeholders po-
+tentially operating on different blockchains. Cross-chain
+interoperability protocols could enable permission grants
+on one blockchain recognized on another, or aggregate
+records across multiple blockchains.
+Polkadot
+[26]
+provides
+heterogeneous
+multi-chain
+framework through relay chains and parachains. Cosmos
+offers Inter-Blockchain Communication for sovereign
+blockchain interoperation. Atomic swaps or blockchain
+bridges could enable interoperability. However, each ap-
+proach introduces complexity and trust assumptions re-
+quiring careful evaluation for sensitive medical data.
+12
+
+9.5
+Formal Verification
+Smart contracts manage safety-critical assets (health
+data).
+Bugs have severe consequences.
+Formal verifi-
+cation tools (Certora, K Framework, Coq) can math-
+ematically prove contracts satisfy specified properties,
+providing stronger assurance than testing. Future work
+includes formal verification of our contract against con-
+fidentiality, integrity, and authorization properties.
+9.6
+Long-Term Data Stewardship
+Digital estate planning mechanisms could allow patients
+to designate heirs or archival repositories for records.
+Medical research could benefit from posthumous data
+donation through advance directives recorded on-chain.
+Decentralized autonomous organizations (DAOs) could
+distribute governance across stakeholders with on-chain
+voting on protocol upgrades.
+10
+Limitations
+Key Compromise: If patient’s SKP is stolen, adver-
+sary can sign arbitrary authorizations. Multi-signature
+wallets, hardware wallets, and social recovery reduce risk
+but add complexity.
+Revocation Limits:
+Revocation prevents future
+access
+but
+cannot
+retract
+already-decrypted
+plain-
+text—fundamental limitation of cryptographic access
+control.
+Storage Availability: Depends on off-chain infras-
+tructure. Storage provider failure makes records inac-
+cessible until restored. Redundant storage mitigates but
+increases cost.
+Transaction Costs: Gas prices fluctuate. High con-
+gestion makes L1 expensive. L2 solutions reduce costs
+but introduce additional trust assumptions (optimistic
+rollup fraud proofs, zkRollup trusted setup).
+Scalability: Per-recipient key wrapping doesn’t scale
+to very large recipient lists (e.g., sharing with 1,000+
+researchers). Institutional guardian keys and proxy re-
+encryption address some cases, but massive-scale sharing
+requires additional techniques.
+Metadata Privacy: On-chain transparency reveals
+sharing patterns.
+While not exposing PHI, metadata
+can enable inference attacks (frequency analysis, timing
+correlation). Complete metadata privacy contradicts au-
+ditability—fundamental trade-off requiring deployment-
+specific balance.
+Denial of Service: While fees deter spam, coordi-
+nated attacks or network congestion can delay critical
+healthcare operations. Multi-chain deployment with au-
+tomatic failover provides resilience.
+11
+Conclusion
+We presented a patient-centric blockchain architecture
+for health record management that cryptographically en-
+forces access control while maintaining practical perfor-
+mance. By separating encrypted storage from on-chain
+authorization and deploying one contract per patient, we
+achieve confidentiality against curious storage providers,
+tamper-evident audit trails, and true patient sovereignty
+over medical data.
+Our Ethereum implementation demonstrates feasibil-
+ity with reasonable gas costs (78,000 gas per permis-
+sion grant on L1, 6,000 gas on L2 though DA charges
+dominate actual costs) and acceptable latency (0.7–1.4
+s mean end-to-end for 1 MB records on S3 and IPFS re-
+spectively). Security analysis establishes that standard
+cryptographic primitives composed correctly provide de-
+sired properties. The system provides complete autho-
+rization history (who was granted access), not complete
+access history (who actually retrieved/viewed records)
+unless optional read receipts via logAccess are used.
+Critical implementation details—explicit nonce man-
+agement
+for
+parallel
+grants,
+owner
+key
+retrieval
+paths, metadata privacy through minimal associated
+data, and comprehensive update/emergency access pat-
+terns—ensure the system is deployable in real clinical
+settings. Integration with FHIR standards and compli-
+ance mapping to HIPAA/GDPR requirements demon-
+strate regulatory viability.
+The architecture addresses key challenges in health-
+care data management:
+eliminates trusted intermedi-
+aries, provides cryptographic rather than policy-based
+access control, creates immutable audit trails, and re-
+stores patient agency over sensitive medical information.
+While not solving all healthcare IT problems (key man-
+agement, emergency access, metadata privacy require
+ongoing research), this work establishes a foundation for
+truly patient-controlled health information exchange.
+Future work includes formal verification of smart con-
+tracts, enhanced privacy through zero-knowledge proofs,
+cross-chain interoperability for global health data net-
+works, and user studies evaluating real-world adoption
+barriers. The path forward requires collaboration among
+cryptographers, healthcare informaticists, policymakers,
+and patient advocates to realize the vision of patient-
+empowered, secure, and interoperable health data infras-
+tructure.
+Acknowledgments
+This work was supported by the Department of Com-
+puter Science & Engineering at Bangladesh University
+of Engineering & Technology. We thank the Ethereum
+Foundation and IPFS community for open-source tools
+enabling this research.
+13
+
+References
+[1] J. R. Vest and L. D. Gamm, “Health information ex-
+change: Persistent challenges and new strategies,”
+J. Am. Med. Inform. Assoc., vol. 17, no. 3, pp. 288–
+294, May 2010.
+[2] A. Azaria, A. Ekblaw, T. Vieira, and A. Lippman,
+“MedRec: Using blockchain for medical data access
+and permission management,” in Proc. IEEE OBD,
+Aug. 2016, pp. 25–30.
+[3] A. Ekblaw, A. Azaria, J. D. Halamka, and A. Lipp-
+man, “A case study for blockchain in healthcare:
+MedRec prototype,” in Proc. IEEE OBD, Aug.
+2016.
+[4] K. Peterson, R. Deeduvanu, P. Kanjamala, and
+K. Boles, “A blockchain-based approach to health
+information exchange networks,” in Proc. NIST
+Workshop Blockchain Healthcare, 2016.
+[5] X. Yue, H. Wang, D. Jin, M. Li, and W. Jiang,
+“Healthcare data gateways: Found healthcare in-
+telligence on blockchain,” J. Med. Syst., vol. 40, no.
+10, p. 218, Oct. 2016.
+[6] K. N. Griggs et al., “Healthcare blockchain system
+using smart contracts,” J. Med. Syst., vol. 42, no.
+7, p. 130, June 2018.
+[7] K. M. Hasib et al., “Blockchain-based electronic
+health records management: A comprehensive re-
+view,” IEEE Access, vol. 10, pp. 11411–11434, 2022.
+[8] C. C. Agbo, Q. H. Mahmoud, and J. M. Eklund,
+“Blockchain technology in healthcare: A systematic
+review,” Healthcare, vol. 7, no. 2, p. 56, Apr. 2019.
+[9] T.-T. Kuo, H.-E. Kim, and L. Ohno-Machado,
+“Blockchain
+distributed
+ledger
+technologies
+for
+biomedical and health care applications,” J. Am.
+Med. Inform. Assoc., vol. 24, no. 6, pp. 1211–1220,
+Nov. 2017.
+[10] J. Benaloh, M. Chase, E. Horvitz, and K. Lauter,
+“Patient controlled encryption: Ensuring privacy of
+electronic medical records,” in Proc. ACM CCSW,
+Nov. 2009, pp. 103–114.
+[11] B. Fisher et al., “PGP-HCCA: Pretty good privacy
+for health care client applications,” in Proc. IEEE
+ICHI, Sept. 2013.
+[12] S. Wang, Y. Zhang, and Y. Zhang, “A blockchain-
+based framework for data sharing with fine-grained
+access control,” IEEE Access, vol. 6, pp. 38437–
+38450, 2018.
+[13] A. A. Omar et al., “Privacy-friendly platform for
+healthcare data in cloud based on blockchain,” Fu-
+ture Gener. Comput. Syst., vol. 95, pp. 511–521,
+June 2019.
+[14] P. Zhang, J. White, D. C. Schmidt, G. Lenz, and S.
+T. Rosenbloom, “FHIRChain: Applying blockchain
+to securely share clinical data,” Comput. Struct.
+Biotechnol. J., vol. 16, pp. 267–278, 2018.
+[15] P. Zhang and D. C. Schmidt, “Blockchain for health
+data and its potential use in health IT and health
+care,” JAMA, vol. 319, no. 23, pp. 2363–2364, June
+2018.
+[16] D. C. Nguyen et al., “ACTION-EHR: Patient-
+centric blockchain-based electronic health record
+data management,” J. Netw. Comput. Appl., vol.
+178, p. 102987, Mar. 2021.
+[17] NIST, “Advanced Encryption Standard (AES),”
+FIPS PUB 197, Nov. 2001.
+[18] M. Dworkin, “Recommendation for block cipher
+modes: GCM and GMAC,” NIST SP 800-38D, Nov.
+2007.
+[19] M. Bellare and C. Namprempre, “Authenticated en-
+cryption: Relations among notions and analysis,” in
+Proc. ASIACRYPT, Dec. 2000, pp. 531–545.
+[20] M. Abdalla, M. Bellare, and P. Rogaway, “The or-
+acle Diffie-Hellman assumptions and DHIES,” in
+Proc. CT-RSA, Apr. 2001, pp. 143–158.
+[21] V. Shoup, “A proposal for an ISO standard for pub-
+lic key encryption,” ISO/IEC JTC 1/SC27, Dec.
+2001.
+[22] R. Schiff et al., “EIP-712: Typed structured data
+hashing and signing,” Ethereum Improvement Pro-
+posal, Sept. 2017.
+[23] G. Wood, “Ethereum: A secure decentralised gener-
+alised transaction ledger,” Ethereum Yellow Paper,
+2014.
+[24] J. Benet, “IPFS - content addressed, versioned, P2P
+file system,” arXiv:1407.3561, July 2014.
+[25] L. Sweeney, “k-anonymity: A model for protecting
+privacy,” Int. J. Uncertain. Fuzziness Knowl.-Based
+Syst., vol. 10, no. 5, pp. 557–570, Oct. 2002.
+[26] G. Wood, “Polkadot: Vision for a heterogeneous
+multi-chain framework,” White Paper, 2016.
+14
