@@ -1,0 +1,1711 @@
+RubricRL: Simple Generalizable Rewards for Text-to-Image Generation
+Xuelu Feng1
+Yunsheng Li2
+Ziyu Wan2
+Zixuan Gao3 *
+Junsong Yuan1
+Dongdong Chen2
+Chunming Qiao1
+1University at Buffalo
+2Microsoft CoreAI
+3Nikola Tesla STEM High School
+Figure 1. Visual examples of our RubricRL on two language backbones. Equipped with interpretable and user-controlled criteria, RubricRL
+improves SFT models’ performance to generate high-quality images.
+Abstract
+Reinforcement learning (RL) has recently emerged as a
+promising approach for aligning text-to-image generative
+models with human preferences. A key challenge, however,
+lies in designing effective and interpretable rewards. Ex-
+isting methods often rely on either composite metrics (e.g.,
+CLIP, OCR, and realism scores) with fixed weights or a
+single scalar reward distilled from human preference mod-
+els, which can limit interpretability and flexibility. We pro-
+pose RubricRL, a simple and general framework for rubric-
+based reward design that offers greater interpretability,
+composability, and user control. Instead of using a black-
+box scalar signal, RubricRL dynamically constructs a struc-
+tured rubric for each prompt—a decomposable checklist of
+fine-grained visual criteria such as object correctness, at-
+tribute accuracy, OCR fidelity, and realism—tailored to the
+input text. Each criterion is independently evaluated by a
+multimodal judge (e.g., o4-mini), and a prompt-adaptive
+weighting mechanism emphasizes the most relevant dimen-
+sions.
+This design not only produces interpretable and
+*Zixuan Gao contributed to this work during her research internship at
+the University at Buffalo.
+modular supervision signals for policy optimization (e.g.,
+GRPO or PPO), but also enables users to directly adjust
+which aspects to reward or penalize. Experiments with an
+autoregressive text-to-image model demonstrate that Rubri-
+cRL improves prompt faithfulness, visual detail, and gen-
+eralizability, while offering a flexible and extensible foun-
+dation for interpretable RL alignment across text-to-image
+architectures.
+1. Introduction
+Reinforcement learning (RL) has recently emerged as a
+promising approach for aligning generative models [3, 6–
+8, 21, 31, 32, 35–37, 39, 41] with human preferences. In
+large language models, frameworks such as RLHF [29]
+and RLVF [34, 55] have demonstrated that policy optimiza-
+tion guided by preference-based feedback can significantly
+enhance faithfulness, style, and usability. Extending this
+paradigm to text-to-image generation, including both dif-
+fusion and autoregressive (AR) architectures, offers a prin-
+cipled way to optimize models directly for human-aligned
+visual quality rather than likelihood-based objectives. How-
+ever, the effectiveness of RL in visual domains critically
+arXiv:2511.20651v1  [cs.CV]  25 Nov 2025
+
+(a) Composite Reward System
+(b) Trained Reward Model
+(c) Our Rubric-based Reward Model
+Aesthetic Quality
+Human Alignment
+......
+Text-Image Alignment
+OCR
+Rubrics
+Reward Model
+score1 > score2
+Reward Model
+Reward Score
+Rubrics
+Reward Score = 
+1
+𝑁σ𝑖=1
+𝑁
+𝑠𝑐𝑜𝑟𝑒𝑖
+Reward Score = 
+ൗ
+𝑆𝑈𝑀( 
+)
+𝑁𝑅𝑢𝑏𝑟𝑖𝑐𝑠
+Human Annotation    
+Training
+Figure 2. Comparison of RubricRL with prior autoregressive (AR) reward formulations. (a) Multi-reward pipelines combine CLIP, OCR,
+and realism metrics but require fragile weight tuning and often miss fine-grained attributes. (b) Unified scalar models collapse diverse
+objectives into a single learned score, simplifying optimization but reducing interpretability and adaptability. (c) RubricRL replaces both
+with a decomposable, prompt-adaptive rubric—an explicit checklist of visual criteria (counting, attributes, OCR/text fidelity, realism).
+Each criterion is scored independently and integrated into GRPO to provide interpretable, variance-aware supervision that improves detail,
+prompt faithfulness, and debuggability.
+depends on reward design: constructing evaluation signals
+that are accurate, interpretable, and generalizable across
+prompts, domains, and architectures remains a core chal-
+lenge.
+Existing text-to-image RL frameworks can be broadly
+categorized into multi-reward mixtures and unified scalar
+reward models. Multi-reward systems (e.g., X-Omni [14],
+AR-GRPO [56]) combine heterogeneous objectives, such as
+CLIP-based image–text similarity [30], OCR accuracy [9],
+realism [51], and attribute consistency, to jointly encourage
+alignment and visual quality. While such approaches im-
+prove coverage, they depend on manually tuned weighting
+schemes that can be brittle across prompts and domains, and
+offer limited interpretability. Unified reward models (e.g.,
+OneReward [15], Pref-GRPO [45], LLaVA-Reward [58])
+instead learn a single scalar reward from pairwise human
+preference data. This simplifies optimization but can ob-
+scure the reasoning behind rewards, limit extensibility, and
+make it difficult for users to control which visual aspects are
+prioritized.
+In this paper, we propose RubricRL, a simple and gen-
+eral framework for rubric-based rewards design in text-to-
+image models. Rather than relying on opaque scalar signals,
+RubricRL dynamically selects a structured rubric for each
+prompt, i.e., a decomposable checklist of fine-grained vi-
+sual criteria such as object correctness, attribute accuracy,
+OCR fidelity, compositional coherence, and realism. Each
+criterion is independently evaluated by a multimodal judge
+(e.g., GPT-o4-mini), while a prompt-adaptive weighting
+mechanism highlights the most relevant dimensions. This
+produces interpretable, modular supervision signals that in-
+tegrate naturally into policy optimization frameworks such
+as GRPO [19] or PPO [33].
+By expressing rewards in human-readable and decom-
+posable form, RubricRL transforms reward evaluation from
+a black-box heuristic into an auditable process, where users
+can directly inspect, extend, or adjust which aspects of gen-
+eration are rewarded or penalized. The rubric structure also
+facilitates per-criterion diagnostics, providing transparency
+into model behavior and simplifying both evaluation and
+debugging.
+RubricRL is architecture-agnostic and compatible with
+both diffusion and autoregressive text-to-image models.
+The rubric outputs further support variance-aware group ad-
+vantages, leading to robust updates even under long-horizon
+rollouts. Its prompt-adaptive design ensures that each re-
+ward vector reflects the salient aspects of the input text, such
+as numerals, named entities, styles, or embedded text, with-
+out requiring manual tuning.
+We validate this simple yet effective idea using an AR
+text-to-image model. Experiments show that RubricRL im-
+proves prompt faithfulness, compositional accuracy, and vi-
+sual realism, while maintaining high generalizability across
+datasets and architectures. Compared to prior multi-reward
+or unified-reward approaches, RubricRL achieves more
+consistent optimization behavior and enables controllable,
+interpretable reward shaping. Figure 1 provides visualiza-
+tion samples of our method, illustrating high visual quality.
+In summary, RubricRL contributes:
+• A generalizable rubric-based reward design applicable to
+both diffusion and AR text-to-image models;
+• A prompt-adaptive, decomposable supervision frame-
+work that enhances interpretability and composability;
+• A user-controllable and auditable interface that makes RL
+reward shaping transparent and easily extendable.
+By operationalizing alignment through dynamically gen-
+
+erated rubrics of explicit visual criteria, RubricRL makes
+reinforcement learning for text-to-image generation more
+interpretable, extensible, and user-guided, offering a uni-
+fied foundation for aligning visual generation with human
+intent.
+2. Related work
+Text-to-Image
+Generation
+Methods.
+Text-to-image
+(T2I) generation has seen significant progress through both
+diffusion-based [5, 17, 28, 32, 48, 50] and autoregressive
+(AR) architectures [11, 49, 54, 57].
+Diffusion models
+iteratively refine latent representations conditioned on text
+prompts, achieving high-quality and photorealistic images.
+Variants such as Stable Diffusion [32] and flow-based
+extensions [13, 26] provide diverse styles, controllable
+generation, and strong fidelity at both global and local
+levels.
+Autoregressive approaches, on the other hand,
+represent images as sequences of discrete tokens and model
+the joint distribution of text and image tokens using a
+single transformer backbone. Early hybrid designs, such
+as DreamLLM [11], paired AR text encoders with separate
+diffusion decoders. More recent unified AR models, in-
+cluding Chameleon [25], Emu3 [44], TransFusion [57], and
+Janus [49], integrate visual tokenization and autoregressive
+modeling in one architecture. These models allow direct
+mapping between text tokens and visual outputs, enabling
+flexible control and fine-grained generation. In this paper,
+we propose a novel reward design for reinforcement
+learning in text-to-image models, and demonstrate their
+effectiveness using a unified AR text-to-image model.
+However, our rubric-based rewards are applicable to both
+AR and diffusion architectures
+Reinforcement Learning for Text-to-Image Generation.
+Maximum-likelihood training often under-optimizes user-
+salient qualities, such as semantic faithfulness, composi-
+tional accuracy, and aesthetics.
+Reinforcement learning
+(RL) offers task-aligned feedback that directly optimizes for
+human-relevant properties beyond likelihood. In diffusion-
+based text-to-image models, RL methods, such as Flow-
+GRPO [27], DanceGRPO [52], and reasoning-augmented
+T2I-R1 [24], have improved alignment by fine-tuning the
+generative policy with preference or metric-based rewards.
+Recently, RL has also been applied to unified AR T2I mod-
+els [43], where policy gradients act directly on next-token
+probabilities, enabling end-to-end credit assignment and
+fine-grained control over generated images.
+The design of the reward function is central to effec-
+tive reinforcement learning in text-to-image models. One
+line of work aggregates heterogeneous signals—such as
+CLIP-based image–text alignment [30], OCR/text correct-
+ness [9, 47], multimodal VLM judges (e.g., Qwen2.5-VL-
+32B [4]), aesthetic and realism metrics [53], and human-
+preference surrogates [51].
+While comprehensive, these
+multi-reward mixtures demand careful weighting and tun-
+ing, which can destabilize optimization and obscure per-
+aspect failures. Another direction trains unified preference
+models [45, 46, 58] to predict a single scalar human-aligned
+score from paired image outputs, simplifying optimization
+but relying on costly human annotations and limited scal-
+ability.
+In this work, we propose a rubric-based reward
+that is simple, generalizable, and interpretable. For each
+prompt, a compact rubric defines aspect-wise criteria—such
+as text alignment/OCR accuracy, object count, spatial re-
+lations, and overall coherence/quality.
+Each criterion is
+scored independently by a dedicated evaluator, and a trans-
+parent aggregation produces the final reward. This design
+is more prompt-adaptive, decomposable, and interpretable,
+while providing user-controllable and auditable feedback.
+While several concurrent works [18, 23] investigate rubric-
+based rewards in natural language processing, to the best of
+our knowledge, we are the first who proposes rubric based
+rewards in in text-to-image RL.
+3. Method
+In this paper, we use an AR based text-to-image model to
+verify the effective of our RubricRL framework, however
+it is generalizable to diffusion based model as well. This
+section starts by introducing the overall architecture of our
+RubricRL framework, followed by more details about the
+design of reburic based reward, RL training method and dy-
+namic rollout sampling.
+3.1. Overall architecture
+As illustrated in Figure 3, given an input text prompt p,
+we first tokenize it into a sequence of text tokens, which
+are then fed into an autoregressive (AR) text-to-image gen-
+eration model πθ to predict a sequence of image tokens.
+These image tokens are subsequently decoded using a pre-
+trained, fixed VQ decoder to produce the final image I.
+In this paper, we primarily focus on post-RL fine-tuning
+of πθ to further enhance its output quality, where design-
+ing an effective, reliable, and interpretable reward func-
+tion is the key challenge. Existing methods typically em-
+ploy one or multiple specialized models to evaluate different
+aspects of image quality, such as CLIP-based image–text
+semantic alignment reward [30] (Rclip(I, p)), OCR accu-
+racy [9](Rocr(I, p)), and realism [51]. However, this ap-
+proach has notable drawbacks: (1) deploying multiple spe-
+cialized models is computationally expensive and difficult
+to scale to additional aspects; (2) it requires careful reward
+calibration and reweighting. Recent works have attempted
+to learn a single reward model from pairwise human pref-
+erence data, simplifying optimization but offering limited
+extensibility due to high annotation costs and poor inter-
+pretability.
+Motivated by the strong multimodal understanding ca-
+
+"A blonde soldier in 
+sleek orange armor 
+s t a n d s  r e a d y  i n  a 
+glowing futuristic 
+corridor."
+T2I 
+Autoregressive 
+Model
+Rollout
+What kind of rubrics 
+that real users would 
+use to evaluate?
+Rubric-guided Reward
+Does the image 
+fully satisfy 
+the criterion?
+Rubric Construction
+ Count 
+Attribute
+Action
+Scene 
+Placement
+Aesthetics
+Alignment
+Rubrics
+Image #1
+Image #2
+Image #3
+Image #4
+0.9,
+0.7,
+0.8,
+0.6
++1.1619, 
+-0.3873, 
++0.3873, 
+-1.1619
+Rewards
+Advantages
+Group Computation
+Policy 
+Optimization
+1. Attribute Accuracy (Hair Color): Verify the soldier’s hair is a consistent shade of blonde as specified in 
+the prompt. 
+2. Attribute Accuracy (Armor Color and Style): Verify the armor is sleek in design and uniformly colored in 
+the correct shade of orange. 
+3. Action Accuracy: Verify the soldier is standing in a ready stance, conveying alertness and preparedness. 
+9. Aesthetic Quality: Verify the image is high quality with sharp details, realistic textures, and no rendering 
+artifacts. 
+10. Object Count Consistency: Verify that exactly one soldier is present in the image, as described in the 
+prompt. 
+Image #1
+Rubric-guided Reward
+Text Tokenizer
+...
+VQ
+Decoder
+……
+Mean = 0.75 =  0.9+0.7+0.8+0.6 
+4
+Std = 0.1291 
+= (+0.15)2 +(−0.05)2 +(+0.05)2 +(−0.15)2
+(4−1) 
+ 
+Figure 3. Overview of the proposed method. We propose a simple, general rubric generation pipeline and rubric-based reward model for
+unified text-to-image generation.
+pabilities of modern multimodal LLMs such as GPT-5, we
+propose a simple and unified rubric-based reward model,
+denoted Rrubric(I, p, C(p)).
+This model replaces the en-
+semble of task-specific evaluators with a single reasoning-
+capable vision–language model (VLM). Rather than re-
+lying on fixed sub-models, our approach automatically
+constructs a set of interpretable, prompt-adaptive criteria
+termed “rubrics” that capture the essential aspects of qual-
+ity requirements for each specific prompt p.
+In detail, given a text prompt p, a Rubric Generation
+Model G (implemented via a large language model) gen-
+erates a set of evaluation rubrics:
+C(p) = G(p),
+(1)
+where C(p) = {c1, c2, . . . , cM} defines M prompt-specific
+criteria encompassing dimensions such as object count, at-
+tribute accuracy, text/OCR fidelity, spatial relations, aes-
+thetics, and style consistency. This ensures that the eval-
+uation criteria dynamically adapt to the semantics and gran-
+ularity of each input prompt.
+In reinforcement learning (RL), the objective is to adjust
+the model parameters θ to maximize expected rubric based
+reward over the distribution of prompts:
+max
+θ
+Ep∼D, I∼πθ(·|p)
+
+Rrubric(I, p, C(p))
+
+,
+(2)
+where D denotes the set of prompts. A rollout corresponds
+to a single sampled image from πθ given p, providing a re-
+ward signal that guides policy updates. Compared to multi-
+model reward systems, our rubric-based formulation offers
+three key advantages: (1) Simplicity: it eliminates the need
+for multiple task-specific graders; (2) Adaptivity: rubrics
+are dynamically generated for each prompt, ensuring rele-
+vance to diverse user intents; and (3) Interpretability: each
+reward component corresponds to a human-readable evalu-
+ation criterion, enabling transparent model diagnostics and
+controllable optimization.
+3.2. Rubric based reward
+The rubric based reward function proceeds in two stages.
+First, a Rubric Generation Model G interprets the user
+prompt p and produces a set of candidate evaluation rubrics
+C(p). Second, a multimodal LLM grader implements the
+Rubric-Based Reward Rrubric(I, p, C(p)) that scores a gen-
+erated image I against each rubric in C(p). In this paper,
+we employ GPT-o4-mini to fulfill both roles, generating
+prompt-specific rubrics and providing per-criterion judg-
+ments that are aggregated into a scalar reward.
+Rubric construction. Given a user prompt p, we ask GPT-
+o4-mini to generate a list of rubrics. Each rubric entry con-
+tains a short eval key that targets a specific aspect (e.g., OCR
+alignment, object count, spatial relations, aesthetics) and a
+concise description of what to check in the image.
+To promote diversity and reduce positional bias during
+rubric generation, we randomly permute the evaluation as-
+
+pects in the rubric generation prompt and query GPT-o4-
+mini multiple times. In each round, the model produces a
+set of rubrics (we request 10 per query; because a prompt
+may describe multiple objects or attributes, the model may
+output multiple rubrics for one eval key to ensure adequate
+coverage). We aggregate all valid key–criterion pairs across
+runs into a unified rubric pool, discarding ambiguous or
+malformed entries. Finally, to remove redundancy and fo-
+cus on the most important signals, we ask GPT-o4-mini to
+choose the top-10 most relevant and critical criteria for eval-
+uating images generated from the user prompt p.
+Rubric-guided reward. Given a generated image I, its cor-
+responding text prompt p and the rubric pool C, we simply
+ask GPT-o4-mini again to output a single score yi ∈{0, 1}
+for each criteria to reflect whether the generated image fully
+satisfies this rubric (yi = 1) or not (yi = 0). The overall
+rubric reward is computed as the normalized mean of:
+R(I, p, C) = 1
+M
+M
+X
+i=1
+yi,
+M = 10
+(3)
+3.3. Reinforcement learning with GRPO
+To align the autoregressive image generator with rubric-
+based rewards, we employ Group Relative Policy Opti-
+mization (GRPO) [34], a variant of PPO designed for sta-
+ble optimization over grouped rollouts. For each prompt,
+the set of generated rollouts forms a group, and the reward
+of each rollout is normalized relative to the group to reduce
+variance and improve credit assignment. Concretely, let πθ
+denote the current policy and Ri the rubric reward for roll-
+out i in group g. GRPO computes the relative advantage
+Ai =
+Ri −¯Rg
+q
+1
+|g|−1
+P
+j∈g
+ Rj −¯Rg
+2 , ¯Rg = 1
+|g|
+X
+k∈g
+Rk,
+(4)
+and updates the policy by maximizing a clipped objective
+similar to PPO:
+L(θ) = Ei
+h
+min
+ ri(θ)Ai, clip(ri(θ), 1 −ϵ, 1 + ϵ)Ai
+i
+,
+(5)
+where ri(θ) =
+πθ(ai|si)
+πθold(ai|si), ai and si are the sampled ac-
+tion and state corresponding to rollout i, and ϵ is the PPO
+clipping parameter. By leveraging this group-relative ad-
+vantage, GRPO stabilizes training across prompts, making
+the model robust to heterogeneous reward scales and noisy
+evaluations. Combined with our rubric-based reward and
+dynamic rollout selection strategy described below, we find
+GRPO can effectively guide the generative model toward
+images that are both human-aligned and high-quality.
+3.4. Dynamic rollout sampling
+As discussed above, the target policy model πθ in GRPO
+explores the generation space by sampling multiple roll-
+outs, each yielding a reward Ri used for advantage compu-
+tation. In the original GRPO design, all N rollouts from
+a single prompt are grouped together for policy updates,
+i.e., |g| = N. Subsequent works introduce over-sampling
+and filtering strategies to improve training efficiency. For
+instance, DAPO [55] adopts a prompt-level over-sampling
+approach: it generates N rollouts per prompt and discards
+prompts whose rollouts all have accuracy 1 or 0, thereby
+retaining only moderately difficult prompts for policy opti-
+mization. Formally, DAPO selectively sample prompts used
+in training while still using all rollouts from each retained
+prompt for RL updates.
+In this paper, we propose a new rollout-level dynamic
+sampling mechanism, where selection occurs within the
+rollouts of a single prompt rather than filtering entire
+prompts. Specifically, given a text prompt, instead of sam-
+pling only N rollouts, we oversample N ′ rollouts (N ′ > N)
+and selectively use a subset of N representative rollouts for
+policy updates. To balance quality and diversity, we adopt
+a hybrid selection strategy: we take the top-K high-reward
+rollouts and randomly sample the remaining N −K rollouts
+from the others to encourage diversity. Formally, the rollout
+group g is constructed as
+g = {τ(1), . . . , τ(K)} ∪RS
+ {τ(K+1), . . . , τ(N ′)}, N−K
+
+,
+where RS denotes random sampling. Empirically, we ob-
+serve this hybrid design achieves a better balance between
+stability and diversity, achieving better model quality. As a
+result, the loss in Eq. 5 is computed over a more represen-
+tative and informative subset of rollouts, leading to more
+consistent and efficient learning compared to both the orig-
+inal GRPO and the prompt-level filtering scheme in DAPO.
+4. Experiments
+4.1. Implementation details
+Following SimpleAR [43], we select 11,000 images from
+JourneyDB [38] and Synthetic dataset-1M [12] and recap-
+tion the images using GPT-o4-mini to generate different
+prompt length per image and randomly pick up during
+training. For the network architecture, we use two LLM,
+i.e., Phi3-3.8B [1] and Qwen2.5-0.5B [40] that have been
+SFT trained as the backbone, and use LlamaGen’s VQ de-
+coder [39] and Cosmos-Tokenizer [2] as the visual decoder
+respectively. RL training is performed with TRL frame-
+work [42] at a learning rate of 1e-5 with a 0.1 warm-up ratio.
+The datasets are trained with a batch size of 28 for 3 epochs
+by default. The resolutions of output images in two back-
+bones are 512 and 1024, respectively. For dynamic roll-
+out sampling, we select 4 candidates from 16 rollouts per
+prompt. During inference, we leverage the classifier-free
+guidance (CFG) [20] to guide image synthesis based on the
+
+Table 1. Evaluation of text-to-image generation trained on Phi3 (3.8B) and Qwen2.5 (0.5B) as AR backbone on the GenEval.
+Backbone
+Method
+Single Object
+Two Object
+Counting
+Colors
+Position
+Color Attribute
+Overall
+Phi3-3.8B
+SFT model
+0.9938
+0.8939
+0.4562
+0.9255
+0.72
+0.585
+0.7624
+CLIPScore [30]
+0.9938
+0.9242
+0.525
+0.9362
+0.7725
+0.7
+0.8086
+HPSv2 [51]
+0.9906
+0.8813
+0.5125
+0.9441
+0.7675
+0.7205
+0.8035
+Unified Reward [46]
+0.9969
+0.9318
+0.4156
+0.9388
+0.815
+0.7
+0.7997
+LLaVA-Reward-Phi [58]
+0.9844
+0.8864
+0.4719
+0.9176
+0.725
+0.5975
+0.7638
+AR-GRPO [56]
+0.9938
+0.8712
+0.5406
+0.9574
+0.8075
+0.63
+0.8001
+X-Omni [14]
+0.9969
+0.9192
+0.4719
+0.9548
+0.8175
+0.6875
+0.8080
+RubricRL
+1.0
+0.9343
+0.6125
+0.9415
+0.8275
+0.765
+0.8468
+Qwen2.5-0.5B
+SFT model
+0.9625
+0.5303
+0.25
+0.7606
+0.3575
+0.2825
+0.5239
+CLIPScore [30]
+0.9656
+0.6162
+0.275
+0.8404
+0.3825
+0.325
+0.5674
+HPSv2 [51]
+0.975
+0.6465
+0.2438
+0.8005
+0.3875
+0.2825
+0.5560
+Unified Reward [46]
+0.9625
+0.6288
+0.2656
+0.8191
+0.4050
+0.3550
+0.5727
+LLaVA-Reward-Phi [58]
+0.9625
+0.5303
+0.25
+0.7606
+0.3575
+0.2825
+0.5239
+AR-GRPO [56]
+0.9656
+0.5682
+0.2969
+0.8378
+0.3825
+0.3050
+0.5593
+X-Omni [14]
+0.9812
+0.5960
+0.2219
+0.8085
+0.4125
+0.32
+0.5567
+RubricRL
+0.9844
+0.6616
+0.2469
+0.8378
+0.4825
+0.3950
+0.6014
+Table 2. Evaluation of text-to-image generation trained on Phi3 (3.8B) and Qwen2.5 (0.5B) as AR backbone on the DPG-Bench.
+Backbone
+Method
+Global
+Entity
+Attribute
+Relation
+Other
+Overall
+Phi3-3.8B
+SFT model
+84.80
+87.90
+88.18
+93.30
+82.0
+81.25
+CLIPScore [30]
+81.76
+89.95
+89.42
+93.5
+86.0
+84.15
+HPSv2 [51]
+82.98
+90.71
+89.94
+93.19
+87.6
+84.85
+Unified Reward [46]
+82.37
+89.94
+89.50
+93.93
+85.2
+84.06
+LLaVA-Reward-Phi [58]
+82.98
+88.06
+87.83
+92.50
+79.2
+81.51
+AR-GRPO [56]
+82.37
+89.05
+90.0
+93.08
+88.0
+83.81
+X-Omni [14]
+84.19
+89.66
+89.12
+93.69
+86.0
+84.05
+RubricRL
+83.28
+91.88
+90.07
+94.73
+85.2
+86.07
+Qwen2.5-0.5B
+SFT model
+84.78
+84.74
+86.41
+87.34
+84.27
+78.02
+CLIPScore [30]
+80.55
+87.22
+86.19
+91.33
+67.6
+79.78
+HPSv2 [51]
+78.42
+87.29
+85.04
+91.45
+68.8
+80.23
+Unified Reward [46]
+79.03
+87.09
+85.24
+90.68
+69.20
+79.69
+LLaVA-Reward-Phi [58]
+84.78
+84.74
+86.41
+87.34
+84.27
+78.02
+AR-GRPO [56]
+80.24
+86.75
+85.95
+92.02
+69.35
+79.74
+X-Omni [14]
+79.33
+87.03
+85.34
+91.72
+72.40
+79.92
+RubricRL
+79.33
+88.48
+86.55
+91.37
+68.0
+81.43
+conditional and unconditional logits. All experiments are
+conducted on 8 NVIDIA A100 GPUs.
+4.2. Comparing with state-of-the-arts
+We compare RubricRL with multiple reward models across
+aforementioned two text-to-image SFT models on DPG-
+Bench [22] and GenEval [47]. The compared reward meth-
+ods can be grouped according to their reward design: 1) a
+single specialized reward model, including CLIPScore [30],
+HPSv2 [51], Unified Reward [46], and LLaVA-Reward-
+Phi [58]; and 2) composite reward metrics with fixed
+weights, such as AR-GRPO [56] and X-Omni [14]. For
+fair comparison, we obtain the baseline numbers by im-
+plementing their methods and use the same RL framework
+(GRPO) and settings, while the only difference is the de-
+sign of reward functions. For better understanding gains
+brought by RL, we also report the performance of the ini-
+tial SFT model, on top of which each RL reward is inde-
+pendently applied. Quantitative results using both Phi3 and
+Qwen2.5 backbones are reported in Table 1 and Table 2.
+For GenEval, prompt rewriting is applied following [10]
+to ensure evaluation consistency. From the results, all RL
+post-trained methods consistently outperform the SFT base-
+line, confirming the benefit of reinforcement learning in en-
+hancing image generation quality. And RubricRL achieves
+the best performance, surpassing X-Omni by approximately
+4% on GenEval on both LLM backbones, highlighting the
+effectiveness and generalization of our rubric-based reward.
+4.3. Ablation study
+In this section, we conduct multiple ablation analysis. By
+default, all experiments are based on Phi3 and evaluated on
+the GenEval benchmark .
+Strategies for dynamic rollout sampling.
+To investigate
+the impact of different selection strategies used by dynamic
+rollout sampling, we compare four methods, i.e., RubricRL
+
+Table 3. Comparison of dynamic rollout-sampling strategies used
+in GRPO.
+Method
+Single
+Two
+Count Colors Position Color Attr. Overall
+Vanilla
+0.9906 0.9217 0.6031 0.9441 0.7975
+0.7525
+0.8349
+FFKC-1D
+1.0
+0.9268 0.5656 0.9441
+0.825
+0.75
+0.8353
+DAPO
+0.9969 0.9293 0.6125 0.9362 0.7975
+0.7275
+0.8333
+Hybrid
+1.0
+0.9343 0.6125 0.9415 0.8275
+0.765
+0.8468
+Table 4. Comparison of advantage computation in GRPO, with
+performance measured on GenEval.
+Method
+Single Two Count Colors Position Color Attr. Overall
+Global Norm 0.9938 0.9268 0.6781 0.9362
+0.785
+0.6825
+0.8337
+Local Norm
+1.0
+0.9343 0.6125 0.9415 0.8275
+0.765
+0.8468
+without dynamic rollout sampling (Vanilla), FFKC-1D [16],
+DAPO [55], and our proposed hybrid strategy, and report
+the results in Table 3. Specifically, FFKC-1D also over-
+samples more rollouts and then keeps a diverse subset by
+first selecting a medoid (the rollout with reward closest to
+the median) and then greedily adding samples that max-
+imize reward distance from already chosen ones.
+Com-
+pared to our hybrid strategy, FFKC-1D focuses too much
+on the diversity and ignore the importance of high quality
+rollouts. As shown in Table 3, our hybrid sampling strat-
+egy consistently achieves the best performance, surpassing
+both FFKC-1D and DAPO as well as the Vanilla baseline
+that directly uses four rollouts without any dynamics. In-
+terestingly, FFKC-1D and DAPO do not outperform the
+vanilla baseline, suggesting that their dynamic prompt sam-
+pling and pure rollout diversity-driven sampling strategies
+fail to provide additional informative signals for RL. In con-
+trast, our hybrid strategy effectively balances exploitation of
+high-reward rollouts and exploration of diverse candidates,
+enabling the policy model to leverage both higher-quality
+and diverse samples, resulting in more effective RL signal.
+Normalization scope for advantages.
+In Eq. 4, the ad-
+vantage used in GRPO is computed by normalizing re-
+wards—using the mean and standard deviation—within a
+group of rollouts. Under our dynamic sampling strategy,
+only N rollouts are retained out of N ′ candidates. This
+raises an important design choice: should the normalization
+statistics (mean and standard deviation) be computed using
+all N ′ rollouts or only the retained N? We denote these two
+variants as “Global Norm” and “Local Norm”, respectively.
+In Table 4, it reflects that “Local Norm” yields better perfor-
+mance. This is because normalizing within the retained sub-
+set better reflects the actual reward distribution that guides
+learning, preventing high-variance or low-quality rollouts
+from distorting the gradient direction.
+RubricRL v.s.
+SFT with Best-of-N sampling.
+We
+further compare the proposed RubricRL with the SFT
+GPT-o4-mini: 
+GPT-o4-mini: 
+GPT-o4-mini: 
+"four traffic lights"
+"two bicycles"
+"three zebras"
+Figure 4. Failure cases of GPT-o4-mini when grading counting on
+GenEVal. The model misjudges instance counts under ambiguity.
+Table 5. Comparison on GenEval of Best-of-N (N = 8) and our
+RL training for Phi3-3.8B (P-*) and Qwen2.5-0.5B (Q-*).
+Method
+Single Two Count Colors Position Color Attr. Overall
+P-SFT model 0.9938 0.8939 0.4562 0.9255 0.7200
+0.5850
+0.7624
+P-Best-of-N
+0.9812 0.9091 0.6000 0.9309 0.7450
+0.5900
+0.7927
+P-RubricRL
+1.0
+0.9343 0.6125 0.9415 0.8275
+0.765
+0.8468
+Q-SFT model 0.9625 0.5303 0.2500 0.7314 0.3575
+0.2825
+0.5239
+Q-Best-of-N 0.9562 0.6566 0.3750 0.8138 0.4100
+0.3600
+0.5953
+Q-RubricRL 0.9844 0.6616 0.2469 0.8378 0.4825
+0.3950
+0.6014
+model equipped with a Best-of-N sampling strategy dur-
+ing inference(N = 8), which has been observed in prior
+work [14] to form a ‘upperbound’ for RL methods in lan-
+guage tasks. Specifically, for each prompt in GenEval, we
+first generate a rubric, then sample 8 rollouts from the SFT
+model. Each rollout is scored using the rubric-based re-
+ward, and the top 4 are selected for evaluation on GenEval.
+As shown in Table 5, although Best-of-N sampling signifi-
+cantly can achieve higher scores, RubricRL still achieves a
+notable improvement, exceeding it by over 5%. This result
+aligns with the observations in X-Omni [14], reconfirming
+that reinforcement learning provides a more effective opti-
+mization paradigm.
+Failure case analysis.
+As the grader, although GPT-o4-
+mini is highly general and powerful in evaluating the qual-
+ity of generated images, we observe that it can assign in-
+correct scores—e.g., underestimating or overestimating ob-
+ject counts, particularly when the base model’s generation
+quality is poor. Figure 4 illustrates several typical failure
+cases in the counting subcategory of GenEval, such as re-
+dundant poles near traffic lights, intertwined bicycles, and
+overlapping zebras. These challenging scenarios often mis-
+lead GPT-o4-mini, resulting in inaccurate counts. However,
+when the base model generates higher-quality images, this
+issue is less pronounced. This explains why RubricRL’s
+performance on the “counting” subcategory in GenEval
+and the “Other” subcategory in DPG-Bench—both contain-
+ing many counting cases—is worse than the baseline SFT
+model when using Qwen2.5-0.5B as the base model. In
+contrast, with Phi3-3.8B, this issue almost disappears, al-
+lowing RubricRL to substantially improve performance in
+
+AR-GRPO
+CLIPScore
+HPSv2
+Llava-Phi
+SFT
+Unified
+X-Omni
+RubricRL
+“In a tranquil forest clearing by the water's edge, a large orange tent with its entrance zipped shut is pitched on a grassy knoll overlooking a 
+serene lake. A few steps away from the tent, on the forest floor scattered with autumn leaves, a acircular gold bracelet catches the sunlight, 
+creating a subtle sparkle amid the natural surroundings. The nearby trees cast gentle shadows over the area, enhancing the peaceful ambiance 
+of the outdoor scene.”
+“An intricately detailed oil painting depicts a raccoon dressed in a black suit with a crisp white shirt and a red bow tie. The raccoon stands 
+upright, donning a black top hat and gripping a wooden cane with a silver handle in one paw, while the other paw clutches a dark garbage 
+bag. The background of the painting features soft, brush-stroked trees and mountains, reminiscent of traditional Chinese landscapes, with a 
+delicate mist enveloping the scene.”
+“A ripe, golden pineapple sits centered on a light wooden table, with a single green-bottled beer to its left and a pair of identical bottles to 
+its right. The beers have droplets of condensation on their surfaces, indicating they are chilled. The pineapple's spiky green leaves contrast 
+with the smooth, cylindrical shape of the beer bottles.”
+“An eye-catching vibrant red pickup truck with a stout and rectangular build is parked on the sandy shores as dusk sets in. The truck's glossy 
+paint contrasts with the soft, amber hues of the setting sun reflected off the vehicle's surface. In the background, the gentle waves of the 
+ocean can be heard as they meet the beach, with the silhouette of palm trees swaying gently in the evening breeze.”
+Figure 5. Qualitative comparison: we visualize RubricRL and baseline models using prompts from DPG. RubricRL shows superior
+image quality that is both aesthetically pleasing and better aligned with the prompt. The bold text highlights key elements that RubricRL
+successfully captures, while baseline models often fail to generate these details accurately.
+counting-related categories.
+4.4. Visual results
+We further present comprehensive visual comparisons be-
+tween RubricRL and other baseline approaches in Figure 5.
+As illustrated, models trained with RubricRL consistently
+produce images that are not only more aesthetically appeal-
+ing but also demonstrate superior semantic alignment with
+the given input prompts. To aid interpretation, any mis-
+aligned or missing elements in the generated images are
+emphasized using bold text within the figure. For exam-
+ple, in the third row of Figure 5, the SFT model fails to
+render the black top hat entirely, while several RL-based
+methods exhibit partial misalignment. Specifically, LLaVA-
+Reward-Phi [58] and Unified Reward [46] generate outputs
+where the black bag is not properly held in hand, and in
+some cases, depict two bags in both paws while omitting
+the wooden cane altogether. These qualitative observations
+underscore the effectiveness of RubricRL in enhancing the
+model’s capability to follow complex, fine-grained instruc-
+tions and produce high-quality, prompt-consistent images.
+5. Conclusion
+In this paper, we introduce RubricRL, a rubric-based re-
+ward RL framework that provides prompt-adaptive, decom-
+posable supervision for text-to-image generation. By ex-
+plicitly creating configurable visual criteria (e.g., count-
+ing, attributes, OCR fidelity, realism) and scoring them in-
+dependently, RubricRL produces interpretable and modu-
+
+lar signals that integrate seamlessly with standard policy
+optimization in RL. Experimental results demonstrate that
+RubricRL outperforms existing RL-based approaches for
+enhancing text-to-image generation.
+We hope this work
+provides new insights into applying reinforcement learning
+to visual generation models.
+References
+[1] Marah Abdin, Jyoti Aneja, Hany Awadalla, Ahmed Awadal-
+lah, Ammar Ahmad Awan, Nguyen Bach, Amit Bahree,
+Arash Bakhtiari, Jianmin Bao, Harkirat Behl, et al. Phi-3
+technical report: A highly capable language model locally
+on your phone. arXiv e-prints, pages arXiv–2404, 2024. 5
+[2] Niket Agarwal, Arslan Ali, Maciej Bala, Yogesh Balaji,
+Erik Barker, Tiffany Cai, Prithvijit Chattopadhyay, Yongxin
+Chen, Yin Cui, Yifan Ding, et al.
+Cosmos world foun-
+dation model platform for physical ai.
+arXiv preprint
+arXiv:2501.03575, 2025. 5
+[3] Omri Avrahami, Dani Lischinski, and Ohad Fried. Blended
+diffusion for text-driven editing of natural images. In Pro-
+ceedings of the IEEE/CVF conference on computer vision
+and pattern recognition, pages 18208–18218, 2022. 1
+[4] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin
+Ge, Sibo Song, Kai Dang, Peng Wang, Shijie Wang, Jun
+Tang, et al. Qwen2. 5-vl technical report. arXiv preprint
+arXiv:2502.13923, 2025. 3, 1
+[5] Huiwen Chang, Han Zhang, Jarred Barber, AJ Maschinot,
+Jose Lezama, Lu Jiang, Ming-Hsuan Yang, Kevin Mur-
+phy, William T Freeman, Michael Rubinstein, et al. Muse:
+Text-to-image generation via masked generative transform-
+ers. arXiv preprint arXiv:2301.00704, 2023. 3
+[6] Xi Chen, Nikhil Mishra, Mostafa Rohaninejad, and Pieter
+Abbeel. Pixelsnail: An improved autoregressive generative
+model.
+In International conference on machine learning,
+pages 864–872. PMLR, 2018. 1
+[7] Xiaokang Chen, Zhiyu Wu, Xingchao Liu, Zizheng Pan,
+Wen Liu, Zhenda Xie, Xingkai Yu, and Chong Ruan. Janus-
+pro: Unified multimodal understanding and generation with
+data and model scaling. arXiv preprint arXiv:2501.17811,
+2025.
+[8] Jooyoung Choi, Sungwon Kim, Yonghyun Jeong, Youngjune
+Gwon, and Sungroh Yoon. Ilvr: Conditioning method for
+denoising diffusion probabilistic models.
+arXiv preprint
+arXiv:2108.02938, 2021. 1
+[9] Cheng Cui, Ting Sun, Manhui Lin, Tingquan Gao, Yubo
+Zhang, Jiaxuan Liu, Xueqing Wang, Zelun Zhang, Changda
+Zhou, Hongen Liu, et al.
+Paddleocr 3.0 technical report.
+arXiv preprint arXiv:2507.05595, 2025. 2, 3
+[10] Chaorui Deng, Deyao Zhu, Kunchang Li, Chenhui Gou,
+Feng Li, Zeyu Wang, Shu Zhong, Weihao Yu, Xiaonan Nie,
+Ziang Song, et al. Emerging properties in unified multimodal
+pretraining. arXiv preprint arXiv:2505.14683, 2025. 6
+[11] Runpei Dong, Chunrui Han, Yuang Peng, Zekun Qi, Zheng
+Ge, Jinrong Yang, Liang Zhao, Jianjian Sun, Hongyu Zhou,
+Haoran Wei, et al. Dreamllm: Synergistic multimodal com-
+prehension and creation. arXiv preprint arXiv:2309.11499,
+2023. 3
+[12] Ben Egan, Alex Redden, XWAVE, and SilentAntagonist.
+Dalle3 1 Million+ High Quality Captions, 2024. 5
+[13] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim
+Entezari, Jonas M¨uller, Harry Saini, Yam Levi, Dominik
+Lorenz, Axel Sauer, Frederic Boesel, et al. Scaling recti-
+fied flow transformers for high-resolution image synthesis.
+In Forty-first international conference on machine learning,
+2024. 3
+[14] Zigang Geng, Yibing Wang, Yeyao Ma, Chen Li, Yongming
+Rao, Shuyang Gu, Zhao Zhong, Qinglin Lu, Han Hu, Xi-
+aosong Zhang, et al. X-omni: Reinforcement learning makes
+discrete autoregressive image generative models great again.
+arXiv preprint arXiv:2507.22058, 2025. 2, 6, 7
+[15] Yuan Gong, Xionghui Wang, Jie Wu, Shiyin Wang, Yitong
+Wang, and Xinglong Wu. Onereward: Unified mask-guided
+image generation via multi-task human preference learning.
+arXiv preprint arXiv:2508.21066, 2025. 2
+[16] Teofilo F Gonzalez. Clustering to minimize the maximum
+intercluster distance. Theoretical computer science, 38:293–
+306, 1985. 7
+[17] Shuyang Gu, Dong Chen, Jianmin Bao, Fang Wen, Bo
+Zhang, Dongdong Chen, Lu Yuan, and Baining Guo. Vec-
+tor quantized diffusion model for text-to-image synthesis. In
+Proceedings of the IEEE/CVF conference on computer vi-
+sion and pattern recognition, pages 10696–10706, 2022. 3
+[18] Anisha Gunjal, Anthony Wang, Elaine Lau, Vaskar Nath,
+Yunzhong He, Bing Liu, and Sean Hendryx. Rubrics as re-
+wards: Reinforcement learning beyond verifiable domains.
+arXiv preprint arXiv:2507.17746, 2025. 3
+[19] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song,
+Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi
+Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning
+capability in llms via reinforcement learning. arXiv preprint
+arXiv:2501.12948, 2025. 2
+[20] Jonathan Ho and Tim Salimans.
+Classifier-free diffusion
+guidance. arXiv preprint arXiv:2207.12598, 2022. 5
+[21] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising dif-
+fusion probabilistic models. Advances in neural information
+processing systems, 33:6840–6851, 2020. 1
+[22] Xiwei Hu, Rui Wang, Yixiao Fang, Bin Fu, Pei Cheng,
+and Gang Yu.
+Ella:
+Equip diffusion models with
+llm for enhanced semantic alignment.
+arXiv preprint
+arXiv:2403.05135, 2024. 6
+[23] Zenan Huang, Yihong Zhuang, Guoshan Lu, Zeyu Qin,
+Haokai Xu, Tianyu Zhao, Ru Peng, Jiaqi Hu, Zhanming
+Shen, Xiaomeng Hu, et al.
+Reinforcement learning with
+rubric anchors. arXiv preprint arXiv:2508.12790, 2025. 3
+[24] Dongzhi Jiang, Ziyu Guo, Renrui Zhang, Zhuofan Zong,
+Hao Li, Le Zhuo, Shilin Yan, Pheng-Ann Heng, and Hong-
+sheng Li. T2i-r1: Reinforcing image generation with col-
+laborative semantic-level and token-level cot. arXiv preprint
+arXiv:2505.00703, 2025. 3
+[25] George
+Karypis,
+Eui-Hong
+Han,
+and
+Vipin
+Kumar.
+Chameleon: Hierarchical clustering using dynamic model-
+ing. computer, 32(8):68–75, 1999. 3
+[26] Shufan Li, Konstantinos Kallidromitis, Akash Gokul, Zichun
+Liao, Yusuke Kato, Kazuki Kozuka, and Aditya Grover. Om-
+niflow: Any-to-any generation with multi-modal rectified
+
+flows. In Proceedings of the Computer Vision and Pattern
+Recognition Conference, pages 13178–13188, 2025. 3
+[27] Jie Liu, Gongye Liu, Jiajun Liang, Yangguang Li, Jiaheng
+Liu, Xintao Wang, Pengfei Wan, Di Zhang, and Wanli
+Ouyang. Flow-grpo: Training flow matching models via on-
+line rl. arXiv preprint arXiv:2505.05470, 2025. 3
+[28] Alex Nichol, Prafulla Dhariwal, Aditya Ramesh, Pranav
+Shyam, Pamela Mishkin, Bob McGrew, Ilya Sutskever, and
+Mark Chen. Glide: Towards photorealistic image generation
+and editing with text-guided diffusion models. arXiv preprint
+arXiv:2112.10741, 2021. 3
+[29] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Car-
+roll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini
+Agarwal, Katarina Slama, Alex Ray, et al. Training language
+models to follow instructions with human feedback.
+Ad-
+vances in neural information processing systems, 35:27730–
+27744, 2022. 1
+[30] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning
+transferable visual models from natural language supervi-
+sion. In International conference on machine learning, pages
+8748–8763. PmLR, 2021. 2, 3, 6
+[31] Aditya Ramesh, Mikhail Pavlov, Gabriel Goh, Scott Gray,
+Chelsea Voss, Alec Radford, Mark Chen, and Ilya Sutskever.
+Zero-shot text-to-image generation. In International confer-
+ence on machine learning, pages 8821–8831. Pmlr, 2021. 1
+[32] Robin Rombach, Andreas Blattmann, Dominik Lorenz,
+Patrick Esser, and Bj¨orn Ommer.
+High-resolution image
+synthesis with latent diffusion models.
+In Proceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pages 10684–10695, 2022. 1, 3
+[33] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Rad-
+ford, and Oleg Klimov. Proximal policy optimization algo-
+rithms. arXiv preprint arXiv:1707.06347, 2017. 2
+[34] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao
+Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li,
+Yang Wu, et al. Deepseekmath: Pushing the limits of math-
+ematical reasoning in open language models. arXiv preprint
+arXiv:2402.03300, 2024. 1, 5
+[35] Jascha Sohl-Dickstein, Eric Weiss, Niru Maheswaranathan,
+and Surya Ganguli.
+Deep unsupervised learning using
+nonequilibrium thermodynamics.
+In International confer-
+ence on machine learning, pages 2256–2265. pmlr, 2015. 1
+[36] Yang Song and Stefano Ermon. Generative modeling by esti-
+mating gradients of the data distribution. Advances in neural
+information processing systems, 32, 2019.
+[37] Yang Song, Jascha Sohl-Dickstein, Diederik P Kingma, Ab-
+hishek Kumar, Stefano Ermon, and Ben Poole. Score-based
+generative modeling through stochastic differential equa-
+tions. arXiv preprint arXiv:2011.13456, 2020. 1
+[38] Keqiang Sun, Junting Pan, Yuying Ge, Hao Li, Haodong
+Duan, Xiaoshi Wu, Renrui Zhang, Aojun Zhou, Zipeng Qin,
+Yi Wang, et al. Journeydb: A benchmark for generative im-
+age understanding. Advances in neural information process-
+ing systems, 36:49659–49678, 2023. 5
+[39] Peize Sun, Yi Jiang, Shoufa Chen, Shilong Zhang, Bingyue
+Peng, Ping Luo, and Zehuan Yuan. Autoregressive model
+beats diffusion: Llama for scalable image generation. arXiv
+preprint arXiv:2406.06525, 2024. 1, 5
+[40] Qwen Team et al. Qwen2.5 technical report. arXiv preprint
+arXiv:2407.10671, 2(3), 2024. 5
+[41] Keyu Tian, Yi Jiang, Zehuan Yuan, Bingyue Peng, and Li-
+wei Wang. Visual autoregressive modeling: Scalable image
+generation via next-scale prediction. Advances in neural in-
+formation processing systems, 37:84839–84865, 2024. 1
+[42] Leandro von Werra, Younes Belkada, Lewis Tunstall, Ed-
+ward Beeching, Tristan Thrush, Nathan Lambert, Shengyi
+Huang, Kashif Rasul, and Quentin Gallou´edec. Trl: Trans-
+former reinforcement learning. https://github.com/
+huggingface/trl, 2020. 5
+[43] Junke Wang, Zhi Tian, Xun Wang, Xinyu Zhang, Weilin
+Huang, Zuxuan Wu, and Yu-Gang Jiang. Simplear: Pushing
+the frontier of autoregressive visual generation through pre-
+training, sft, and rl. arXiv preprint arXiv:2504.11455, 2025.
+3, 5
+[44] Xinlong Wang, Xiaosong Zhang, Zhengxiong Luo, Quan
+Sun, Yufeng Cui, Jinsheng Wang, Fan Zhang, Yueze Wang,
+Zhen Li, Qiying Yu, et al. Emu3: Next-token prediction is
+all you need. arXiv preprint arXiv:2409.18869, 2024. 3
+[45] Yibin Wang, Zhimin Li, Yuhang Zang, Yujie Zhou, Jiazi
+Bu, Chunyu Wang, Qinglin Lu, Cheng Jin, and Jiaqi Wang.
+Pref-grpo: Pairwise preference reward-based grpo for sta-
+ble text-to-image reinforcement learning.
+arXiv preprint
+arXiv:2508.20751, 2025. 2, 3
+[46] Yibin Wang, Yuhang Zang, Hao Li, Cheng Jin, and Jiaqi
+Wang. Unified reward model for multimodal understanding
+and generation. arXiv preprint arXiv:2503.05236, 2025. 3,
+6, 8
+[47] Haoran Wei, Chenglong Liu, Jinyue Chen, Jia Wang, Lingyu
+Kong, Yanming Xu, Zheng Ge, Liang Zhao, Jianjian Sun,
+Yuang Peng, et al. General ocr theory: Towards ocr-2.0 via a
+unified end-to-end model. arXiv preprint arXiv:2409.01704,
+2024. 3, 6
+[48] Tianyi Wei, Dongdong Chen, Yifan Zhou, and Xingang Pan.
+Enhancing mmdit-based text-to-image models for similar
+subject generation. arXiv preprint arXiv:2411.18301, 2024.
+3
+[49] Chengyue Wu, Xiaokang Chen, Zhiyu Wu, Yiyang Ma,
+Xingchao Liu, Zizheng Pan, Wen Liu, Zhenda Xie, Xingkai
+Yu, Chong Ruan, et al. Janus: Decoupling visual encod-
+ing for unified multimodal understanding and generation. In
+Proceedings of the Computer Vision and Pattern Recognition
+Conference, pages 12966–12977, 2025. 3
+[50] Chenfei Wu, Jiahao Li, Jingren Zhou, Junyang Lin, Kaiyuan
+Gao, Kun Yan, Sheng-ming Yin, Shuai Bai, Xiao Xu, Yilei
+Chen, et al. Qwen-image technical report. arXiv preprint
+arXiv:2508.02324, 2025. 3
+[51] Xiaoshi Wu, Yiming Hao, Keqiang Sun, Yixiong Chen, Feng
+Zhu, Rui Zhao, and Hongsheng Li. Human preference score
+v2: A solid benchmark for evaluating human preferences of
+text-to-image synthesis. arXiv preprint arXiv:2306.09341,
+2023. 2, 3, 6
+[52] Zeyue Xue, Jie Wu, Yu Gao, Fangyuan Kong, Lingting
+Zhu, Mengzhao Chen, Zhiheng Liu, Wei Liu, Qiushan Guo,
+
+Weilin Huang, et al. Dancegrpo: Unleashing grpo on visual
+generation. arXiv preprint arXiv:2505.07818, 2025. 3
+[53] Sidi Yang, Tianhe Wu, Shuwei Shi, Shanshan Lao, Yuan
+Gong, Mingdeng Cao, Jiahao Wang, and Yujiu Yang.
+Maniqa: Multi-dimension attention network for no-reference
+image quality assessment. In Proceedings of the IEEE/CVF
+conference on computer vision and pattern recognition,
+pages 1191–1200, 2022. 3
+[54] Jiahui Yu, Yuanzhong Xu, Jing Yu Koh, Thang Luong, Gun-
+jan Baid, Zirui Wang, Vijay Vasudevan, Alexander Ku, Yin-
+fei Yang, Burcu Karagol Ayan, et al.
+Scaling autoregres-
+sive models for content-rich text-to-image generation. arXiv
+preprint arXiv:2206.10789, 2(3):5, 2022. 3
+[55] Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xi-
+aochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gao-
+hong Liu, Lingjun Liu, et al.
+Dapo:
+An open-source
+llm reinforcement learning system at scale. arXiv preprint
+arXiv:2503.14476, 2025. 1, 5, 7
+[56] Shihao Yuan, Yahui Liu, Yang Yue, Jingyuan Zhang, Wang-
+meng Zuo, Qi Wang, Fuzheng Zhang, and Guorui Zhou. Ar-
+grpo: Training autoregressive image generation models via
+reinforcement learning.
+arXiv preprint arXiv:2508.06924,
+2025. 2, 6
+[57] Chunting Zhou, Lili Yu, Arun Babu, Kushal Tirumala,
+Michihiro Yasunaga, Leonid Shamis, Jacob Kahn, Xuezhe
+Ma, Luke Zettlemoyer, and Omer Levy. Transfusion: Pre-
+dict the next token and diffuse images with one multi-modal
+model. arXiv preprint arXiv:2408.11039, 2024. 3
+[58] Shijie Zhou, Ruiyi Zhang, Huaisheng Zhu, Branislav Kve-
+ton, Yufan Zhou, Jiuxiang Gu, Jian Chen, and Changyou
+Chen.
+Multimodal llms as customized reward models for
+text-to-image generation. In Proceedings of the IEEE/CVF
+International Conference on Computer Vision, pages 19638–
+19648, 2025. 2, 3, 6, 8
+
+RubricRL: Simple Generalizable Rewards for Text-to-Image Generation
+Supplementary Material
+Table 6. Comparison of different grader models, with performance
+measured on GenEval.
+Grader
+Single
+Two
+Count Colors Position Color Attr. Overall
+Qwen2.5-3B
+0.9938 0.9141 0.4562 0.9441 0.7875
+0.6475
+0.7906
+Qwen2.5-7B
+0.9969 0.899 0.5031 0.9415 0.7425
+0.6925
+0.7959
+Qwen2.5-32B 0.9969 0.9268 0.5688 0.9149 0.7725
+0.6925
+0.8121
+Ours (o4-mini)
+1.0
+0.9343 0.6125 0.9415 0.8275
+0.765
+0.8468
+6. More ablations
+6.1. Analysis of using different models as the grader.
+Our method, i.e., RubricRL benefits from a high-quality
+grader (GPT-o4-mini) in RL: only when per-criterion judg-
+ments (e.g., counting, spatial relations, color) are accurate
+does the reward become informative enough to drive use-
+ful policy updates. A weak or noisy grader produces mis-
+aligned signals that the policy can overfit or exploit, thereby
+hurting stability and sample efficiency. By contrast, a reli-
+able grader yields low-noise, goal-aligned rewards that as-
+sign credit to the right behaviours and penalize specific er-
+rors, making RubricRL effective.
+To quantify this effect, we use different vision language
+models as the grader in RubricRL and report the results in
+Table 6. We choose the Qwen2.5-VL [4] family with vary-
+ing model sizes (3B, 7B, and 32B) to evaluate each rollout
+during training. We observe that the 32B grader clearly out-
+performs both the 3B and 7B variants, confirming that a
+stronger vision–language model provides more informative
+and reliable rewards overall. The 7B model shows a slight
+improvement over the 3B model, consistent with its higher
+capacity, while the 3B grader still offers useful signals on
+certain criteria (e.g., color and position). Nevertheless, both
+Qwen2.5-VL graders remain noticeably weaker than the
+32B grader while all Qwen2.5-VL graders still lag behind
+the o4-mini grader with a clear gap, which we attribute to
+o4-mini’s stronger instruction following, better multi-step
+reasoning, and tighter alignment with our rubric design, re-
+sulting in sharper, lower-noise per-criterion rewards and ul-
+timately better downstream generation quality.
+6.2. Analysis of the number of rollouts before and
+after dynamic sampling.
+We investigate how the oversampling budget and the post
+selection budget, i.e., how many rollouts we generate in the
+dynamic sampling versus how many we keep for reward
+computation, affect the model’s performance.
+For each
+prompt, we first generate N ′ candidate rollouts (N ′ > N)
+and then select N of them using our Hybrid dynamic sam-
+Table 7. Comparison of different numbers N ′ of oversampled roll-
+outs and different numbers N selected). In the main paper, the
+setting is N ′ = 16, N = 4.
+Number of N′ Single
+Two
+Count Colors Position Color Attr. Overall
+N = 4
+N′ = 8
+0.9906 0.9293 0.60 0.9362 0.795
+0.72
+0.8285
+N′ = 16
+1.0
+0.9343 0.6125 0.9415 0.8275
+0.765
+0.8468
+N′ = 32
+0.9906 0.9318 0.5875 0.9388 0.795
+0.755
+0.8331
+N′ = 64
+0.9938 0.9268 0.5844 0.9388 0.795
+0.765
+0.8340
+N = 8
+N′ = 16
+0.9969 0.9192 0.5781 0.9362 0.8025
+0.7575
+0.8317
+N′ = 32
+0.9906 0.9141 0.6094 0.9468 0.8225
+0.7775
+0.8435
+N′ = 64
+0.9875 0.9343 0.6094 0.9388 0.815
+0.735
+0.8367
+pling strategy; the selected N samples are used to compute
+the GRPO loss. All other hyperparameters remain fixed
+across settings.
+As shown in Table 7, increasing the oversampling bud-
+get (e.g., N ′ ∈{8, 16, 32, 64} with fixed N = 4) ini-
+tially improves performance by providing a larger candi-
+date pool from which the Hybrid selector can identify high-
+reward and diverse rollouts. However, the gains soon sat-
+urate because larger N ′ also introduces higher reward vari-
+ance, making advantage estimates noisier and hindering sta-
+ble optimization. A similar phenomenon appears when in-
+creasing the selection budget from N = 4 to N = 8: al-
+though more selected rollouts increase exploitation, incor-
+porating too many rollouts increases the likelihood of in-
+cluding low-quality generations, amplifying variance in the
+group-normalized advantage and diluting the learning sig-
+nal. Notably, configurations with a 4× oversampling ra-
+tio achieve comparable overall performance, indicating that
+maintaining this level of oversampling is sufficient for ob-
+taining high-quality candidates. Overall, both oversampling
+and selection are beneficial only up to a point—beyond that,
+the added diversity is outweighed by increased noise, re-
+vealing an inherent trade-off between exploration and opti-
+mization stability in GRPO-style training.
+7. Visualization
+In this section, we present additional generations from our
+RubricRL. As shown in Figure 6, our RubricRL produces
+high-fidelity images, and significantly improves the model’s
+ability to follow complex prompts. Additionally, we visual-
+ize the detailed key-criterion rubrics for each prompt, along
+with the correctness or incorrectness of each rollout under
+each criterion, as shown in Figure 7.
+
+In this whimsical digital illustration, a plump 
+guinea pig is rendered in a vibrant palette of 
+orange, cream, navy blue, and vivid purple. Its fur 
+is stylized with fine, dynamic strokes, while a 
+tuft of lime green hair sweeps back over its head, 
+adding playful contrast. The rodent's rosy pink 
+paws and ears peek out from the dense coat, and 
+its shiny black eye gleams with life. Set against a 
+muted olive-green background, the guinea pig's 
+rounded form and richly saturated colors create 
+a charming blend of realism and fantasy, evoking 
+both warmth and imaginative flair.
+A tiny red squirrel nestles into a soft mound of 
+fresh snow atop a moss-covered branch, its 
+bushy tail curled protectively around its body. 
+Fine snowflakes cling to the animal's warm fur 
+and the overhanging pine needles, while clusters 
+of frosted leaves and bright red berries add 
+subtle bursts of color to the muted winter 
+palette. The squirrel's delicate paws are tucked 
+close to its chest, and its eyes are gently closed 
+as if in a peaceful slumber. Soft light filters 
+through the bare branches above, casting a faint 
+glow across the scene and highlighting the 
+intricate textures of fur, bark, and frost in this 
+serene woodland tableau.
+In this intimate interior scene, a vintage wooden 
+frame mounted on a softly painted pastel pink 
+wall presents a two-panel impressionist landscape. 
+The upper panel reveals a sunlit sky dotted with 
+wispy clouds drifting above a canopy of fiery 
+orange blooms, while the lower panel immerses 
+the viewer in a lush garden scene, brimming with 
+vibrant petals and verdant foliage. To the left, a 
+gently draped textured pink curtain adds depth 
+and warmth, its subtle folds catching ambient 
+light. The juxtaposition of the blooming floral 
+artwork against the monochromatic wall and 
+curtain creates a harmonious composition, 
+inviting contemplation of color, texture, and the 
+serene beauty of nature rendered in soft, 
+painterly strokes.
+A charming log cabin emerges from a lush forest 
+clearing at the base of a majestic, snow-dusted 
+mountain. Framed by tall, slender pines, the cabin's 
+warm wooden walls and green-painted door and 
+window shutters stand in stark contrast to the cool 
+emerald hues of surrounding foliage. A gentle slope 
+leads down to a crystal-clear lake, its glassy 
+surface mirroring the cabin, scattered boulders, 
+and the dense tree line beyond. Soft golden light 
+filters through the evergreens, casting dappled 
+shadows across the grassy shore, while faint sparks 
+of embers or distant firelight glow within the 
+woods. The scene evokes serene solitude and an 
+intimate connection with nature, promising peaceful 
+retreats and quiet moments by the water's edge.
+Bathed in the warm hues of a surreal sunset, this 
+sleek Nike soccer cleat stands out with its 
+streamlined silhouette, textured upper, and 
+signature swoosh logo glowing softly against a 
+twilight sky. The vibrant orange and purple tones 
+blend seamlessly with the illuminated studs and 
+grass beneath, while a soft, ethereal light trace 
+curves over the shoe, suggesting movement and 
+energy. Every detail—from the fine ridges on the 
+surface to the subtle transition of colors—
+evokes a sense of high performance and cutting-
+edge design. This image highlights the fusion of 
+technology and artistry in modern sportswear, 
+capturing the spirit of competition and innovation.
+Arranged in a perfect three-by-three grid 
+against a smooth, muted tan surface, these 
+doughnuts each display unique artistic flair 
+through bright pastel glazes and playful toppings. 
+The top row features a yellow-glazed doughnut 
+with pastel drizzles, a golden doughnut adorned 
+with frosting dollops and multicolored sprinkles, 
+and a teal-glazed ring speckled with fine rainbow 
+sprinkles. The middle row presents a smooth 
+turquoise square-edged ring, a deeper teal 
+doughnut with glossy drizzle lines, and a 
+scalloped-edge doughnut topped with almond 
+pieces and candy-coated seeds. The bottom row 
+offers a dark charcoal doughnut with cream-
+colored stripes, a dripping aqua-glazed doughnut 
+blending round and square contours, and a pink-
+glazed classic ring covered in rainbow sprinkles, 
+creating a visually harmonious, mouthwatering 
+display.
+An inviting black ceramic bowl with subtle golden 
+speckles and a pale green rim holds a generous 
+serving of thick, tomato-based bean stew. Plump 
+yellow and beige beans are nestled in a rich 
+mahogany sauce flecked with tiny ribbons of red 
+pepper and minced onion. The bowl rests on a 
+sunlit mustard-yellow saucer, creating a warm 
+contrast against the cool teal backdrop. The 
+stew's glossy surface catches highlights that 
+accentuate its hearty texture, while the varied 
+sizes and shapes of the beans suggest a 
+comforting, homemade quality. Overall, the 
+composition emphasizes the rustic simplicity and 
+satisfying warmth of a classic bean stew ready to 
+be enjoyed.
+This intricate miniature tree sculpture features 
+a dark, twisted trunk and coiling roots that rise 
+from a sleek black ceramic pot. Tiny glass or 
+gemstone accents in vivid teal are nestled among 
+the branches, catching light and adding a 
+mystical quality. Delicate leaves in shades of 
+fresh green, soft blue, and warm orange form a 
+lush canopy, creating a stunning contrast against 
+the dark wood. The bonsai-inspired form 
+combines natural and fantastical elements, 
+evoking both ancient artistry and modern design. 
+Subtle variations in texture and color throughout 
+the branches draw the eye, making this piece a 
+captivating blend of sculpture and living-inspired 
+art.
+In this black-and-white portrait, a sophisticated 
+young woman gazes directly at the viewer with 
+piercing eyes and perfectly sculpted eyebrows. 
+Her skin appears porcelain smooth, subtly 
+illuminated by soft, diffuse lighting that 
+accentuates the contours of her high cheekbones 
+and the gentle curve of her jawline. A wide-
+brimmed, woven white hat frames her face, 
+casting a delicate shadow across her forehead, 
+while her short, wavy hair peeks out in artful 
+tousles. She wears a crisp white blouse adorned 
+with a lace-trimmed scarf tied at her shoulder, 
+adding a touch of vintage elegance. The 
+minimalist background ensures that every nuance 
+of her expression and attire remains in sharp 
+relief, creating a timeless, refined aesthetic.
+A rugged man stares directly at the viewer, his 
+striking blue eyes framed by a tousled fringe and 
+a medium-length beard flecked with gray. He 
+wears a dark, textured hood over a patterned 
+scarf, layers of coarse fabric that suggest a 
+harsh environment or long journey. A smudge of 
+black paint covers one cheek, blending into the 
+shadowed contours of his face and hinting at 
+camouflage or ritual markings. The low, dramatic 
+lighting emphasizes the depth of his gaze and 
+the rough details of his clothing, creating an 
+atmosphere of quiet determination and resilience.
+In this captivating image, a youthful face 
+emerges from a tapestry of vibrant botanical 
+elements, her brilliant cerulean eyes brimming 
+with quiet intensity. Soft freckles dust her nose 
+and cheeks, where delicate purple petals cluster 
+like living confetti, blurring the line between 
+human and floral. Lush green leaves frame her 
+forehead, intertwining with violet blossoms that 
+seem to grow organically from her skin. The 
+subtle interplay of light reveals the smooth, 
+porcelain-like texture of her complexion, while 
+shadows deepen the contours of her lips and 
+jawline. The overall composition evokes a sense 
+of ethereal beauty and fragile harmony between 
+nature and the human form.
+Soft pastel light bathes a tranquil mountain basin 
+in rosy hues as jagged, ivory peaks rise in the 
+distance above a placid river. Towering green 
+cliffs on either side slope gently toward the 
+water's edge, where clumps of grass and clusters 
+of vibrant pink blossoms peek from mossy banks. 
+A lone, gracefully curved tree stands sentinel on 
+a rocky outcrop, its russet foliage contrasting 
+against the peach sky. Wisps of cloud drift above 
+the horizon and a flock of tiny birds flutters 
+near the summit, lending a sense of quiet wonder 
+to this dreamlike landscape. The entire scene 
+exudes an otherworldly serenity, inviting 
+contemplation and awe.
+Figure 6. More qualitative results showcasing diverse generations produced by our RubricRL model. The samples exhibit strong prompt
+following, stylistic versatility, and detailed visual quality.
+
+"A tall, slender model wears a striking cream-colored ensemble that blends minimalist tailoring with high-tech details. The oversized jacket features 
+a structured high collar, broad sleeves, and large front pockets, while translucent vinyl-like panels at the shoulders reveal a hidden amber layer 
+beneath. Matching knee-length shorts continue the streamlined silhouette, accented by subtle piping that echoes the jacket's edges. The model's 
+sharp, close-cropped haircut and neutral makeup underscore the collection's futuristic aesthetic. Surrounding the figure are large, fluffy blossoms 
+in muted peach tones, their organic shapes contrasting gently with the outfit's clean lines and synthetic materials. The overall scene conveys an 
+intriguing dialogue between nature and innovation, presenting a vision of modern fashion that is at once bold, refined, and forward-looking."
+"Style and Prompt Consistency": "Verify that the image reflects a high-fashion editorial style with a futuristic aesthetic as described."
+"Aesthetic Quality": "Verify that the image is high resolution with realistic lighting, sharp focus, and no rendering artifacts."
+"Attribute Accuracy": "Verify that the ensemble is cream-colored with minimalist tailoring and high-tech details."
+"Attribute Accuracy": "Verify that the oversized jacket has a structured high collar, broad sleeves, and large front pockets as described."
+"Attribute Accuracy": "Verify translucent vinyl-like panels are present at the shoulders and reveal a discernible amber layer beneath."
+"Attribute Accuracy": "Verify that subtle piping echoes the edges of the jacket and shorts." 
+"Attribute Accuracy": "Verify that the model wears streamlined, knee-length shorts matching the jacket." 
+"Attribute Accuracy": "Verify that the model has a sharp, close-cropped haircut and neutral makeup." 
+"Attribute Accuracy": "Verify that the blossoms are large, fluffy, and rendered in muted peach tones." 
+"Scene Coherence": "Verify that the overall composition and lighting convey a balanced dialogue between nature and innovation."
+"Two fledgling owls, tiny and round, are nestled side by side within a bed of dried grasses and twigs. Their downy plumage, mottled with white 
+speckles atop a warm brown base, catches the sunlight filtering through tall meadow stalks. Each owl's large, luminous eyes, rimmed in gold and 
+encircled by soft facial discs, convey a look of curiosity as they peer outward. Delicate beaks, one black and one slightly paler, peek out from beneath 
+their fluffy feathers. Surrounding them, slender stems and dried blooms shape a tranquil refuge that cradles these siblings. The scene captures a 
+tender moment of close companionship, as they huddle together for warmth and security amidst the gentle glow of late afternoon."
+"Object Count Consistency": "Verify that exactly two fledgling owls are present." 
+"Object Placement and Spatial Reasoning": "Verify that the two owls are nestled side by side within a bed of dried grasses and twigs." 
+"Attribute Accuracy": "Verify that each owl's downy plumage is mottled with white speckles atop a warm brown base." 
+"Attribute Accuracy": "Verify that each owl has large luminous eyes rimmed in gold and encircled by soft facial discs." 
+"Attribute Accuracy": "Verify that one owl's beak is black and the other's is slightly paler." 
+"Action Accuracy": "Verify that the owls are huddled closely together to reflect companionship and warmth."
+"Scene Coherence": "Verify that the background includes dried grasses, twigs, slender stems, and dried blooms in a meadow setting." 
+"Object Placement and Spatial Reasoning": "Check that surrounding grasses, stems, and dried blooms gently cradle and frame the owls."
+"Scene Coherence": "Verify that warm sunlight filters through tall meadow stalks, producing a gentle late-afternoon glow and natural shadows."
+"Attribute Accuracy": "Confirm that the owls’ facial expressions convey curiosity as they peer outward."
+"Rendered with precise, soft graphite strokes, this monochrome portrait captures an elderly woman in a three-quarter profile. Her silvery hair, 
+styled in soft waves, peeks out beneath a brimmed hat adorned with a delicate ribbon. Greatly detailed lines trace the gentle contours of her 
+forehead, the subtle creases around her watchful eyes, and the graceful slope of her jawline. A pair of dangling pearl earrings catches the faintest 
+hint of light, complementing the ornate, leaf-like pendant that rests lightly against her collarbone. Her thoughtful expression, poised and dignified, 
+evokes a lifetime of insight and quiet resilience, while the tonal shading lends both depth and warmth to the composition."
+"Style and Prompt Consistency": "Verify that the image uses soft graphite strokes in a monochrome portrait and maintains the three-quarter profile 
+angle as described." 
+"Aesthetic Quality": "Verify that the final image is high quality, with clear lines, balanced contrast, smooth shading, and no rendering artifacts."
+"Monochrome Compliance": "Ensure the image uses only shades of gray without any unintended colors."
+"Style and Prompt Consistency": "Verify that the texture and line work convincingly replicate soft graphite pencil strokes."
+"Object Count Consistency": "Verify that exactly one elderly woman is depicted in the portrait."
+"Object Placement and Spatial Reasoning ": "Ensure the subject’s face is oriented in a three-quarter profile as specified."
+"Attribute Accuracy": "Confirm silvery hair styled in soft waves and a brimmed hat with a delicate ribbon match the prompt."
+"Attribute Accuracy": "Ensure detailed lines trace gentle forehead contours, subtle eye creases, jawline slope, and a thoughtful expression."
+"Attribute Accuracy": "Verify that the dangling pearl earrings and leaf-like pendant are clearly rendered and capture subtle highlights."
+"Scene Coherence": "Verify that tonal shading lends depth and warmth and that the light source is consistent across the portrait."
+"In this stylized retro landscape, a vast alpine lake stretches across the foreground, its glassy teal surface gently reflecting the rugged slopes of 
+sun-drenched mountains. Tall, dark pine trees crowd the shoreline, their silhouettes contrasting with the warm ochre and sienna tones of the rocky 
+ridges. Jagged peaks reach toward a sky patterned with soft, layered clouds in muted creams and greens, creating a serene yet dramatic vista. The 
+composition evokes a vintage travel poster aesthetic, emphasizing bold shapes and harmonious color blocks. It captures the timeless beauty of 
+mountainous wilderness, inviting viewers to imagine crisp air, silent waters, and the majesty of nature's grandeur."
+"Style and Prompt Consistency": "Ensure the image evokes a stylized retro vintage travel poster aesthetic with bold shapes and color blocks." 
+"Attribute Accuracy": "Verify that the lake’s surface is rendered in a glassy teal hue with clear reflections."
+"Attribute Accuracy": "Ensure mountain slopes display warm ochre and sienna tones as described."
+"Attribute Accuracy": "Check that the sky’s layered clouds are in muted creams and greens."
+"Attribute Accuracy": "Confirm tall pine trees appear as dark silhouettes with sharp outlines."
+"Object Placement and Spatial Reasoning": "Verify the lake is in the foreground, trees along the shoreline, and mountains reflected appropriately."
+"Scene Coherence": "Check that lighting, perspective, and environmental details form a cohesive alpine wilderness scene."
+"Aesthetic Quality": "Assess that the image is high quality with crisp lines, harmonious colors, and no distracting artifacts." 
+"Scene Coherence": "Evaluate the harmony between teal, ochre, sienna, and muted neutrals across the composition."
+"Scene Coherence": "Verify that shapes and color blocks are balanced and harmonious across the composition."
+"In the heart of a shadowy 1940s–inspired bar, a poised woman with softly curled hair and an elegant satin dress leans against the polished wooden 
+counter, a half-full wine glass delicately held in her slender fingers. Her thoughtful gaze drifts toward the glowing neon sign that reads "COELE," 
+casting a faint halo over the bottles lined up behind her. The low-hung lamps create pools of warm light, accentuating the shimmer of her chandelier 
+earrings and the subtle sparkle of her beaded necklace. An air of quiet contemplation wraps around her lacquered lips and arched brows, hinting at 
+untold stories beneath her composed facade. The entire scene, rendered in timeless black and white, evokes the moody elegance of film noir, where 
+every shadow whispers intrigue and every sip could mark the beginning of a secret moment."
+"OCR Alignment": "Ensure the glowing neon sign clearly reads “COELE” with correct letter shapes and placement."
+"Action Accuracy": "Verify the woman is leaning against the counter, holding a half-full wine glass in her slender fingers, and gazing thoughtfully at 
+the neon sign."
+"Object Count Consistency": "Verify that exactly one woman and one neon sign are present as specified in the prompt."
+"Object Count Consistency": "Confirm that exactly one half-full wine glass is present."
+"Object Placement and Spatial Reasoning": "Ensure the woman is positioned at the bar counter with bottles behind her and the neon sign casting 
+light above."
+"Attribute Accuracy": "Verify that the woman has softly curled hair, an elegant satin dress, chandelier earrings, a beaded necklace, lacquered lips, 
+and arched brows as described."
+"Scene Coherence": "Verify that the lighting creates pools of warm light and high-contrast shadows, evoking the moody elegance of film noir."
+"Style and Prompt Consistency": "Ensure the image is rendered in black and white with a film noir aesthetic and moody high-contrast lighting."
+"Aesthetic Quality": "Assess overall image quality for sharpness, realistic lighting pools, and absence of artifacts to evoke a 1940s ambiance."
+"Scene Coherence": "Verify that the bar environment—including wooden counter, low-hung lamps, and lined bottles—is cohesive and contextually 
+appropriate."
+Figure 7. Visualization of our rubric based reward. For each prompt, we generate evaluation key–criterion rubrics and score the generated
+rollout (image) per criteria.

@@ -1,0 +1,591 @@
+Feature-Modulated UFNO for Improved
+Prediction of Multiphase Flow in Porous Media
+Alhasan Abdellatif*1, Hannah P. Menke*1, Ahmed H. Elsheikh1, Florian Doster1,
+and Kamaljit Singh1
+1Institute of GeoEnergy Engineering (IGE), School of Energy, Geoscience, Infrastructure &
+Society, Heriot-Watt University, Edinburgh, EH14 4AS, UK
+Abstract
+The UNet-enhanced Fourier Neural Operator (UFNO) extends the
+Fourier Neural Operator (FNO) by incorporating a parallel UNet pathway,
+enabling the retention of both high- and low-frequency components. While
+UFNO improves predictive accuracy over FNO, it inefficiently treats scalar
+inputs (e.g., temperature, injection rate) as spatially distributed fields by
+duplicating their values across the domain. This forces the model to pro-
+cess redundant constant signals within the frequency domain. Addition-
+ally, its standard loss function does not account for spatial variations in
+error sensitivity, limiting performance in regions of high physical impor-
+tance. We introduce UFNO-FiLM, an enhanced architecture that incor-
+porates two key innovations. First, we decouple scalar inputs from spatial
+features using a Feature-wise Linear Modulation (FiLM) layer, allowing
+the model to modulate spatial feature maps without introducing constant
+signals into the Fourier transform. Second, we employ a spatially weighted
+loss function that prioritizes learning in critical regions. Our experiments
+on subsurface multiphase flow demonstrate a 21% reduction in gas satu-
+ration Mean Absolute Error (MAE) compared to UFNO, highlighting the
+effectiveness of our approach in improving predictive accuracy.
+1
+Introduction
+Accurate simulation of the movement of fluids in porous media underpins strate-
+gies for sustainable storage & extraction [1], environmental monitoring, and con-
+taminant transport [2], making these simulations indispensable in both industry
+and research. Traditionally, the simulation of subsurface fluid dynamics has re-
+lied on numerical solvers based on implicit formulations of partial differential
+equations (PDEs) [3, 4, 5]. These solvers discretize the computational domain
+*Corresponding authors: aa2448@hw.ac.uk and h.menke@hw.ac.uk
+1
+arXiv:2511.20543v1  [cs.LG]  25 Nov 2025
+
+into grids and apply finite difference, finite element, or finite volume methods
+to approximate the governing equations.
+While such methods have been successful in reproducing the evolution of
+pressure, saturation, and other key variables over time, they encounter sig-
+nificant challenges when applied to large, high-resolution grids. The compu-
+tational burden increases dramatically with grid refinement, making real-time
+decision-making and dynamic calibration (history matching) increasingly diffi-
+cult in practical field applications [6].
+In recent years, data-driven surrogate models have emerged as a promising
+alternative to traditional solvers [7, 8, 9, 10]. These models leverage machine
+learning techniques to learn the underlying mappings directly from data, poten-
+tially reducing the computational costs associated with high-fidelity numerical
+simulations. Among these approaches, the Fourier Neural Operator (FNO) has
+demonstrated notable advantages by learning mappings in the frequency do-
+main [11]. By performing a Fourier transform on the input fields, FNO is able
+to parameterize the low-frequency components of the solution, thereby achiev-
+ing inherent resolution independence. However, while FNO efficiently captures
+global system behaviors, it struggles to accurately reproduce high-frequency
+details that are critical for modeling localized phenomena.
+To overcome this limitation, the UNet-enhanced Fourier Neural Operator
+(UFNO) was developed by integrating a parallel UNet branch that is specifically
+designed to preserve high-frequency information [12]. This hybrid architecture
+combines the strengths of both FNO and UNet to provide a more comprehensive
+representation of the underlying dynamics. However, in the UFNO paper, scalar
+control inputs, such as injection rates or temperature, are treated by spatially
+duplicating them. This treatment forces the model to process constant signals
+in the frequency domain, which is not the most effective approach as this results
+in redundant computations and suboptimal learning of the underlying physics.
+Moreover, often the loss function applies a uniform penalty across the spatial
+domain, ignoring local variations in error sensitivity. This uniform approach
+may compromise model performance in areas where even small errors carry
+significant physical implications.
+In our work, we introduce UFNO-FiLM, an enhanced surrogate model that
+addresses these limitations through two key innovations.
+First, we decouple
+scalar inputs from spatial features by incorporating a Feature-wise Linear Mod-
+ulation (FiLM) layer [13].
+Rather than spatially duplicating scalar values,
+the FiLM layer processes these inputs via a learnable module that generates
+channel-specific modulation parameters.
+These parameters are then used to
+affine-transform the spatial feature maps, ensuring that constant scalar signals
+modulate the learned frequency-domain representations effectively without di-
+luting critical spatial features. Second, we adopt a spatially weighted loss func-
+tion during training, which assigns greater importance to regions of the domain
+that are crucial for capturing complex flow dynamics. By emphasizing errors in
+these key areas, the adaptive loss strategy guides the network to produce more
+accurate overall predictions.
+The remainder of this paper is organized as follows. In Section 2, we review
+2
+
+the related work in subsurface simulation and data-driven surrogate modeling.
+Section 3 details the UFNO-FiLM architecture and our proposed method. Sec-
+tion 4 presents a comprehensive evaluation of our model, and Section 5 concludes
+with a discussion of the results and potential directions for future research.
+2
+Related Work
+Surrogate modeling for subsurface flow has attracted significant attention over
+the past decades. In this section, we review prior work on both classical, physics-
+based surrogate models and modern data-driven approaches.
+Classical physics-based surrogate models
+Traditional approaches for sim-
+ulating subsurface flow rely on solving the governing nonlinear partial differ-
+ential equations using techniques such as finite difference, finite element, or
+finite volume methods [5].
+However, the high computational cost associated
+with fine-grid discretization and multiscale heterogeneity has motivated the
+development of reduced-order models (ROMs).
+Methods such as coarse-grid
+modeling and proper orthogonal decomposition (POD)-based ROM reduce the
+complexity by mapping full simulation trajectories into a low-dimensional space
+[14, 15, 16, 17, 18, 19, 20]. An alternative to analysing the state vectors and
+reducing the complexity of the problem with proper orthogonal decomposition
+methods is to simplify the physics of the problem to be solved beforehand. Ver-
+tically integrated modelling [21, 22, 23, 24, 25] is a powerful tool for geological
+carbon storage for general subsurface flow phenomena. While these techniques
+can substantially speed up computations, they often simplify critical aspects
+of the flow physics, which may lead to loss of fidelity in representing sharp
+interfaces and localized heterogeneities.
+Physics-informed and data-driven approaches
+Recent years have wit-
+nessed a surge in physics-informed machine learning methods aimed at inte-
+grating data-driven approaches with physical laws. For example, Fraces et al.
+[26] employ physics-informed neural networks (PINNs) combined with trans-
+fer learning and generative techniques to tackle two-phase immiscible transport
+problems. Similarly, Cai et al. [27] provide a comprehensive review of PINNs
+for inverse problems in fluid mechanics, although Fuks and Tchelepi [28] point
+out that PINN formulations may struggle to capture sharp saturation fronts
+inherent to nonlinear subsurface flow dynamics.
+Data-driven surrogate modeling
+Data-driven surrogate models bypass the
+need for explicit solution of the underlying PDEs by directly learning the map-
+ping from input parameters (e.g., permeability distributions, injection rates) to
+simulation outputs. Early approaches include the use of Gaussian processes for
+history matching in unconventional reservoirs [29] and polynomial chaos expan-
+sions for modeling channelized reservoirs [30]. Feed-forward neural networks
+have been applied for history matching [31], while convolutional architectures
+3
+
+such as U-Net [32] and deep convolutional encoder–decoder networks [7] have
+demonstrated promising results in capturing spatially distributed flow fields.
+Recurrent architectures like R-U-Net [33] have further advanced the capability
+to predict dynamic behaviors over multiple time steps. Recent advances in neu-
+ral operators, particularly Fourier Neural Operators (FNOs) [11], have shown
+remarkable capabilities in learning solution operators for parametric PDEs while
+maintaining resolution independence. The U-Net-enhanced Fourier Neural Op-
+erator (UFNO) [12] further combines Fourier-based global modeling with U-
+Net’s local feature extraction, demonstrating improved accuracy for subsurface
+flow predictions.
+Building on these developments, our work introduces a novel surrogate model
+that integrates the strengths of Fourier-based neural operators with modern
+deep learning techniques. Inspired by the success of the UNet-enhanced Fourier
+Neural Operator (UFNO) in capturing global system behavior [12], we fur-
+ther enhance the architecture by incorporating Feature-wise Linear Modulation
+(FiLM) layers. This design decouples scalar control inputs from spatial features,
+thereby reducing redundant computations and enabling more effective learning
+of both global dynamics and localized high-frequency details.
+3
+Methodology
+In this section, we present the methodology behind our proposed UFNO-FiLM
+model, which extends the UNet-enhanced Fourier Neural Operator (UFNO)
+through two key innovations. First, we integrate a Feature-wise Linear Mod-
+ulation (FiLM) layer to decouple scalar inputs from spatial features. Second,
+we introduce a spatially weighted loss function to prioritize error reduction in
+physically critical regions. Together, these modifications enable the model to
+more effectively capture the underlying physical processes and enhance overall
+predictive accuracy.
+In the original UFNO framework, scalar inputs (e.g., temperature, injection
+rate) are spatially duplicated to match the dimensionality of spatial fields, inad-
+vertently forcing the network to propagate constant signals through the Fourier
+layers. This results in unnecessary frequency-domain computation and can di-
+lute the learning of meaningful spatial patterns. To overcome this limitation,
+UFNO-FiLM incorporates a FiLM layer [13] that processes scalar inputs inde-
+pendently through a small learnable module and uses the resulting modulation
+parameters to condition the spatial feature maps. In addition, we introduce
+a spatially weighted loss function that assigns greater importance to regions
+known—based on physical insight—to be more sensitive or dynamically active.
+The following subsections describe these two components in detail.
+Feature-wise Linear Modulation (FiLM) Layer
+The FiLM layer is a mechanism originally introduced to perform feature-wise
+affine transformations on neural activations [13]. In our UFNO-FiLM model,
+4
+
+the FiLM layer serves the purpose of integrating scalar inputs into the network
+without compromising the inherent spatial characteristics learned by the main
+UFNO branch, as illustrated in Figure 1.
+Let us denote the spatial feature maps extracted from the UFNO branch as
+F ∈RH×W ×C, where H and W are the height and width of the feature maps,
+and C is the number of channels. Each channel represents a distinct feature
+extracted by the network, encoding different spatial patterns or activations. The
+scalar inputs, represented by a vector s ∈Rd (where d is the number of scalar
+features), are processed through a learnable transformation g that produces
+modulation parameters:
+(γ, β) = g(s),
+γ, β ∈RC.
+Here, g : Rd →RC is implemented as a multi-layer perceptron (MLP) and
+optimized jointly with the rest of the network. The role of the FiLM layer is to
+modulate each channel of the spatial features using the parameters γ and β via
+a channel-wise affine transformation:
+eFi,j,c = γc · Fi,j,c + βc,
+∀i ∈{1, . . . , H}, j ∈{1, . . . , W}, c ∈{1, . . . , C}.
+This operation effectively scales and shifts the spatial features according to
+the scalar input information. By isolating the scalar inputs from the Fourier do-
+main transformations, the FiLM layer prevents constant signals (which have no
+spatial variation) from unnecessarily influencing the learned frequency represen-
+tations. Instead, these inputs modulate the network’s activations in a controlled
+manner, enhancing the network’s expressiveness and capacity to model complex
+spatial-temporal dynamics.
+FiLM
+layer
+FiLM
+layer
+Input – spatial variable
+ 
+{𝑘𝑥, 𝑘𝑧, ϕ, perf}
+Figure 1: Architecture of the UFNO-FiLM model. The FiLM layer modulates
+spatial feature maps based on scalar inputs, while the spatially weighted loss
+improves predictive accuracy.
+Spatially Weighted Loss Function
+A critical challenge in training neural operators for physical simulations is en-
+suring that the model pays adequate attention to regions of the domain that are
+5
+
+of higher physical importance. In conventional loss functions, such as the Mean
+Squared Error (MSE), each spatial location contributes equally to the overall er-
+ror, which may not be ideal when certain areas exhibit more significant physical
+variations or are more critical for the overall system performance.
+To address this issue, we propose a spatially weighted loss function. For a
+given sample n, let yn(i, j) denote the ground truth at spatial location (i, j) and
+byn(i, j) denote the corresponding prediction. We assign a weight w(i, j) to each
+spatial location, where the weights are determined by prior domain knowledge.
+The spatially weighted MSE loss is then defined as:
+LSW = 1
+N
+N
+X
+n=1
+H
+X
+i=1
+W
+X
+j=1
+w(i, j) (yn(i, j) −byn(i, j))2 ,
+where N is the total number of training samples. The weighting function w(i, j)
+is designed to assign higher values to regions where accurate predictions are
+critical (e.g., areas with steep gradients or significant physical transitions) and
+lower values to regions where errors are less consequential.
+In practice, the weight map w can be derived from a variety of sources. For
+example, if physical simulations indicate that certain spatial regions are associ-
+ated with higher fluxes or stress concentrations, these regions can be manually
+assigned higher weights. Alternatively, an adaptive weighting strategy can be
+implemented where the weights are iteratively updated based on the model’s
+performance during training. In our experiments, the weight map w is com-
+puted as the per-pixel mean of the training images, which captures the statistical
+distribution of plume migration across the dataset. This approach emphasizes
+the regions where plume migration is most prominent, ensuring that these crit-
+ical areas are assigned higher importance during model training. The resulting
+weight map is then fixed and applied uniformly to all training samples.
+4
+Experiments and Results
+In this section, we present a comprehensive evaluation of our proposed UFNO-
+FiLM model on the subsurface simulation dataset used in [12].
+In this section, we present a comprehensive evaluation of the proposed
+UFNO-FiLM model using the benchmark multiphase-flow dataset introduced
+in the original UFNO studies [12].
+We compare UFNO-FiLM against base-
+line models across multiple metrics and scenarios to demonstrate the impact of
+FiLM-based conditioning and spatially weighted loss on predictive accuracy.
+Dataset Description
+We evaluate our model using the same dataset intro-
+duced in the original UFNO work [12]. The dataset consists of 5000 numerical
+simulations of two-phase (CO2–water) flow in a radially symmetric reservoir,
+generated using the ECLIPSE E300 compositional simulator. Each simulation
+models 30 years of CO2 injection under varying geological and operational con-
+ditions, including heterogeneous permeability and porosity fields, anisotropy
+6
+
+ratios, multiple injection rates, and reservoir thicknesses ranging from 12 m to
+200 m. For each realization, the dataset provides 24 temporal snapshots of the
+evolving gas saturation and pressure buildup fields defined on a two-dimensional
+radial grid.
+Following the experimental protocol of [12], the dataset is divided into 4000
+samples for training, 500 for validation, and 500 for testing. Consistent with the
+preprocessing in the UFNO framework, gas saturation fields are kept in their
+physical range [0, 1], whereas the pressure buildup fields are standardized to zero
+mean and unit variance prior to training. In addition, each simulation includes
+an active-cell mask that identifies valid reservoir regions; all loss computations
+are performed only over these active cells, ensuring that padded or inactive
+regions do not contribute to the error.
+The original UFNO loss formulation employs a relative Lp loss applied both
+to the field values and to their first radial derivatives, which helps capture sharp
+saturation fronts and pressure gradients near the injection well. Because our
+work focuses on modeling gas saturation evolution rather than pressure tran-
+sients, we do not include pressure-field predictions in our main results. Nonethe-
+less, we follow the same normalization and masking strategy for consistency and
+comparability with prior work.
+Training and Validation Curves.
+Figures 2a and 2b show the training and
+validation loss trajectories for the Attention UNet, FNO, UFNO, and UFNO-
+FiLM models. All models exhibit stable convergence during training, with their
+losses decreasing monotonically over the optimization epochs. While UFNO-
+FiLM displays a training-loss trend comparable to that of UFNO, it achieves the
+lowest validation error among all models. This superior validation performance
+indicates that the FiLM-based conditioning and spatially weighted loss enhance
+the model’s generalization capabilities and mitigate overfitting relative to the
+baseline architectures.
+(a) Training curves
+(b) Validation curves
+Figure 2: Comparison of training and validation curves for Attention UNet,
+FNO, UFNO, and UFNO-FiLM. (a) Training curves show the loss decreases
+over epochs.
+(b) Validation curves highlight that UFNO-FiLM achieves the
+lowest validation error.
+7
+
+Performance at different injection times.
+Figure 3 presents a comparison
+of the Mean Absolute Error (MAE) and the Structural Similarity Index Measure
+(SSIM) computed between the predictions and ground truth at various injection
+times. The left subfigure shows the MAE comparison for FNO, UFNO, and
+UFNO-FiLM, where UFNO-FiLM consistently achieves lower error values. The
+right subfigure displays the SSIM comparison, where higher SSIM values for
+UFNO-FiLM indicate improved preservation of spatial structures. Together,
+these results demonstrate that incorporating the FiLM layer into the UFNO
+framework enhances predictive accuracy and enhances the model’s ability to
+reproduce fine-scale spatial features.
+(a) MAE Comparison
+(b) SSIM Comparison
+Figure 3: Comparison of MAE and SSIM between predictions and ground truth
+at different injection times for FNO, UFNO, and UFNO-FiLM. The results show
+that UFNO-FiLM outperforms the other models by achieving lower MAE and
+higher SSIM values.
+Visual Comparison of Model Predictions.
+Figures 4 and 5 provide a vi-
+sual overview of model predictions across different injection times. Both figures
+are organized into five rows representing, from top to bottom: the ground truth,
+UFNO prediction, UFNO error, UFNO-FiLM prediction, and UFNO-FiLM er-
+ror. In these figures, the error maps clearly illustrate that the UFNO-FiLM
+model consistently reduces spatial errors compared to the standard UFNO ap-
+proach.
+Visual Comparison of Model Predictions.
+Figures 4 and 5 provide qual-
+itative comparisons between UFNO and UFNO-FiLM across multiple injection
+times.
+Each figure displays the ground truth saturation fields alongside the
+predictions and corresponding error maps for both models. The visualizations
+show that UFNO-FiLM consistently produces lower-magnitude and more spa-
+tially localized errors, indicating a clearer recovery of plume morphology and
+improved fidelity relative to UFNO.
+Ablation Study.
+Table 1 summarizes the performance of various models on
+the validation set. Our results indicate that the incorporation of the FiLM layer
+8
+
+Figure 4: Qualitative comparison of UFNO and UFNO-FiLM predictions at
+several injection times. Each block shows the ground truth, model predictions,
+and associated error maps. UFNO-FiLM exhibits visibly reduced errors and
+improved reconstruction of plume structure.
+and spatially weighted loss function yields consistent improvements across all
+metrics. In particular, the combination of the FiLM layer with the weighted loss
+(UFNO-FiLM & WLoss) achieves the best MAE (0.0022) and SSIM (0.9904),
+while the UFNO-FiLM model alone attains the lowest Relative Error (0.1451).
+These improvements highlight the effectiveness of decoupling scalar inputs from
+spatial features and adopting a loss function that accounts for local error sensi-
+tivity.
+Table 1 summarizes the validation performance of all models. The results
+show that both components of our approach, the FiLM-based conditioning and
+the spatially weighted loss, contribute to consistent improvements across the
+evaluated metrics. The combined model (UFNO-FiLM & WLoss) attains the
+lowest MAE (0.0022) and second best SSIM (0.9904), while UFNO-FiLM alone
+achieves the lowest relative error (0.1451). These findings demonstrate the ben-
+efit of decoupling scalar inputs from spatial features and incorporating spatially
+informed weighting to better capture localized flow dynamics.
+Table 1: Comparison of metrics across models on the validation set. The best
+value is in bold and the second best is underlined.
+Metric/Model
+FNO
+UFNO
+UFNO-FiLM
+UFNO-WLoss
+UFNO-FiLM & WLoss
+MAE
+0.0041
+0.0028
+0.0025
+0.0023
+0.0022
+SSIM
+0.9780
+0.9879
+0.9895
+0.9906
+0.9904
+Relative Error
+0.2120
+0.1598
+0.1451
+0.1583
+0.1510
+9
+
+Figure 5: Additional qualitative comparison on a different test sample. UFNO-
+FiLM again shows improved predictive accuracy and reduced spatial errors com-
+pared with UFNO.
+Training and validation performance with 10% data
+Figure 6 present
+the training and validation loss curves for models trained using only 10% of the
+available data. The validation performance highlights a notable advantage of
+the UFNO-FiLM model, which achieves the lowest validation error among all
+models. This suggests that the FiLM-based adaptation enhances the model’s
+generalization capabilities when data availability is limited. The improved per-
+formance in this data-scarce regime indicates that UFNO-FiLM can effectively
+capture relevant patterns with fewer training examples, making it a promising
+approach for scenarios where acquiring large-scale training data is challenging.
+(a) Training curves
+(b) Validation curves
+Figure 6: Comparison of training and validation curves for UFNO, and UFNO-
+FiLM on the gas saturation problem.
+Pressure build-up results
+Figure 7 shows the relative loss for UFNO and
+UFNO-FiLM on the training and validation sets for the pressure buildup pre-
+10
+
+diction task. In contrast to the saturation experiments, UFNO achieves lower
+losses than UFNO-FiLM on both sets, indicating a more efficient fit to the
+pressure data. The gap in validation performance, however, remains relatively
+small, suggesting that although FiLM does not provide a clear advantage in
+this setting, it also does not substantially degrade predictive capability. One
+possible explanation for this behavior is that pressure fields exhibit smoother
+spatial variations and stronger global coupling than saturation fields. Because
+the FiLM mechanism primarily modulates channel-wise spatial features using
+scalar inputs, it may offer limited benefit when scalar and spatial components
+are already tightly correlated, as is the case for pressure buildup. Additionally,
+the spatially weighted loss emphasizes regions with strong saturation dynamics,
+which may not align with the comparatively diffuse structure of pressure fields,
+leading to less effective learning for this target variable.
+(a) Training curves
+(b) Validation curves
+Figure 7: Comparison of training and validation curves for UFNO, and UFNO-
+FiLM on the pressure build-up problem.
+5
+Conclusion
+In this paper, we introduced UFNO-FiLM, a surrogate modeling framework
+that extends the UNet Fourier Neural Operator (UFNO) through two principal
+enhancements: a Feature-wise Linear Modulation (FiLM) layer and a spatially
+weighted loss function. The FiLM layer decouples scalar inputs from spatial fea-
+tures, enabling more expressive and physically meaningful modulation of feature
+maps while avoiding the redundant transformation of constant signals into the
+frequency domain. The spatially weighted loss further guides the model to pri-
+oritize regions of greater physical relevance, improving its ability to capture
+complex flow patterns.
+Our experimental results demonstrate that UFNO-FiLM achieves consistent
+improvements over existing neural-operator baselines, including a 21% reduction
+in validation error relative to UFNO. These gains are reflected across multiple
+metrics: Mean Absolute Error (MAE), Structural Similarity Index Measure
+(SSIM), and Relative Error, s well as in qualitative error visualizations. The
+11
+
+findings highlight the value of incorporating FiLM-based conditioning and spa-
+tially informed weighting into operator-learning architectures for subsurface flow
+prediction. While the method shows clear gains for gas saturation, its benefits
+did not extend to the smoother pressure fields in this setup, suggesting the
+method is most impactful for problems with high-frequency spatial dynamics
+Future work will explore extending these components to more complex multi-
+phase systems, three-dimensional domains, and large-scale reservoir simulation
+settings.
+Acknowledgements
+This work is funded by the Engineering and Physical Sciences Research Coun-
+cil’s ECO-AI Project grant (reference number EP/Y006143/1), with additional
+financial support from the PETRONAS Center of Excellence in Subsurface En-
+gineering and Energy Transition (PACESET).
+Competing interests
+The authors declare no competing interests.
+References
+[1] L. Zhang, L. Chen, R. Hu, and J. Cai, “Subsurface multiphase reactive
+flow in geologic co2 storage: Key impact factors and characterization ap-
+proaches,” Advances in Geo-Energy Research, vol. 6, no. 3, p. 179–180,
+2022.
+[2] A. Thom and T. Ricken, “Simulation of contaminant transport through the
+vadose zone: A continuum mechanical approach within the framework of
+the extended theory of porous media (etpm),” Water, vol. 15, no. 2, p. 343,
+2023.
+[3] F. M. Orr, Theory of gas injection processes. Tie-Line Publications, 2007.
+[4] L. Mohamed, M. Christie, and V. Demyanov, “Reservoir model history
+matching with particle swarms,” in SPE Oil and Gas India Conference
+and Exhibition, pp. SPE–129152, SPE, 2010.
+[5] A. H. Dogru, L. S. Fung, U. Middya, T. M. Al-Shaalan, T. Byer, H. Hoy,
+W. A. Hahn, N. Al-Zamel, J. Pita, K. Hemanthkumar, et al., “New frontiers
+in large scale reservoir simulation,” in SPE Reservoir Simulation Confer-
+ence, pp. SPE–142297, SPE, 2011.
+[6] C. Doughty, “Investigation of co2 plume behavior for a large-scale pilot
+test of geologic carbon storage in a saline formation,” Transport in porous
+media, vol. 82, pp. 49–76, 2010.
+12
+
+[7] Y. Zhu and N. Zabaras, “Bayesian deep convolutional encoder–decoder
+networks for surrogate modeling and uncertainty quantification,” Journal
+of Computational Physics, vol. 366, pp. 415–447, 2018.
+[8] Z. Zhong, A. Y. Sun, and H. Jeong, “Predicting co2 plume migration in
+heterogeneous formations using conditional deep convolutional generative
+adversarial network,” Water Resources Research, vol. 55, no. 7, pp. 5830–
+5851, 2019.
+[9] K. Wang, Y. Chen, M. Mehana, N. Lubbers, K. C. Bennett, Q. Kang, H. S.
+Viswanathan, and T. C. Germann, “A physics-informed and hierarchically
+regularized data-driven model for predicting fluid flow through porous me-
+dia,” Journal of Computational Physics, vol. 443, p. 110526, 2021.
+[10] G. Wen, C. Hay, and S. M. Benson, “Ccsnet: a deep learning modeling
+suite for co2 storage,” Advances in Water Resources, vol. 155, p. 104009,
+2021.
+[11] Z. Li, K. Kovachki, K. Azizzadenesheli, B. Liu, K. Bhattacharya, A. Stu-
+art, and A. Anandkumar, “Fourier neural operator for parametric partial
+differential equations,” arXiv preprint arXiv:2010.08895, 2020.
+[12] G. Wen, Z. Li, K. Azizzadenesheli, A. Anandkumar, and S. M. Benson,
+“U-fno—an enhanced fourier neural operator-based deep-learning model
+for multiphase flow,” Advances in Water Resources, vol. 163, p. 104180,
+2022.
+[13] E. Perez, F. Strub, H. De Vries, V. Dumoulin, and A. Courville, “Film:
+Visual reasoning with a general conditioning layer,” in Proceedings of the
+AAAI conference on artificial intelligence, vol. 32, 2018.
+[14] M. A. Cardoso, L. J. Durlofsky, and P. Sarma, “Development and applica-
+tion of reduced-order modeling procedures for subsurface flow simulation,”
+International Journal for Numerical Methods in Engineering, vol. 77, no. 9,
+pp. 1322–1350, 2009.
+[15] J. He, P. Sarma, and L. J. Durlofsky, “Reduced-order flow modeling and
+geological parameterization for ensemble-based data assimilation,” Com-
+puters & Geosciences, vol. 55, pp. 54–69, 2013.
+[16] J. He and L. J. Durlofsky, “Reduced-order modeling for compositional sim-
+ulation by use of trajectory piecewise linearization,” SPE Journal, vol. 19,
+no. 05, pp. 858–872, 2014.
+[17] Z. L. Jin and L. J. Durlofsky, “Reduced-order modeling of co2 storage oper-
+ations,” International Journal of Greenhouse Gas Control, vol. 68, pp. 49–
+67, 2018.
+13
+
+[18] J. F. Van Doren, R. Markovinovi´c, and J.-D. Jansen, “Reduced-order op-
+timal control of water flooding using proper orthogonal decomposition,”
+Computational Geosciences, vol. 10, no. 1, pp. 137–158, 2006.
+[19] C. Xiao, O. Leeuwenburgh, H. X. Lin, and A. Heemink, “Non-intrusive
+subdomain pod-tpwl for reservoir history matching,” Computational Geo-
+sciences, vol. 23, no. 3, pp. 537–565, 2019.
+[20] Y. Yang, M. Ghasemi, E. Gildin, Y. Efendiev, and V. Calo, “Fast multi-
+scale reservoir simulations with pod-deim model reduction,” SPE Journal,
+vol. 21, no. 06, pp. 2141–2154, 2016.
+[21] I. de Jonge-Anderson,
+H. Ramachandran,
+U. Nicholson,
+S. Geiger,
+A. Widyanita, and F. Doster, “Determining co2 storage efficiency within a
+saline aquifer using reduced complexity models,” Advances in Geo-Energy
+Research, vol. 13, no. 1, pp. 22–31, 2024.
+[22] K. W. Bandilla, B. Guo, and M. A. Celia, “A guideline for appropriate
+application of vertically-integrated modeling approaches for geologic car-
+bon storage modeling,” International Journal of Greenhouse Gas Control,
+vol. 91, p. 102808, 2019.
+[23] H. M. Nilsen, K.-A. Lie, and O. Andersen, “Fully-implicit simulation of
+vertical-equilibrium models with hysteresis and capillary fringe,” Compu-
+tational Geosciences, vol. 20, pp. 49–67, 2016.
+[24] J. M. Nordbotten and M. A. Celia, Geological storage of CO2: modeling
+approaches for large-scale simulation. John Wiley & Sons, 2011.
+[25] H. Class, A. Ebigbo, R. Helmig, H. K. Dahle, J. M. Nordbotten, M. A.
+Celia, P. Audigane, M. Darcis, J. Ennis-King, Y. Fan, et al., “A benchmark
+study on problems related to co 2 storage in geologic formations: summary
+and discussion of the results,” Computational geosciences, vol. 13, pp. 409–
+434, 2009.
+[26] C. G. Fraces, A. Papaioannou, and H. Tchelepi, “Physics informed deep
+learning for transport in porous media. buckley leverett problem,” arXiv
+preprint arXiv:2001.05172, 2020.
+[27] S. Cai, Z. Mao, Z. Wang, M. Yin, and G. E. Karniadakis, “Physics-informed
+neural networks (PINNs) for fluid mechanics: A review,” Acta Mechanica
+Sinica, pp. 1–12, 2022.
+[28] O. Fuks and H. A. Tchelepi, “Limitations of physics informed machine
+learning for nonlinear two-phase transport in porous media,” Journal of
+Machine Learning for Modeling and Computing, vol. 1, no. 1, 2020.
+[29] H. Hamdi, I. Couckuyt, M. C. Sousa, and T. Dhaene, “Gaussian pro-
+cesses for history-matching: application to an unconventional gas reser-
+voir,” Computational Geosciences, vol. 21, no. 2, pp. 267–287, 2017.
+14
+
+[30] H. Bazargan, M. Christie, A. H. Elsheikh, and M. Ahmadi, “Surrogate
+accelerated sampling of reservoir models with complex structures using
+sparse polynomial chaos expansion,” Advances in Water Resources, vol. 86,
+pp. 385–399, 2015.
+[31] L. A. N. Costa, C. Maschio, and D. J. Schiozer, “Application of artifi-
+cial neural networks in a history matching process,” Journal of Petroleum
+Science and Engineering, vol. 123, pp. 30–45, 2014.
+[32] ¨O. C¸i¸cek, A. Abdulkadir, S. S. Lienkamp, T. Brox, and O. Ronneberger, “3d
+u-net: learning dense volumetric segmentation from sparse annotation,”
+in International Conference on Medical Image Computing and Computer-
+Assisted Intervention, pp. 424–432, Springer, 2016.
+[33] M. Tang, Y. Liu, and L. J. Durlofsky, “A deep-learning-based surrogate
+model for data assimilation in dynamic subsurface flow problems,” Journal
+of Computational Physics, vol. 413, p. 109456, 2020.
+15

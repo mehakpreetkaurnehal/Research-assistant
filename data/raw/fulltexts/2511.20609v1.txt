@@ -1,0 +1,2490 @@
+Under review as a conference paper
+ADAPTIVE HOPFIELD NETWORK: RETHINKING SIMI-
+LARITIES IN ASSOCIATIVE MEMORY
+Shurong Wang1,2, Yuqi Pan2, Zhuoyang Shen1, Meng Zhang1,
+Hongwei Wang1∗& Guoqi Li2∗
+1 Zhejiang University
+2 Institute of Automation, Chinese Academy of Sciences
+shurong.22@intl.zju.edu.cn
+hongweiwang@intl.zju.edu.cn
+guoqi.li@ia.ac.cn
+ABSTRACT
+Associative memory models are content-addressable memory systems fundamen-
+tal to biological intelligence and are notable for their high interpretability. How-
+ever, existing models evaluate the quality of retrieval based on proximity, which
+cannot guarantee that the retrieved pattern has the strongest association with the
+query, failing correctness. We reframe this problem by proposing that a query
+is a generative variant of a stored memory pattern, and define a variant distri-
+bution to model this subtle context-dependent generative process. Consequently,
+correct retrieval should return the memory pattern with the maximum a posteri-
+ori probability of being the query’s origin. This perspective reveals that an ideal
+similarity measure should approximate the likelihood of each stored pattern gen-
+erating the query in accordance with variant distribution, which is impossible for
+fixed and pre-defined similarities used by existing associative memories. To this
+end, we develop adaptive similarity, a novel mechanism that learns to approximate
+this insightful but unknown likelihood from samples drawn from context, aiming
+for correct retrieval. We theoretically prove that our proposed adaptive similar-
+ity achieves optimal correct retrieval under three canonical and widely applicable
+types of variants: noisy, masked, and biased. We integrate this mechanism into
+a novel adaptive Hopfield network (A-Hop), and empirical results show that it
+achieves state-of-the-art performance across diverse tasks, including memory re-
+trieval, tabular classification, image classification, and multiple instance learning.
+Our code is publicly available here.
+1
+INTRODUCTION
+Associative memory represents a fundamental paradigm in information storage and retrieval, func-
+tioning as a content-addressable memory system that serves as a cornerstone of biological intelli-
+gence (Miyashita, 1988; Pearce & Bouton, 2001), particularly in the hippocampus and neocortex
+(Wang et al., 2014). Unlike conventional computer memory, which retrieves data based on a spe-
+cific address, associative memory retrieves stored patterns by using a partial or noisy variant of the
+pattern itself as a cue. This memory paradigm enables robust pattern completion, error correction,
+and fault-tolerant information processing, making it a compelling model for both understanding
+biological cognition and developing artificial intelligence systems.
+The computational modeling of associative memory has evolved dramatically since its inception.
+Hopfield (1982) pioneered this field by introducing a recurrent neural network, dubbed Hopfield
+network, capable of storing and retrieving patterns through energy minimization. Subsequent work
+(Krotov & Hopfield, 2016; Demircigil et al., 2017) extended memory capacity using a steeper energy
+function. A pivotal breakthrough came with the establishment of a profound connection between
+the modern Hopfield network and the attention mechanism (Vaswani et al., 2017), achieved by
+using the softmax(·) function to further separate memories (Ramsauer et al., 2021). This insight not
+*Corresponding authors.
+1
+arXiv:2511.20609v1  [cs.LG]  25 Nov 2025
+
+Under review as a conference paper
+only unified two previously disparate fields but also inspired further refinements that strengthened
+associative memory’s performance from different perspectives (Millidge et al., 2022; Hu et al., 2023;
+Wu et al., 2024a), and broadened applications to tasks like clustering (Saha et al., 2023), time series
+prediction (Wu et al., 2024b), and more (Krotov et al., 2025).
+Despite these significant advances, a critical and unaddressed limitation pervades the literature: the
+absence of a rigorous framework for assessing retrieval accuracy. Current evaluations typically rely
+on proximity-based criteria, such as ϵ-retrieval (Ramsauer et al., 2021; Hu et al., 2023; Wu et al.,
+2024a; Hu et al., 2024; 2025), which deem retrieval successful if the retrieved pattern is sufficiently
+close to a certain stored pattern. However, proximity does not establish correctness; ensuring the
+retrieval is a valid memory provides no guarantee that it is the correct one, that is, the one that has the
+strongest association with the query. This oversight leads to a universal reliance on fixed, pre-defined
+similarity measures (e.g., inner product or Euclidean distance between two memory patterns). Such
+one-size-fits-all metrics fail to capture the nuanced, context-dependent association, or similarity,
+between the query and the stored memory patterns. For instance, the word click is semantically
+similar to tap, phonetically similar to clique, and orthographically to clock — illustrating that an
+appropriate notion of similarity is context and task dependent while fixed metrics cannot adapt to
+such context, nor can they certify correctness.
+Our central premise is that correctness is inherently generative: a query x emerges as a variant of
+an unknown stored pattern ξk. So, to properly define and achieve correct retrieval, we should model
+the generative process that transforms a stored pattern ξk into a query x. To this end, we encapsulate
+the context-dependent and application-related subtleness into a probabilistic framework centered
+on the concept of variant distribution V(ξ1···N), a joint distribution over stored patterns ξ1···N and
+memory variants x, where the likelihood pV(ξk, x) captures how probable that we observe ξk and it
+coincidentally generates x for (ξk, x) ∼V(ξ1···N). Under this view, a correct retrieval returns the
+memory pattern ξk maximizing the posterior pV(ξk|x), that is, the likelihood of x originates from
+ξk when observed x as query. With further decomposition, maximizing pV(ξk|x) is equivalent to
+maximizing pV(x|ξk), i.e., given ξk, how probable would it generates x as its variant. The correct
+retrieval is therefore finding the pattern ξk that is most likely to produce x by varianting itself. This
+perspective yields an insight that optimal correct retrieval can be achieved by forcing the similarity
+measure to mimic the behavior of pV(x|ξk).
+However, it is not possible to derive the variant distribution V(x1···N) and the likelihood pV(x|ξk)
+on most occasions. Thus, we need to reconstruct the unknown by mining deeply from what is
+observable: the query x, stored patterns ξ1···N, and samples matching the context that vaguely
+describe V. Building on these motivations, we introduce an adaptive similarity framework that learns
+to approximate pV(x|ξk) from samples observed from the variant distribution, without assuming the
+variant type is known a priori. Integrating this novel similarity measure into the Hopfield energy
+yields an adaptive Hopfield network that strives for correct retrieval by capturing the underlying
+variant distribution. Our key contributions are as follows:
+• We introduce the variant distribution to model how queries emerge from stored patterns,
+and formalize correct retrieval as a robust and meaningful criterion for evaluating the
+theoretical accuracy of associative memories.
+• We propose adaptive similarity derived from this framework and prove its optimality for
+three canonical and widely applicable types of memory variants: noisy, masked, and biased.
+• We build a novel adaptive Hopfield network (A-Hop) that incorporates learnable adaptive
+similarity, achieving state-of-the-art performance among computational associative mem-
+ories on tasks including memory retrieval, tabular classification, image classification, and
+multiple instance learning.
+2
+BACKGROUND
+We consider an associative memory that stores N memory patterns denoted by the memory matrix
+Ξ = [ξ1; ξ2; · · · ; ξN] ∈Rd×N, where each column vector ξi ∈Rd represents a memory pattern.
+Given a memory variant (query) x ∈Rd, the goal is to retrieve the stored memory that is most
+associated with it. For simplicity, we denote [n] ≜{k ∈Z | 1 ≤k ≤n}, and ξ ∈Ξ means ξ is one
+of the column vectors of the memory matrix Ξ. Appendix A.1 contains a collection of notations.
+2
+
+Under review as a conference paper
+2.1
+HOPFIELD NETWORKS
+Table 1: Summary of all Hopfield network by components; Hop (Hopfield, 1982), D-Hop (Krotov
+& Hopfield, 2016), E-Hop (Demircigil et al., 2017), M-Hop (Ramsauer et al., 2021), U-Hop (Mil-
+lidge et al., 2022), S-Hop (Hu et al., 2023), K-Hop (Wu et al., 2024a), and A-Hop (Ours).
+Model
+sim(ξ, x)
+sep(s)
+mod(ξ)
+E(x)
+Hop (Original)
+ξ⊤x
+s
+ξ
+−1
+2x⊤ΞΞ⊤x
+D-Hop (Dense)
+ξ⊤x
+sk
+ξ
+−(1⊤Ξ⊤x)k+1
+E-Hop (Exponential)
+ξ⊤x
+exp(s)
+ξ
+−exp(1⊤Ξ⊤x)
+M-Hop (Modern)
+ξ⊤x
+softmax(s)
+ξ
+1
+2x⊤x −lse(Ξ⊤x)
+U-Hop (Universal)
+−∥ξ −x∥1
+arg max(s)
+ξ
+/
+S-Hop (Sparse)
+ξ⊤x
+sparsemax(s)
+ξ
+1
+2x⊤x −Ψ⋆
+2(β Ξ⊤x)
+K-Hop (Kernelized)
+ξ⊤x
+α−entmax(s)
+Φ⊤Φξ
+1
+2x⊤Φ⊤Φx −Ψ⋆
+α(β Ξ⊤Φ⊤Φx)
+A-Hop (Adaptive)
+w⊤ftpt(ξ, x)
+multiple
+ξ
+−lse(s(Ξ, x))
+Hopfield network is a line of associative memory that retrieves the most relevant stored memory
+through a similarity-based matching process. The original Hopfield network (Hopfield, 1982) uses
+d binary neurons σ ∈{−1, +1}d to represent the states of the memory system that is limited to
+storage of binary values. For retrieving, the model sets the query as the initial state (i.e., σ(0) = x),
+and updates one or more neuron(s) iteratively through the following dynamics until convergence:
+σ(t+1)
+i
+= sgn
+
+
+d
+X
+j=1
+Ti,jσ(t)
+j
+
+,
+where Ti,j =
+N
+X
+k=1
+ξk,i · ξk,j.
+A vectorized retrieval dynamics exists when updating all neurons simultaneously in one iteration:
+σ(t+1) = sgn
+
+Ξ Ξ⊤σ(t)
+.
+Years later, Krotov & Hopfield (2016) improves the memory capacity of Hopfield network from
+O(d) to O(2d/2) when storing random samples. They adopted higher-order polynomial or expo-
+nential function (Demircigil et al., 2017) to distinguish each stored memory to alleviate the fuzzy
+memory problem: σ(t+1) = sgn
+ Ξ(Ξ⊤σ(t))k
+or σ(t+1) = sgn
+ Ξ exp(Ξ⊤σ(t))
+
+.
+This concept has evolved significantly and was extended to memories with continuous value. Mod-
+ern Hopfield networks abstract retrieval as a one-iteration update (Ramsauer et al., 2021), and their
+retrieval dynamics T (x) can be unified under a three-step procedure (Millidge et al., 2022):
+(1) Similarity [s = sim(Ξ, x)]: The query x is compared against all stored patterns ξ1···N using the
+similarity function sim(·, ·), obtaining a vector of similarity scores s ∈RN, where sk = sim(ξk, x).
+(2) Separation [p = sep(s)]: The similarity scores (logits) s are transformed by a separation
+function sep(·) into a probability distribution p. The separation function sharpens the scores and
+emphasizes patterns with high similarity.
+(3) Readout [y = Ξ p]: The final retrieved pattern y is computed as a weighted combination of
+stored memory patterns, using the weights p provided by the separation function.
+Combining each step gives the unified retrieval dynamics:
+y = T (x) = Ξ sep(sim(Ξ, x)).
+Concretely, Ramsauer et al. (2021) proposed using softmax(·) function as the separation function,
+which further enlarges the memory capacity and draws a tight connection between associative mem-
+ory and attention mechanism, with the retrieval dynamics being T (x) = Ξ softmax
+ Ξ⊤x
+
+. Later,
+Hu et al. (2023) proposed sparse Hopfield network substituting softmax(·) with sparsemax(·), for
+inducing sparse selection while retaining differentiability. More recently, Wu et al. (2024a) at-
+tempted to store memory patterns in a kernel space with greater separation among patterns, giving
+rise to adding a new modulation step to the existing three-step unified framework. For clarity, we
+use the modulation function mod(·) to describes how memory patterns are stored or pre-trained for
+better retrieval and larger capacity. So, it broadens the unified framework to:
+y = Ξ sep(sim(mod(Ξ), x)).
+3
+
+Under review as a conference paper
+The kernelized Hopfield network (Wu et al., 2024a) adopted mod(Ξ) = Φ⊤Φ Ξ for a learnable
+matrix Φ ∈RDΦ×d, that projects memory patterns into a kernel space with the retrieval dynamics
+being T (x) = Ξ sep((Φ Ξ)⊤(Φ x)) = Ξ sep((Φ⊤Φ Ξ)⊤x). The kernel Φ is trained to minimize
+a separation loss defined on Ξ, so that the expected Euclidean distance between any two memory
+patterns is maximized. A succeeding work (Hu et al., 2024) uses spherical codes to find the optimal
+kernel Ξ that maximizes the capacity of the kernelized Hopfield network.
+Furthermore, the energy-based view is a defining feature of Hopfield networks: memory retrieval
+can be viewed as descending on a energy landscape (a Lyapunov function) E(·) whose minima
+coincide with stored patterns (or their modulated version). Formally, the retrieval dynamics T (x)
+and the corresponding energy function E(x) are jointly and carefully designed such that each update
+monotonically decreases the energy (i.e., E(T (x)) < E(x)), and successful retrieval occurs when
+being sufficiently close to a generalized fixed point near a specific memory pattern ξk ∈Ξ (i.e.,
+∥T (x)−ξk∥2 < ϵ). This principled linkage between dynamics and energy ensures convergence and
+provides a powerful interpretable model of memory retrieving for Hopfield networks. Connecting
+to the previous unified framework, the separation function decides the direction of the retrieval
+dynamics T (·), and the modulation function reshapes the geometry of the energy landscape E(·),
+and we organize all existing Hopfield networks’ components and energy function in Table 1.
+However, across existing formulations, the energy and retrieval dynamics are anchored to a fixed,
+task-agonistic similarity measure (typically the dot product). Apart from that, the energy and dy-
+namics are solely determined by stored memories Ξ that overlook the nature of the subtle, nuanced,
+context-specific association between queries and memories required for “correct” retrieval. This
+fundamental gap motivates our work: to refine the energy and retrieval dynamics around a learnable,
+adaptive similarity measure while preserving the precious interpretability of Hopfield networks.
+3
+METHODS
+In this section, we first establish a rigorous probabilistic framework to define correct retrieval, elim-
+inating limitations of conventional proximity-based metrics (Section 3.1). To make this concept
+practical, we develop the similarity footprint (Section 3.2), a multi-scale descriptor measuring asso-
+ciation between queries and memory patterns, and use it to learn an adaptive similarity integrated
+into Adaptive Hopfield Network (A-Hop) that achieves optimal correct retrieval for noisy, masked,
+and biased types of variants, and has a decreasing, convergent, and bounded energy (Section 3.3).
+3.1
+VARIANT DISTRIBUTION AND CORRECT RETRIEVAL
+Conventional analyses of associative memory (Ramsauer et al., 2021; Hu et al., 2023; Wu et al.,
+2024a; Hu et al., 2024) mostly focus on ϵ-retrieval:
+Definition 1: ϵ-retrieval (Hu et al., 2023; Wu et al., 2024a; Hu et al., 2025)
+Given a query x ∈Rd and the retrieval result y ∈Rd given by the memory system, a memory
+pattern ξ ∈Ξ is said to be ϵ-retrieved if ∥y −ξ∥2 ≤ϵ.
+While ϵ-retrieval ensures the retrieval result y lies near a certain stored memory pattern ξk ∈Ξ,
+it provides no guarantee that ξk is the most appropriate match for query x. The query x may
+have stronger associations with a different pattern ξj (j ̸= k), denoting that ξj could be the more
+appropriate match for x. This identifies that proximity alone is an insufficient proxy for correctness.
+To address this limitation, we use a probability distribution to model the generative process of the
+query x. We posit that a query x is not an arbitrary vector but a variant of a specific stored mem-
+ory pattern ξ ∈Ξ generated by a context-dependent process. We formalize this via the variant
+distribution, which models the relation of memory patterns ξ ∈Ξ and queries x ∈Rd as variants:
+Definition 2: Variant distribution
+A variant distribution V(Ξ) is a joint distribution over pair (ξ, x) ∈Ξ × Rd where ξ ∈Ξ is one
+of the stored memory patterns and x ∈Rd is an arbitrary query.
+For (ξ, x) ∼V(Ξ), the probability density function pV(Ξ)(ξ, x) (or pV(ξ, x) when unambiguous)
+measures the likelihood of observing ξ and x at the same time.
+4
+
+Under review as a conference paper
+Additionally, the posterior pV(ξ|x) represents the likelihood that query x originates from memory
+pattern x, and the likelihood pV(x|ξ) models how probable that ξ generates x. This leads to a
+rigorous definition of the context-dependent correct retrieval:
+Definition 3: Correct retrieval
+A query x is said to be correctly retrieved under V(Ξ), if the retrieval result y satisfies that:
+arg min
+ξ′∈Ξ
+{∥y −ξ′∥2} = arg max
+ξ′∈Ξ
+{pV(ξ′|x)} .
+(1)
+In Equation 1, the left-hand side identifies the closest memory pattern to the retrieval result y (given
+by the memory system), while the right-hand side is ground truth (the most probable origin of query
+x given by variant distribution V(Ξ)). Thus, intuitively, correct retrieval requires that the closest
+memory pattern coincides with ground truth. With further derivation,
+arg max
+ξ′∈Ξ
+{pV(ξ′|x)} = arg max
+ξ′∈Ξ
+
+pV(x|ξ′) · pV(ξ′)
+pV(x)
+
+= arg max
+ξ′∈Ξ
+{pV(x|ξ′) · pV(ξ′)}.
+(2)
+This reformulation is necessary as modeling the likelihood pV(x|ξ) is more tractable than directly
+estimating the posterior pV(ξ|x). The likelihood pV(x|ξ) is conditioned on a single, finite, known
+memory ξ, while the posterior pV(ξ|x) requires estimating a complex function that maps the entire
+query space Rd to a discrete distribution over Ξ. Given that the prior pV(ξ) is typically uniform or
+can be easily estimated from samples, the central challenge of achieving correct retrieval reduces to
+accurately modeling pV(x|ξ), in other words, how probable does x generate ξ under V(Ξ)? With
+this in hand, it is possible to model three canonical and common variant types rigorously:
+Definition 4: Noisy variant
+A query x is a noisy variant if it is generated by adding Gaussian noise to a certain memory
+pattern ξ ∈Ξ. Formally, (x −ξ) ∼N(0, diag(σ)) holds for (ξ, x) ∼Vnoisy(Ξ), where diag(v)
+transform vector bv to a diagonal matrix. The likelihood of noisy variant is:
+pVnoisy(x|ξ) =
+1
+(2π)d/2|diag(σ)|1/2 exp
+
+−1
+2(x −ξ)⊤diag(σ)−1(x −ξ)
+
+.
+Noisy variants have been widely studied (Krotov & Hopfield, 2016; Hu et al., 2023; Wu et al.,
+2024a), and it occurs in scenarios such as sensor noise. Specially, under isotropy σ = σ1, the
+respective likelihood reduces to: pVnoisy(x|ξ) = (2πσ)−d/2 exp(−∥x −ξ∥2
+2 / 2σ).
+Definition 5: Masked variant
+A masked variant of a memory pattern ξ ∈Ξ is obtained by changing values in each dimension
+with probability pmasked to numbers generated by G. The likelihood of masked variant is:
+pVmasked(x|ξ) = exp
+ 
+ln pmasked ·
+d
+X
+i=1
+[1 −δ(xi −ξi)]
+!
+×
+d
+Y
+i=1
+pG(xi)[1−δ(xi−ξi)].
+Masked variants arise in real-world scenarios such as information loss during transmission, the same
+object appearing in different background, and more.
+Definition 6: Biased variant
+Adding a global bias to memory patterns gives the biased variant. Formally, x −ξ = d holds for
+(ξ, x) ∼Vbiased(Ξ) and a constant vector d ∈Rd. The likelihood of biased variant:
+pVbiased(x|ξ) = δ
+"
+d −
+d
+X
+i=1
+δ(xi −ξi −di)
+#
+,
+where δ(x) =
+1
+x = 0
+0
+otherwise .
+Biased variants occur as a systematic difference, such as changes in light conditions or use of filters.
+We visualize the conditional probability density function pV(x|ξ) in Fig. 1, providing intuition akin
+to an electron cloud, with a memory pattern ξ as the atom nucleus and its variants as orbiting
+electrons. A direct observation is that pV(x|ξ) varies significantly across contexts, and may be an-
+alytically intractable. For instance, even though visualizing the noisy + masked variant (Fig. 1 (d))
+is possible by composing these two operations, deriving its likelihood pV(x|ξ) is analytically cum-
+5
+
+Under review as a conference paper
+noisy
+masked
+biased
+noisy + masked
+(a)
+(b)
+(c)
+(d)
+Figure 1: Visualization of probability density function pV(x|ξ) for noisy, masked, biased, and noisy
++ masked variants. Darker regions indicate larger pV(x|ξ), and the central dark point represents ξ.
+bersome. Consequently, although V(Ξ) is a principled tool to link queries with memory patterns,
+it poses two challenges for correct retrieval: (1) the underlying variant type is generally unknown a
+priori; and (2) the resulting variant distribution V(Ξ) can be too complex to model explicitly.
+3.2
+SIMILARITY FOOTPRINT
+In the previous section, we established correct retrieval as selecting the pattern that maximizes
+pV(x|ξ). While pV(x|ξ) constitutes the ideal similarity metric (guiding the memory system to
+return arg maxξ∈Ξ{pV(ξ|x)} as per Eq. 2), it is often analytically intractable or unknown in real-
+world scenarios. To address this, we propose mining richer evidence from observable quantities
+to construct a tractable surrogate that mimics the selectivity of the true likelihood pV(x|ξ). We
+introduce similarity footprint, a multi-scale descriptor capturing the relation between query x and
+memory patterns Ξ in multiple subspaces. By replacing proximity-based scalar similarity measure
+(e.g., ξ⊤x) with a structured descriptor (the footprint, a d-dimensional vector), the model could form
+a accurate and robust decision based on the comprehensive subspatial evidence.
+We begin with a base similarity measure (e.g., dot product ξ⊤x or negative squared Euclidean
+distance −∥ξ −x∥2
+2), and define the k-optimal similarity between ξ and x:
+sim(k)(ξ, x) ≜
+max
+D⊆[d],|D|=k {sim(ξD, xD)} ,
+where vD ≜
+vD1, vD2, · · · , vD|D|
+⊤.
+Here, vD is a sub-vector of v containing only the elements corresponding to indices in D. In-
+tuitively, simk(ξ, x) quantifies the largest alignment between x and ξ within their most consistent
+k-dimensional subspace. This formulation inherently filters out corruption or pure noise by focusing
+on the most informative dimensions while ignoring outliers. Consequently, we define the similarity
+footprint as the vector aggregating all k-optimal similarity sim(k)(·, ·) across all dimensionalities:
+ftptsim(ξ, x) ≜
+
+sim(1)(ξ, x), sim(2)(ξ, x), · · · , sim(d)(ξ, x)
+⊤
+This vector serves as the rich multi-scale descriptor of the subspatial relation between ξ and x,
+offering more evidence for measuring similarity. While a na¨ıve computation of the footprint requires
+evaluating all 2d −1 subspaces (impractical), an efficient computation is possible for decomposable
+similarity measures (Eq. 6). For such measures, whose result is the aggregation of similaritiy in
+each dimension, the footprint computation reduces to O(d log d) via sorting, and the procedure is
+visualized in Fig. 2 bottom part. Let q be the dimension-wise similarity vector (Fig. 2 (1)), where
+qi = sim(ξi, xi) for i ∈[d], and let ˜q be the vector q sorted in decreasing order (Fig. 2 (2)). Then,
+the similarity footprint can be calculated as (Fig.2 (3)):
+ftptsim(ξ, x) = U˜q.
+(3)
+where U is the lower-left triangular matrix of 1d×d, (i.e., Ui,j = 1 if 1 ≤j ≤i ≤d, and Ui,j = 0
+otherwise). Such simplication is valid because sim(k)(ξ, x) = Pk
+i=1 ˜qi holds for decomposable
+similarity measures, and a rigorous proof is provided in Appendix A.2 Theorem 3.
+3.3
+ADAPTIVE SIMILARITY AND ADAPTIVE HOPFIELD NETWORK
+The similarity footprint provides a structured, multi-scale descriptor of the association between a
+query x and a memory pattern ξ. To exploit these subspatial evidences and construct a similarity
+6
+
+Under review as a conference paper
+Adaptive Similarity
+Stored Patterns
+Separation
+Input
+Output
+Adaptive Similarity
+Separation
+Input
+Pattern
+Loss
+Generator
+Pattern
+Input
+Similarity Score
+Adaptive Hopﬁeld Network
+Adaptive Similarity Training
+Adaptive
+Similarity
+Footprint
+Footprint
+Sort
+Sort
+Pointwise Similarity
+Pointwise Similarity
+Adaptive Similarity
+Proximity-Based Similarity
+Input/Query
+Stored Pattern
+Pointwise Similarity
+Sort
+(decreasing)
+Footprint
+Similarity Score
+(Ours)
+Similarity Score
+(Conventional)
+Stored Pattern
+Vector Form
+Values all positive
+Values all negative
+value
+dimension
+value
+dimension
+(1)
+(2)
+(3)
+(4)
+(a)
+(b)
+(c)
+(d)
+(e)
+Figure 2: Top: The architecture of adaptive Hopfield network (a), the training procedure for adap-
+tive similarity (b) and its design choice (c). Bottom: An illustrative example of memory retrieval
+procedure involving two 16 × 16 image patterns and one query. The conventional proximitiy-based
+similarity (d) fails to retrieve the correct pattern while the adaptive similarity (e) succeeds.
+measure that adapts to the underlying variant distribution V(Ξ), we introduce adaptive similarity as
+a learnable linear combination of the footprint elements: ssim(ξ, x) = w⊤ftptsim(ξ, x) = w⊤U˜q
+(Fig. 2 (4)), for some weight vector w ∈Rd. This formulation enables the model to learn the relative
+importance of subspaces with varing sizes and pay extra attention on more informative subspaces.
+As an example, for masked variants, the model could assign larger weights to the first m terms in the
+footprint, effectively ignoring the “tail” of the footprint containing corrupted dimensions, whereas
+for noisy variants, it might distribute weights to larger subspaces for a global view.
+To further enhance the model’s expressiveness, we combine footprints of multiple base similarities
+(Fig. 2 (c)) and derive the final similarity function s(ξ, x) and its vectorized form s(ξ, x):
+s(ξ, x) =
+B
+X
+k=1
+βk · w⊤
+k ftptsimk(ξ, x)
+and
+s(Ξ, x) = [s(ξ1, x), s(ξ2, x), · · · , s(ξN, x)]⊤,
+where β1···B are learnable scalars weighting B different base similarities. In this work, we adopt two
+simple and common base similarities: dis(ξ, x) = −∥ξ−x∥2
+2 and dot(ξ, x) = ξ⊤x. Integrating this
+adaptive similarity into the unified associative memory framework (Table 1) using the softmax(·) as
+the separation function yields Adaptive Hopfield Network (A-Hop, complete achitecure illustrated
+in Fig. 2 (a)(c)), and its retrieval dynamics can be formulated as:
+y = T (x) = Ξ sep(s(Ξ, x)) = Ξ softmax(βdis · sdis(Ξ, x) + βdot · sdot(Ξ, x)) .
+(4)
+The parameters w’s and β’s are optimized to align the model’s behavior with the underlying variant
+distribution. We construct a training set by drawing samples from the variant distribution V(Ξ) and
+minimize the discrepancy loss between the model’s predicted likelihood ˜pV(x|ξk) ≜sep(s(Ξ, x))k
+and the underlying ground-truth likelihood pV(x|ξk) (see Fig. 2 (b) for training procedure):
+L(Ξ, V) = E(ξk,x)∼V(Ξ) [−log ˜pV(x|ξk)] .
+(5)
+For an intuitive understanding of adaptive similarity, we demonstrates a comprehensive procedure
+of calculating the adaptive similarity score between ξ1, ξ2 (pixel art of two chicken) and the query
+7
+
+Under review as a conference paper
+x (a noisy + masked variant of ξ1) in the botton part of Fig. 2. While rigorously, Adaptive Hopfield
+Network satisfies the following theoretical properties.
+Definition 7: Optimal correct retrieval
+We say a retrieval dynamics T (x) achieves optimal correct retrieval under V(Ξ), if for any
+(ξ, x) ∼V(Ξ) it achieves correct retrieval for query x.
+Theorem 1: A-Hop’s retrieval dynamics for optimal correct retrieval
+The following retrieval dynamics adopted by A-Hop achieves optimal correct retrieval for noisy,
+masked, and biased variants, with a careful design of s(Ξ, x):
+y = T (x) = Ξ sep(s(Ξ, x))
+First, A-Hop is theoretically capable of achieving optimal correct retrieval (its retrieval is always
+correct, see Definition 7) for noisy, masked, and biased variants when weights w’s and the adaptive
+similarity s(Ξ, x) are ideally configured. A complete walk-through and proof to Theorem 1 is pre-
+sented in Appendix A.2.1. While optimal correct retrieval is not always guaranteed for continuous
+and parameter-efficient adaptive similarity (e.g., s(ξ, x) = w⊤ftpt(ξ, x)), we discuss the tradeoff
+between learnability and optimality in Appendix A.3.1, and show that learnable adaptive similarity
+can attain high retrieval accuracy with large probability. Together, this theoretical analysis and the
+empirical results in ablation study (Appendix A.4.6) validate the design choice illustrated in Fig 2.
+Theorem 2: A-Hop’s decreasing, convergent, and bounded energy function
+Energy E(x) will be monotonically decreasing, convergent, bounded from below, for isotropic
+noisy, and biased variants, if the following energy is used:
+E(x) = −lse (s(Ξ, x))
+Second, consist with existing associative memories, A-Hop guarantees a monotonically decreasing,
+convergent energy that can be bounded from below by −ln n−∥b∥2
+2/4 during the iterative retrieval
+process. Notably, among the models compared in Table 1, this is the only energy function that can be
+bounded from below even as ∥ξ∥2 →∞, which guarantees robust retrieval behavior for unbounded
+patterns. A detailed proof to Theorem 2 is provided in Appendix A.2.2.
+4
+EXPERIMENTS
+We evaluate the effectiveness of A-Hop on tasks including memory retrieval, tabular classification,
+image classification, and multiple instance learning, demonstrating that A-Hop achieves state-of-
+the-art performance on these tasks. A further ablation study validates our design choice of adap-
+tive similarity (Appendix A.4.6). Due to space constraints, full descriptions of baselines, metrics,
+datasets, and implementation details are moved to Appendix A.4.
+4.1
+MEMORY RETRIEVAL
+(.8 .0 .0)
+(.6 .3 .0)
+1.0
+0.8
+0.6
+0.4
+0.2
+(.5 .5 .0)
+(.3 .6 .0)
+(.0 .8 .0)
+(.0 .6 .3)
+(.0 .5 .5)
+(.0 .5 .5)
+(.0 .0 .8)
+(.3 .0 .6)
+(.6 .0 .3)
+(.5 .0 .5)
+mask
+noise
+bias
+mask
+noise
+bias
+A-Hop
+K-Hop
+M-Hop
+U-Hop
+MLP
+2048 patterns
+4096 patterns
+plot settings
+(a)
+(b)
+(c)
+Figure 3: Retrieval accuracy (↑) of 64-dimensional synthetic memory patterns.
+Prior work on Hopfield networks primarily assesses retrieval accuracy (Definition 9) under two set-
+tings: (1) masking half of the dimensions and (2) adding Gaussian noise. However, real-world data
+8
+
+Under review as a conference paper
+often exhibits compounded corruptions. To rigorously stress-test retrieval correctness, we intro-
+duce mixed variant parameterized by a triplet (dmask, dnoise, dbias) ∈[0, 1]3 that controls the intensity
+(difficulty) of masking, noise, and bias, respectively (see Appendix A.4.3 for formal definitions).
+We evaluate A-Hop against existing baselines on 12 mixed variant settings (listed in Fig. 3 (c)) with
+64-dimensional (d = 64) random memory patterns at scales of N = 2048 (Fig. 3 (a)) and N = 4096
+(Fig. 3 (b)). Furthermore, Table 2 details performance under high-intensity corruption using either
+N = 2048, d = 64 synthetic vectors or N = 2048, d = 784 MNIST digits as memory patterns.
+As shown in Fig. 3, existing associtive memory baselines perform poorly when masking or bias is
+involved as their retrieval accuracy is less than 20% on the mask axis and less than 60% on the bias
+axis while A-Hop achieve near-perfect accuracy on these settings. It is because fixed proximity-
+based similarity cannot distinguish between irrelevance and missing data (masking), and have no
+chance to learn the biased term added to memory pattern. In Table 2, baselines exhibit a sharp per-
+formance collapse as difficulty increases, while A-Hop maintains robust retrieval gaining a 6% to
+20% accuracy increment. A-Hop’s adaptive similarity creates a noticable empirical gap by achiev-
+ing higher retrieval accuracy and lower retrieval error in all settings. This highlights its robustness
+and impressive adaptability to align similarity to the underlying variant distribution through learning.
+Table 2: Retrieval accuracy (↑) and error (↓) between models. Each cell contains the mean accuracy
+or error with standard deviation in a smaller font. Results of the best-performing model are bolded.
+Difficulty d stands for mixed variant setting with (dmask, dnoise, dbias) = (d, d, d).
+Dataset
+Synthetic
+MNIST
+Difficulty
+0.4
+0.5
+0.6
+0.7
+Metrics
+Accuracy
+Error
+Accuracy
+Error
+Accuracy
+Error
+Accuracy
+Error
+M-Hop
+.520±.02
+.176±.01
+.195±.03
+.300±.01
+.875±.01
+.013±.00
+.661±.02
+.068±.00
+U-Hop
+.260±.04
+.417±.02
+.059±.01
+.554±.01
+.540±.03
+.143±.01
+.176±.02
+.347±.01
+K-Hop
+.487±.03
+.295±.02
+.177±.02
+.764±.02
+.764±.02
+.064±.01
+.526±.02
+.164±.01
+K2-Hop1
+.521±.02
+.176±.01
+.195±.02
+.298±.01
+.878±.01
+.013±.00
+.660±.01
+.068±.01
+A-Hop
+.724±.02
+.106±.01
+.360±.02
+.227±.01
+.939±.01
+.005±.00
+.849±.01
+.015±.01
+4.2
+TABULAR CLASSIFICATION
+Table 3: Predictive performance (↑) between models on tabular data. Each cell contains mean accu-
+racy or AUC-ROC score with standard deviation in a smaller font. Results of the best-performing
+associative memory are bolded, and the best other model is underlined.
+Model
+Adult
+Bank
+Vaccine
+Purchase
+Heart
+M-Hop
+.8080±.001
+.9085±.003
+.7975±.001
+.8822±.001
+.6325±.002
+K2-Hop
+.8172±.003
+.9092±.002
+.7971±.003
+.8825±.002
+.6473±.002
+A-Hop
+.8634±.002
+.9139±.002
+.8042±.002
+.9007±.001
+.7315±.002
+Extra Trees
+.8595±.004
+.9098±.003
+.7932±.002
+.8916±.002
+.7175±.003
+Random Forest
+.8592±.002
+.9132±.003
+.7918±.003
+.9002±.001
+.7254±.002
+AdaBoost
+.8597±.003
+.9094±.001
+.8011±.002
+.8865±.001
+.7294±.001
+XGBoost
+.8640±.002
+.9152±.003
+.8034±.002
+.9032±.003
+.7370±.003
+We investigate the utility of A-Hop as a memory-based classifier for tabular data (setup details
+in Appendix A.4.4). Unlike image data, tabular data is often heterogeneous, containing a mix of
+continuous and categorical features with varying scales and sparsity.
+A-Hop consistently outperforms all competing associative memories (M-Hop and K2-Hop),
+demonstrating that adaptive similarity is crucial for handling the mixed feature types inherent in
+tabular data. Furthermore, A-Hop surpasses standard deep learning baselines (Extra Trees, Ran-
+dom Forest, AdaBoost) in all datasets. While the gradient-boosting method XGBoost (Chen &
+Guestrin, 2016) retains a slight edge on 4 out of 5 datasets, A-Hop significantly narrows the gap
+1K2-Hop is K-Hop whose kernel is optmized by Equation 5, rather than the original separation loss.
+9
+
+Under review as a conference paper
+compared to prior approaches, offering a differentiable alternative to tree ensembles. Significantly,
+the performance gap between A-Hop and other memory models is widest on the Adult (about 5%)
+and Heart (about 10%) datasets. We hypothesize that these datasets contain more subtle and com-
+plicated variant distribution where the “informativeness” of dimensions varies per query, but the
+results suggest that A-Hop can find the most informative subspace more accurately and can retrieve
+relevant prototypes even when the distance in the original feature space is misleading.
+4.3
+IMAGE CLASSIFICATION AND MULTIPLE INSTANCE LEARNING
+Table 4: Classification accuracy (↑) of each model on images, and AUC-ROC score (↑) of each
+model in multiple instance learning task. Each cell contains accuracy or AUC-ROC score with
+standard deviation in a smaller font. Results of the best-performing associative memory are bolded.
+Image Classification
+Multiple Instance Learning
+Dataset
+CIFAR10
+CIFAR100
+Tiny
+ImageNet
+Dataset
+Tiger
+Fox
+Elephant
+UCSB
+M-Hop
+.5123±.003
+.2464±.003
+.1095±.002
+M-Hop
+.8924±.005
+.6327±.013
+.9344±.009
+.8815±.022
+K-Hop
+.5489±.002
+.2877±.002
+.1164±.002
+S-Hop
+.8923±.006
+.6433±.015
+.9365±.002
+.8794±.024
+A-Hop
+.5637±.003
+.2904±.002
+.1213±.002
+A-Hop
+.9030±.007
+.6753±.013
+.9451±.004
+.8935±.022
+Following established protocols, we evaluate A-Hop on image classification (Wu et al., 2024a) and
+multiple instance learning (Ramsauer et al., 2021; Hu et al., 2023) by integrating it as a component
+within larger and more complicated deep neural network architectures (i.e., HopfieldLayer,
+HopfieldPooling (Ramsauer et al., 2021)).
+As shown in Table 4, A-Hop consistently achieves the highest accuracy and AUC-ROC scores
+among all Hopfield variants. This demonstrates that the benefits of adaptive similarity extend to
+complex, high-dimensional data and can enhance the performance of sophisticated models like the
+Vision Transformer. While the absolute gains in these complex architectures are naturally smaller
+than in isolated retrieval tasks (as the associative memory is not the core mechanism), the consis-
+tent superiority of A-Hop validates its role as a general-purpose, robust associative memory layer.
+Nevertheless, the consistent improvement confirms that optimizing the similarity measure remains
+a valuable factor for enhancing performance in complex deep learning systems.
+4.4
+ABLATION STUDY
+Due to page limit, the ablation study is moved to Appendix A.4.6.
+5
+CONCLUSION
+We reframe associative memory retrieval as a problem of correct retrieval under a task- and context-
+dependent variant distribution, motivating a similarity measure that approximates the likelihood that
+a stored pattern generated the query. Building on this principle, we propose adaptive similarity,
+prove its optimality for three canonical variant families (noisy, masked, biased), and instantiate
+it in a new adaptive Hopfield network, A-Hop. This perspective clarifies why fixed, pre-defined
+similarities are inherently limited: they cannot align to the prevailing variant distribution and thus
+struggle to guarantee correctness, whereas adaptivity enables the model to capture the underlying
+variant distribution through samples, shifting towards correctness.
+Empirically, A-Hop establishes state-of-the-art performance among Hopfield networks across mem-
+ory retrieval, tabular classification, image classification, and multiple instance learning. The gains
+are most pronounced under mixed variant settings where adaptive similarity maintains impressively
+high retrieval accuracy and low error. In downstream tasks, A-Hop consistently improves over
+prior Hopfield variants. Ultimately, adaptive similarity is a key principle for advancing associative
+memories, paving the way for more powerful and resilient memory systems.
+10
+
+Under review as a conference paper
+6
+ETHICS STATEMENT
+This work adheres to the ICLR Code of Ethics. In this study, no human subjects or animal ex-
+perimentation was involved. All datasets used were sourced in compliance with relevant usage
+guidelines, ensuring no violation of privacy. We have taken care to avoid any biases or discrimi-
+natory outcomes in our research process. No personally identifiable information was used, and no
+experiments were conducted that could raise privacy or security concerns. We are committed to
+maintaining transparency and integrity throughout the research process.
+7
+REPRODUCIBILITY STATEMENT
+Code We provide code to help understand this work, and is publicly available at: https://
+anonymous.4open.science/r/Adaptive-Hopfield-Network-C137/.
+Datasets All datasets are either included in the repo, or a description for how to download and
+preprocess the dataset is provided. All datasets are public and raise no ethical concerns.
+Hyperparameters All parameters of our proposed framework are in Appendix A.4.
+Environment Details of our experimental setups are provided in Appendix A.4.
+Random Seed we do not set a random seed specifically for all random behavior, with the random
+seed determined PyTorch.
+8
+LLM USAGE
+Large Language Models (LLMs) were used to aid polishing of the manuscript. Specifically, we used
+an LLM to assist in refining the language, improving readability, and ensuring clarity in various
+sections of the paper. The model helped with tasks such as sentence rephrasing, grammar checking,
+and enhancing the overall flow of the text.
+It is important to note that the LLM was not involved in the ideation, research methodology, or
+experimental design. All research concepts, ideas, and analyses were developed and conducted by
+the authors. The contributions of the LLM were solely focused on improving the linguistic quality
+of the paper, with no involvement in the scientific content or data analysis.
+REFERENCES
+Barry Becker and Ronny Kohavi.
+Adult.
+UCI Machine Learning Repository, 1996.
+DOI:
+https://doi.org/10.24432/C5XW20.
+Leo Breiman. Random Forests. Machine Learning, 45(1):5–32, October 2001. ISSN 1573-0565.
+doi: 10.1023/A:1010933404324. URL https://link.springer.com/article/10.
+1023/A:1010933404324. Company: Springer Distributor: Springer Institution: Springer
+Label: Springer Number: 1 Publisher: Kluwer Academic Publishers.
+P. Bull, I. Slavitt, and G. Lipstein. Harnessing the power of the crowd to increase capacity for data
+science in the social sector. In ICML #Data4Good Workshop, 2016.
+Tianqi Chen and Carlos Guestrin.
+Xgboost: A scalable tree boosting system.
+In Proceedings
+of the 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Min-
+ing, KDD ’16, pp. 785–794, New York, NY, USA, 2016. Association for Computing Machin-
+ery. ISBN 9781450342322. doi: 10.1145/2939672.2939785. URL https://doi.org/10.
+1145/2939672.2939785.
+Mete Demircigil, Judith Heusel, Matthias L¨owe, Sven Upgang, and Franck Vermet. On a Model of
+Associative Memory with Huge Storage Capacity. Journal of Statistical Physics, 168(2):288–
+299, July 2017. ISSN 1572-9613. doi: 10.1007/s10955-017-1806-y. URL https://doi.
+org/10.1007/s10955-017-1806-y.
+Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li, and Li Fei-Fei. Imagenet: A large-scale hi-
+erarchical image database. In 2009 IEEE conference on computer vision and pattern recognition,
+pp. 248–255. Ieee, 2009.
+11
+
+Under review as a conference paper
+DrivenData.
+Flu shot learning:
+Predict h1n1 and seasonal flu vaccines.
+https://www.
+drivendata.org/competitions/66/flu-shot-learning/data/, 2019.
+Yoav Freund and Robert E. Schapire.
+A Decision-Theoretic Generalization of On-Line Learn-
+ing and an Application to Boosting.
+Journal of Computer and System Sciences, 55(1):119–
+139, 1997.
+ISSN 0022-0000.
+doi: https://doi.org/10.1006/jcss.1997.1504.
+URL https:
+//www.sciencedirect.com/science/article/pii/S002200009791504X.
+Elisa Drelie Gelasca, Jiyun Byun, Boguslaw Obara, and B.S. Manjunath. Evaluation and benchmark
+for biological image segmentation. In IEEE International Conference on Image Processing, Oct
+2008. URL http://vision.ece.ucsb.edu/publications/elisa_ICIP08.pdf.
+Pierre Geurts, Damien Ernst, and Louis Wehenkel. Extremely randomized trees. Machine Learning,
+63(1):3–42, April 2006. ISSN 1573-0565. doi: 10.1007/s10994-006-6226-1. URL https:
+//doi.org/10.1007/s10994-006-6226-1.
+J. J. Hopfield. Neural networks and physical systems with emergent collective computational abil-
+ities. Proceedings of the National Academy of Sciences, 79(8):2554–2558, April 1982. doi:
+10.1073/pnas.79.8.2554.
+URL https://www.pnas.org/doi/abs/10.1073/pnas.
+79.8.2554. Publisher: Proceedings of the National Academy of Sciences.
+Jerry Yao-Chieh Hu, Donglin Yang, Dennis Wu, Chenwei Xu, Bo-Yu Chen, and Han Liu. On Sparse
+Modern Hopfield Model. Advances in Neural Information Processing Systems, 36:27594–27608,
+December 2023. URL https://proceedings.neurips.cc/paper_files/paper/
+2023/hash/57bc0a850255e2041341bf74c7e2b9fa-Abstract-Conference.
+html.
+Jerry Yao-Chieh Hu, Dennis Wu, and Han Liu.
+Provably Optimal Memory Capacity for
+Modern Hopfield
+Models: Transformer-Compatible Dense Associative Memories as Spher-
+ical Codes.
+Advances in Neural Information Processing Systems, 37:70693–70729, Decem-
+ber 2024. URL https://proceedings.neurips.cc/paper_files/paper/2024/
+hash/82846e19e6d42ebfd4ace4361def29ae-Abstract-Conference.html.
+Jerry Yao-Chieh Hu, Bo-Yu Chen, Dennis Wu, Feng Ruan, and Han Liu. Nonparametric modern
+hopfield models. In Forty-second International Conference on Machine Learning, 2025. URL
+https://openreview.net/forum?id=xkV3uCQtJm.
+Kaggle.
+Cardiovascular disease dataset.
+https://www.kaggle.com/datasets/
+sulianova/cardiovascular-disease-dataset, 2018.
+Alex Krizhevsky, Geoffrey Hinton, et al. Learning multiple layers of features from tiny images.
+2009.
+Dmitry Krotov and John J. Hopfield.
+Dense Associative Memory for Pattern Recognition.
+In Advances in Neural Information Processing Systems, volume 29. Curran Associates,
+Inc., 2016.
+URL https://papers.nips.cc/paper_files/paper/2016/hash/
+eaae339c4d89fc102edd9dbdb6a28915-Abstract.html.
+Dmitry Krotov, Benjamin Hoover, Parikshit Ram, and Bao Pham. Modern Methods in Associative
+Memory, July 2025. URL http://arxiv.org/abs/2507.06211. arXiv:2507.06211 [cs].
+Gert Lanckriet and Bharath K. Sriperumbudur.
+On the Convergence of the Concave-Convex
+Procedure.
+In Advances in Neural Information Processing Systems, volume 22. Curran As-
+sociates, Inc., 2009. URL https://papers.nips.cc/paper_files/paper/2009/
+hash/8b5040a8a5baf3e0e67386c2e3a9b903-Abstract.html.
+Yann Le and Xuan Yang. Tiny imagenet visual recognition challenge. CS 231N, 7(7):3, 2015.
+Beren Millidge, Tommaso Salvatori, Yuhang Song, Thomas Lukasiewicz, and Rafal Bogacz. Uni-
+versal Hopfield Networks: A General Framework for Single-Shot Associative Memory Models.
+In Proceedings of the 39th International Conference on Machine Learning, pp. 15561–15583.
+PMLR, June 2022. URL https://proceedings.mlr.press/v162/millidge22a.
+html. ISSN: 2640-3498.
+12
+
+Under review as a conference paper
+Yasushi Miyashita. Neuronal correlate of visual associative long-term memory in the primate tempo-
+ral cortex. Nature, 335(6193):817–820, October 1988. ISSN 1476-4687. doi: 10.1038/335817a0.
+URL https://www.nature.com/articles/335817a0. Publisher: Nature Publishing
+Group.
+S´ergio Moro, Paulo Cortez, and Paulo Rita. A data-driven approach to predict the success of bank
+telemarketing. Decision Support Systems, 62:22–31, 2014. ISSN 0167-9236. doi: https://doi.
+org/10.1016/j.dss.2014.03.001.
+URL https://www.sciencedirect.com/science/
+article/pii/S016792361400061X.
+John M. Pearce and Mark E. Bouton. Theories of Associative Learning in Animals. Annual Review
+of Psychology, 52(Volume 52, 2001):111–139, February 2001. ISSN 0066-4308, 1545-2085. doi:
+10.1146/annurev.psych.52.1.111. URL https://www.annualreviews.org/content/
+journals/10.1146/annurev.psych.52.1.111. Publisher: Annual Reviews.
+Hubert Ramsauer, Bernhard Sch¨afl, Johannes Lehner, Philipp Seidl, Michael Widrich, Lukas Gru-
+ber, Markus Holzleitner, Thomas Adler, David Kreil, Michael K Kopp, G¨unter Klambauer, Jo-
+hannes Brandstetter, and Sepp Hochreiter. Hopfield networks is all you need. In International
+Conference on Learning Representations, 2021. URL https://openreview.net/forum?
+id=tL89RnzIiCd.
+Bishwajit Saha, Dmitry Krotov, Mohammed J Zaki, and Parikshit Ram. End-to-end differentiable
+clustering with associative memories. In Andreas Krause, Emma Brunskill, Kyunghyun Cho,
+Barbara Engelhardt, Sivan Sabato, and Jonathan Scarlett (eds.), Proceedings of the 40th Inter-
+national Conference on Machine Learning, volume 202 of Proceedings of Machine Learning
+Research, pp. 29649–29670. PMLR, 23–29 Jul 2023. URL https://proceedings.mlr.
+press/v202/saha23a.html.
+C. Sakar and Yomi Kastro. Online Shoppers Purchasing Intention Dataset. UCI Machine Learning
+Repository, 2018. DOI: https://doi.org/10.24432/C5F88Q.
+Ashish Vaswani,
+Noam Shazeer,
+Niki Parmar,
+Jakob Uszkoreit,
+Llion Jones,
+Aidan N
+Gomez, Ł ukasz Kaiser, and Illia Polosukhin.
+Attention is All you Need.
+In Ad-
+vances in Neural Information Processing Systems, volume 30. Curran Associates, Inc.,
+2017.
+URL https://proceedings.neurips.cc/paper_files/paper/2017/
+hash/3f5ee243547dee91fbd053c1c4a845aa-Abstract.html.
+Jane X. Wang, Lynn M. Rogers, Evan Z. Gross, Anthony J. Ryals, Mehmet E. Dokucu, Kelly L.
+Brandstatt, Molly S. Hermiller, and Joel L. Voss. Targeted enhancement of cortical-hippocampal
+brain networks and associative memory.
+Science, 345(6200):1054–1057, August 2014.
+doi:
+10.1126/science.1252900.
+URL https://www.science.org/doi/full/10.1126/
+science.1252900. Publisher: American Association for the Advancement of Science.
+Shurong Wang, Zhuoyang Shen, Xinbao Qiao, Tongning Zhang, and Meng Zhang. Dynfrs: An
+efficient framework for machine unlearning in random forest. In Y. Yue, A. Garg, N. Peng, F. Sha,
+and R. Yu (eds.), International Conference on Representation Learning, volume 2025, pp. 10636–
+10657, 2025. URL https://proceedings.iclr.cc/paper_files/paper/2025/
+hash/1caf09c9f4e6b0150b06a07e77f2710c-Abstract-Conference.html.
+Dennis Wu, Jerry Yao-Chieh Hu, Teng-Yun Hsiao, and Han Liu.
+Uniform Memory Retrieval
+with Larger Capacity for Modern Hopfield Models. In Proceedings of the 41st International
+Conference on
+Machine Learning, pp. 53471–53514. PMLR, July 2024a.
+URL https:
+//proceedings.mlr.press/v235/wu24i.html. ISSN: 2640-3498.
+Yu-Hsuan Wu,
+Jerry Yao-Chieh Hu,
+Weijian Li,
+Bo-Yu Chen,
+and Han Liu.
+STan-
+Hop:
+Sparse
+Tandem
+Hopfield
+Model
+for
+Memory-
+Enhanced
+Time
+Series
+Pre-
+diction.
+International
+Conference
+on
+Representation
+Learning,
+2024:30886–30925,
+May 2024b. URL https://proceedings.iclr.cc/paper_files/paper/2024/
+hash/832b20b65f655587e9c0447860406a82-Abstract-Conference.html.
+13
+
+Under review as a conference paper
+A
+APPENDIX
+APPENDIX CONTENTS
+A.1
+Notations
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+15
+A.2
+Theorems . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+16
+A.2.1
+Optimal Correct Retrieval
+. . . . . . . . . . . . . . . . . . . . . . . . . .
+17
+A.2.2
+Unified Adaptive Similarity and Energy Function . . . . . . . . . . . . . .
+20
+A.3
+Discussion . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+23
+A.3.1
+On Good Design Choice of Adaptive Similarity . . . . . . . . . . . . . . .
+23
+A.3.2
+On More Complicated Variant Distribution . . . . . . . . . . . . . . . . .
+25
+A.4
+Experiments . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+A.4.1
+Baselines and Metrics
+. . . . . . . . . . . . . . . . . . . . . . . . . . . .
+26
+A.4.2
+Datasets . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+27
+A.4.3
+Memory Retrieval
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+27
+A.4.4
+Tabular Classification . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+28
+A.4.5
+Image Classification and Multiple Instance Learning . . . . . . . . . . . .
+28
+A.4.6
+Ablation Study . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+28
+14
+
+Under review as a conference paper
+A.1
+NOTATIONS
+Table 5: Notations and symbolds used in this work.
+Symbol
+Description
+ξ, ξk
+A specific memory pattern (d × 1) (or memory, stored memory pattern, stored pattern).
+Ξ
+The d × N memory matrix, with each memory pattern being its column vector.
+d
+The dimensionality of memory patterns.
+N
+The number of stored memory patterns.
+sim(ξ, x)
+The similarity function that measures how strong the association are between the inputs (or
+similarity, similarity measure, measure, association).
+sep(s)
+The separation function, turning the output of sim(·, ·) (logits) to a probability distribution.
+mod(Ξ)
+The modulation function that governs how memory patterns are stored and learned.
+E(x)
+The energy landscape, defined on the same vector space as memory patterns.
+T (x)
+The retrieval dynamics, defined on the same vector space as memory patterns.
+p
+The probability distribution vector produced by sep(·).
+s
+The similarity score vector produced by sim(·, ·).
+x
+The query vector. Also, the input to the associative memory
+y
+The retrieval result vector. Also, the output of the associative memory.
+V(Ξ)
+The variant distribution on memory matrix Ξ, governs how queries are generated. Each
+query x is sampled from this distribution together with its origin memory pattern ξ.
+pV(ξ, x)
+The joint probability density function that measures the likelihood that ξ and x are
+observed together.
+pV(ξ|x)
+The conditional probability density function (posterior) that measures the likelihood that x
+originates from x when observed x.
+pV(x|ξ)
+The joint probability density function (likelihood) that measures the likelihood that ξ
+generates x when observed ξ.
+q
+The dimension-wise similarity vector whose value of the i-th index measures the similarity
+between the value of i-th index in x and ξ.
+˜q
+The sorted version of q (sorted in ascending order).
+U
+The upper right triangle matrix of ones.
+dis(ξ, x)
+The (negative and squared) Euclidean distance similarity −∥x −ξ∥2
+2.
+dot(ξ, x)
+The dot product similarity x⊤ξ.
+sim(k)(ξ, x)
+The k-optimal similarity function that finds a k-dimensional subspace that maximizes the
+similarity sim(·, ·) of the inputs within that subspace.
+ftptsim(ξ, x)
+The similarity footprint function that generates the rich descriptor between ξ and x with
+sim(·, ·) being the base similarity (or footprint).
+ssim(ξ, x)
+The adaptive similarity function adopting ftptsim(·, ·) with sim(·, ·) as the base similarity.
+ssim(Ξ, x)
+The vectorized form of the adaptive similarity function ssim(·, ·), and returns a vector that
+measures the adaptive similarity between ξi and x for i ∈[N].
+s(ξ, x)
+The final adaptive similarity function that aggregate multiple ssimk(·, ·) for different base
+similarity sim(·, ·) / footprint.
+s(Ξ, x)
+The vectorized form of the final adaptive similarity function s(·, ·), and returns a vector
+that measures the adaptive similarity between ξi and x for i ∈[N].
+w
+The weight vector that turns the footprint into a scalar, which is designed to extract
+information from the rich descriptor.
+β
+Scalar used to aggregate different adaptive similarities ssim(·, ·).
+L(ξ, V)
+The loss function used to optimize w’s and β’s
+[n]
+The set of integers less than or equal to n.
+sgn(x)
+Return the sign (−1 or +1) of the input.
+δ(x)
+The Dirac delta that returns 1 when the input is 0 and returns 0 otherwise.
+v⊤
+Transpose of a vector / matrix.
+diag(v)
+Transform vector v to a diagonal matrix.
+vD
+A sub-vector of v containing only the elements corresponding to indices in D.
+∥v∥p
+The ℓp norm.
+lse(v)
+The log-sum-exp function.
+15
+
+Under review as a conference paper
+A.2
+THEOREMS
+We define the retrieval accuracy that estimates the retrieval performance of an associative memory
+under a certain variant distribution.
+Definition 8: Retrieval accuracy
+Retrieval accuracy for an associative memory with retrieval dynamics T (·) is the probability that
+correct retrieval is met:
+E(ξ,x)∼V(Ξ)
+"
+δ
+
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} −arg max
+ξ′∈Ξ
+{pV(ξ′|x)}
+#
+=
+Pr
+(ξ,x)∼V(Ξ)
+"
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} = arg max
+ξ′∈Ξ
+{pV(ξ′|x)}
+#
+However, Definition 8 is usually intractable as pV(x|ξ) is unknown and complicated. Therefore, we
+define empirical retrieval accuracy based on samples drawn from V(Ξ), which is computable, and
+used in our experiments (Section 4).
+Definition 9: Empirical retrieval accuracy
+Empirical retrieval accuracy for an associative memory with retrieval dynamics T (·) can be esti-
+mated by performing abundant retrieval tests:
+E(ξ,x)∼V(Ξ)
+"
+δ
+
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} −ξ
+#
+=
+Pr
+(ξ,x)∼V(Ξ)
+"
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} = ξ
+#
+Theorem 3: Equivalence form for decomposable base similarity
+For decomposable similarity measure sim(·, ·) satisfying:
+sim(ξ, x) =
+d
+X
+i=1
+sim(ξi, xi)
+(6)
+Let qi = sim(ξi, xi) (1 ≤i ≤d), and ˜qj (1 ≤j ≤d) be the j-th largest element in q. We have:
+sim(k)(ξ, x) =
+k
+X
+j=1
+˜qj
+Proof. Let D(k) ≜arg maxD⊆[d],|D|=k{sim(ξD, xD)}, and define Q(k) ≜{˜qi | i ∈D(k)}, then
+we know:
+sim(k)(ξ, x) =
+X
+i∈D(k)
+qi =
+X
+q∈Q(k)
+q.
+Then, we try to prove by induction that Q(k) = Q(k−1) ∪{˜qk} for 1 ≤k ≤d, and we let Q(0) = ∅.
+For, k = 1, we can see that Q(1) = arg maxi∈[d]{qi} = ˜qi satisfying the induction hypothesis.
+Next, for 1 < k ≤d, we assume that the hypothesis holds for all 1 ≤k′ < k, we can see that
+Q(k−1) = Q(k−2) ∪{˜qk−1} = Q(k−3) ∪{˜qk−1, ˜qk−2} =
+k−1
+[
+j=1
+{˜qj}
+Now, suppose the followings:
+(1) We can find a ∈q1···d s.t. a > ˜qk−1, Q(k) = Q(k−1) ∪{a}. This not possible because
+{˜q1, · · · , ˜qk−2, a} would be a better choice for Q(k−1), and this contradicts with the assumption.
+(2) We can find a ∈q1···d s.t. ˜qk−1 ≥a > ˜qk, Q(k) = Q(k−1) ∪{a}. This is not possible because
+16
+
+Under review as a conference paper
+there would be k elements in q1···d that is larger than ˜qk, so that ˜qk is the (k + 1)-largest element,
+which contradicts with the definition of qk.
+(3) We can find a ∈q1···d s.t. ˜qk > a, Q(k) = Q(k−1) ∪{a}. This is not possible because
+{˜q1, · · · , ˜qk−1, ˜qk} is a better choice for Q(k) compared to {˜q1, · · · , ˜qk−1, a} because ˜qk > a.
+Therefore, by contradiction, we can see that D(k) = D(k−1) ∪{˜q(k)}, and the hypothesis holds due
+to induction. Consequently,
+Q(k) =
+k[
+j=1
+˜qj
+=⇒
+sim(k)(ξ, x) =
+X
+q∈Q(k)
+q =
+k
+X
+j=1
+˜qj.
+A.2.1
+OPTIMAL CORRECT RETRIEVAL
+We now start to prove Theorem 1.
+Let us begin with a simple variant — the isotropic noisy variant.
+Lemma 1: Optimal correct retrieval for isotropic noisy variant
+A-Hop achieves optimal correct retrieval (Definition 7) for isotrophic noisy variant Vnoisy(Ξ)
+(Definition 4, (x −ξ) ∼N(0, σI) for (ξ, x) ∼Vnoisy(Ξ) some σ ∈R) for arbitrary memory
+matrix Ξ ∈Rd×N.
+Proof. We claim that the optimal correct retrieval is achieved when using sep(·) = arg max(·), and
+ftptdis(ξ, x) only (i.e., β1 = 1 and β2 = 0 in Equation 4). That is, the retrieval dynamics should be:
+T (x) = arg max
+ξ′∈Ξ
+
+w⊤ftptdis(ξ′, x)
+	
+= arg max
+ξ′∈Ξ
+
+−∥ξ′ −x∥2
+2
+	
+This step can be satisfied by setting w1 = 1, and wi = 0 for 2 ≤i ≤d. Then, optimal retrieval is
+achieved only when Equation 1 is met. We first estimate the right-hand side of Equation 1:
+arg max
+ξ′∈Ξ
+
+pVnoisy(ξ|x)
+	
+= arg max
+ξ′∈Ξ
+
+ln pVnoisy(x|ξ)
+	
+= arg max
+ξ′∈Ξ
+
+−d
+2 ln 2πσ −1
+2σ ∥x −ξ′∥2
+2
+
+= arg max
+ξ′∈Ξ
+
+−∥ξ′ −x∥2
+2
+	
+The first step comes from Equation 2, and assuming that the prior p(ξ) is uniform (which is often
+the case for memory retrieval) or can be easily obtained from samples. And the second step comes
+from Definition 4. We can see that the derived results coincide with the retrieval dynamics derived
+before. Therefore, plugging the retrieval dynamics to the left-hand side of Equation 1 gives:
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} = arg min
+ξ′∈Ξ
+(
+ arg max
+ξ′′
+
+−∥ξ′′ −x∥2
+2
+	
+−ξ′
+2
+)
+=
+N
+X
+k=1
+δ
+ 
+ arg max
+ξ′′
+
+−∥ξ′′ −x∥2
+2
+	
+−ξk
+
+2
+!
+· ξk
+=
+N
+X
+k=1
+δ
+
+max
+ξ′′
+
+−∥ξ′′ −x∥2
+2
+	
+−
+
+−∥ξk −x∥2
+2
+
+· ξk
+= arg max
+ξk∈Ξ
+{−∥ξk −x∥2
+2}
+The second step holds as there always exists a ξ′ ∈Ξ that let ∥arg maxξ′′
+
+−∥ξ′′ −x∥2
+2
+	
+−ξ′∥2 =
+0, since the resulting vector of the arg max(·) ∈Ξ, and ξ′ iterates every column vector of Ξ, thus
+must have coincided with resulting vector, and the thrid step holds for a similar reason.
+17
+
+Under review as a conference paper
+Therefore, we show that the left-hand side and right-hand side of Equation 1 are the same
+(arg maxξ′∈Ξ{−∥ξk −x∥2
+2}). Thus, the requirement for correct retrieval is met for all (ξ, x) ∼
+V(Ξ), yielding optimal correct retrieval.
+If we adopt a footprint that does not sort the dimension-wise similarity vector q by substituting ˜q
+in Equation 3 to q and gives ftptdis′(ξ, x) = Uq, we can prove the optimality for the standard
+noisy variant defined in Definition 4, which is more general than Lemma 1. However, the footprint
+ftptdis(ξ, x) = U˜q achieves high empirical retrieval accuracy, but it is harder to estimate analyti-
+cally.
+Lemma 2: Optimal retrieval for noisy variant
+A-Hop achieves optimal correct retrieval (Definition 7) for noisy variant Vnoisy(Ξ) (Definition 4
+for arbitrary memory matrix Ξ ∈Rd×N.
+Proof. Following the same spirit in the proof of Lemma 1. One can see that the right-hand side
+(RHS) of Equation 1 is (similar to Lemma 1):
+arg max
+ξ′∈Ξ
+{pVnoise(ξ′|x)} = arg max
+ξ′∈Ξ
+
+−1
+2 ln
+
+(2π)d|diag(σ)|
+
+−1
+2(x −ξ′)⊤diag(σ)−1(x −ξ′)
+
+= arg max
+ξ′∈Ξ
+(
+−
+d
+X
+i=1
+(ξ′
+i −x)2
+σi
+)
+While the left-hand side (LHS) of Equation 1 is (step 1 follows how RHS is resolved in Lemma 1):
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} = arg max
+ξk∈Ξ
+
+w⊤U (ξk −x)2	
+= arg max
+ξk∈Ξ
+
+u⊤(ξk −x)2	
+= arg max
+ξk∈Ξ
+( d
+X
+i=1
+ui(ξk,i −xi)2
+)
+Here, v2 ∈Rd denotes a dimension-wise square operation over v ∈Rd, so that (ξk −x)2
+i =
+(ξk,i −xi)2. Also, we let u⊤= w⊤U for simplicity. One can see that LHS equals RHS when:
+∀i, i ∈[d], ui = −1
+σi
+Since U is a full-rank matrix, so that w⊤= u⊤U−1 holds. When we set w in the following way:
+wi =
+−σ−1
+1
+i = 1
+σ−1
+i−1 −σ−1
+i
+2 ≤i ≤d
+LHS and RHS of Equation 1 are the same, satisfying the requirement for correct retrieval. Further-
+more, we can tell that Lemma 1 is a special case of this lemma.
+Lemma 3: Optimal retrieval for masked variant
+A-Hop achieves optimal correct retrieval (Definition 7) for masked variant Vmasked(Ξ) (Defi-
+nition 5 for arbitrary memory matrix Ξ ∈Rd×N, and for a uniform generator G (pG(·) is a
+constant).
+Proof. As in Lemma 1, we first reformulate the RHS of Equation 1, and find the suitable choice for
+w to make LHS of Equation 1 equal RHS. We let q be the dimension-wise similarity vector with
+18
+
+Under review as a conference paper
+qi = −(ξi −xi)2, and ˜q the vector that sort q in ascending order. The RHS can be expanded as:
+arg max
+ξ′∈Ξ
+{pVmasked(ξ′|x)}
+= arg max
+ξ′∈Ξ
+(
+ln pmasked ·
+d
+X
+i=1
+[1 −δ(xi −ξ′
+i)] +
+d
+X
+i=1
+[1 −δ(xi −ξi)] ln pG(x′
+i)
+)
+= arg max
+ξ′∈Ξ
+(
+(ln pmasked + ln pG) ·
+d
+X
+i=1
+[1 −δ(xi −ξ′
+i)]
+)
+= arg max
+ξ′∈Ξ
+(
+−d +
+d
+X
+i=1
+δ(xi −ξ′
+i)
+)
+= arg max
+ξ′∈Ξ
+( d
+X
+i=1
+δ(˜qi)
+)
+Here, the second step is valid as pG is a constant, and we term this constant pG. As pG is a constant,
+it must be less than or equal to 1 to make pG(·) a valid probability density function. Additionally, we
+know 0 ≤pmasked < 1 from definition, and therefore, ln pmasked + ln pG < 0, and this explains why a
+sign change occurs in step three. The derived RHS suggests designing a discrete adaptive similarity:
+sdis(ξ, x) = w⊤δ(˜qi) =
+d
+X
+i=1
+wiδ(˜qi)
+Then, the LHS would be (first step following that of Lemma 1, and recall we use arg max(·) as
+separation function):
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} = arg max
+ξk∈Ξ
+
+w⊤δ(˜qi)
+	
+= arg max
+ξk∈Ξ
+( d
+X
+i=1
+wi · δ(˜qi)
+)
+Setting w = 1 concludes that LHS equals RHS for all (ξ, x) ∼V(Ξ), and thus, the optimal correct
+retrieval is achieved for this concrete adaptive similarity sdis(ξ, x).
+It can be shown that it is impossible to find a continuous sdis(ξ, x) for masked variant’s optimal
+correct retrieval, unless more constraints on ξ and x are made. Typically, such a continuous function
+is possible if ∥ξ −x∥2 ≥ε (can be bounded from below) for ε > 0.
+Lemma 4: Optimal retrieval for biased variant
+A-Hop achieves optimal correct retrieval (Definition 7) for biased variant Vbiased(Ξ) (Definition 5
+for arbitrary memory matrix Ξ ∈Rd×N, and an arbitrary difference vector d ∈Rd.
+Proof. Following the proof to Lemma 1, the LHS of Equation 1 is:
+arg max
+ξ′∈Ξ
+{pVbiased(ξ′|x)} = arg max
+ξ′∈Ξ
+(
+δ
+"
+d −
+d
+X
+i=1
+δ(xi −ξ′
+i −di)
+#)
+= arg max
+ξ′∈Ξ
+(
+−d +
+d
+X
+i=1
+δ(xi −ξ′
+i −di)
+)
+= arg max
+ξ′∈Ξ
+
+−∥x −ξ′ −d∥2
+2
+	
+The last step follows that the maximum score is both 0 before and after the transform, and the goal
+is to assign a high score (0) when x −ξ = d. Here, we use a similar continuous adaptive similarity
+defined in the main text:
+sdis(ξ, x) = w⊤Uq −q⊤q
+19
+
+Under review as a conference paper
+with q = x −ξ, and set u⊤= w⊤U with u = 2d⊤. Then, the RHS of Equation 1 is:
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} = arg max
+ξk∈Ξ
+
+u⊤q −q⊤q
+	
+= arg max
+ξk∈Ξ
+
+2d⊤q −q⊤q −d⊤d
+	
+= arg max
+ξk∈Ξ
+
+−(q −d)⊤(q −d)
+	
+= arg max
+ξk∈Ξ
+
+−∥q −d∥2
+2
+	
+= arg max
+ξk∈Ξ
+
+−∥x −ξk −d∥2
+2
+	
+This follows immediately that LHS equals RHS, and the optimal correct retrieval is achieved when:
+wi =
+2d1
+i = 1
+2di −2di−1
+2 ≤i ≤d
+It finally comes down to Theorem 1.
+Theorem 1: A-Hop retrieval dynamics
+The following retrieval dynamics adopted by A-Hop achieves optimal correct retrieval for noisy,
+masked, and biased variants, with a careful design of s(Ξ, x):
+y = T (x) = Ξ sep(s(Ξ, x))
+Proof. First of all, sep(·) = arg max(·) is crucial for achieving optimal correct retrieval, as it
+transforms the left-hand side of Equation 1 as (see Lemma 1):
+arg min
+ξ′∈Ξ
+{∥T (x) −ξ′∥2} = arg max
+ξk∈Ξ
+{sdis(ξk, x)}
+In Lemma 2, we see that using the following adaptive similarity achieves optimal correct retrieval:
+sdis(ξ, x) = w⊤Uq
+with wi =
+−σ−1
+1
+i = 1
+σ−1
+i−1 −σ−1
+i
+2 ≤i ≤d
+In Lemma 3, we see that using the following adaptive similarity achieves optimal correct retrieval:
+sdis(ξ, x) = w⊤δ(˜q)
+with wi = 1 for i ∈[d]
+In Lemma 4, we see that using the following adaptive similarity achieves optimal correct retrieval:
+sdis(ξ, x) = w⊤U (x −ξ) −(x −ξ)⊤(x −ξ)
+with wi =
+2d1
+i = 1
+2di −2di−1
+2 ≤i ≤d
+One can see that achieving optimal correct retrieval is not easy, and it requires the sacrifice of
+continunity. However, we can build a continuous adaptive similarity inspired from the proof of
+Theorem 1 that achieve high retrieval accuracy (at least, empirically). For more discussion on this
+topic, please read Appendix A.3.1.
+A.2.2
+UNIFIED ADAPTIVE SIMILARITY AND ENERGY FUNCTION
+We can find that the adaptive similarity in Lemma 1 has the form:
+s(ξ, x) = −(x −ξ)⊤(x −ξ)
+while that of Lemma 2 has the form:
+s(ξ, x) = −(x −ξ)⊤diag(a)(x −ξ)
+20
+
+Under review as a conference paper
+for some diagonal matrix diag(a), and ai > 0 for all i ∈[d]. Meanwhile, for Lemma 4 has the
+form:
+s(ξ, x) = −(x −ξ)⊤(x −ξ) + b⊤(x −ξ)
+for some real vector b. That is being said that we can unifies these three adaptive similarity by:
+sunify(ξ, x) = −(x −ξ)⊤diag(a)(x −ξ) + b⊤(x −ξ)
+However, this similarity is too tough, we can analysis a simpler one:
+sunify(ξ, x) = −(x −ξ)⊤(x −ξ) + b⊤(x −ξ)
+If we use a softmax(·) function as the separation function and sunify(ξ, x) as the similarity function,
+and construct an energy function (with sunify(Ξ, x) being the vectorized form of sunify(ξ, x)):
+E(x) = −lse(sunify(Ξ, x))
+(7)
+whose gradient is:
+∇xE(x) = −softmax(sunify(Ξ, x))⊤∇xsunify
+Letting pi(x) ≜softmax(sunify(Ξ, x))i:
+∇xE(x) = −
+N
+X
+i=1
+pi(x)∇xsunify(ξi, x)
+= −
+N
+X
+i=1
+pi(x) · (−2x + 2ξi + b)
+= 2x −b −2
+N
+X
+i=1
+pi(x) · ξi
+Retrieval on the gradient flow gives:
+dx
+dt = −∇xE(x) = −2x + b + 2
+N
+X
+i=1
+pi(x) · ξi
+Then, consider using gradient descent with step η, where η > 0 for discrete-time retrieval:
+x(t+1) = x(t) −η∇xE(x(t))
+= (1 −2η) · x(t) + ηb + 2η
+N
+X
+i=1
+pi(x(t)) · ξi
+By setting η = 1
+2 that would cancels the x term on the RHS and remove the coefficient before the
+summation, which is wonderful:
+x(t+1) = 1
+2b + Ξ softmax(sunify(Ξ, x))
+From Lemma 4, we know that the setting b = 2d is optimal for noisy variant, plugging this in gives:
+x(t+1) −d = T (x(t)) = Ξ softmax(sunify(Ξ, x))
+(8)
+suggesting that we add a new de-bias term −d for biased variants, which coincidentally, remove the
+bias vector d. However, when there is no bias, Equation 8 reduce to the simple retrieval dynamics
+we are familiar with.
+We then further analysis the behavior of the energy (Equation 7) retrieval dynamics Equation 8:
+Lemma 5: Rewriting the energy
+Let the energy function be E(x) = −lse(s(Ξ, x)), where s(ξi, x) = −(x −ξi)⊤(x −ξi) +
+b⊤(x −ξi). Then, the energy can be written as
+E(x) = ∥x∥2
+2 −lse(Ax + c)
+for some matrix A ∈RN×d and vector c ∈RN.
+21
+
+Under review as a conference paper
+Proof.
+E(x) = −lse (s(Ξ, x))
+= −ln
+N
+X
+i=1
+exp
+
+−∥x∥2
+2 −∥ξi∥2
+2 + (2ξi + b)⊤x + ξ⊤
+i b
+
+= −ln
+n
+X
+i=1
+exp(−∥x∥2
+2) + exp
+
+(2ξi + b)⊤x + ξ⊤
+i b −∥ξi∥2
+2
+
+= ln n + ∥x∥2
+2 −lse (Ax + c)
+for A⊤
+i = 2ξi + b and ci = ξ⊤
+i b −∥ξi∥2
+2. Also, we can omit the term ln n as it is a constant.
+Therefore, we have decomposed the energy function E(x) into a convex function g(x) = ∥x∥2
+2, and
+a concave function −h(x) = −lse(Ax + c).
+Lemma 6: Decreasing energy
+Energy function E(x) would be monotonically decreasing using the retrieval dynamics:
+x(t+1) −d = T (x(t)) = Ξ softmax(s(Ξ, x))
+for s(ξi, x) = −(x−ξi)⊤(x−ξi)+b⊤(x−ξi)
+Proof. Using the concave convex procedure (Lanckriet & Sriperumbudur, 2009), we construct a
+convex surrogate function Ut(x) for each iteration t by linearizing the concave function −h(x)
+around the current x(t):
+Ut(x) = g(x) −
+h
+h(x(t)) + ∇xh(x(t))⊤ x −x(t)i
+= ∥x∥2
+2 −∇xh(x(t))⊤x +
+ ∇xh(x(t))⊤x(t) −h(x(t))
+
+The next x(t+1) is the minimizer of Ut(x), i.e., x(t+1) = arg minx∈Rd{Ut(x)}, and we can find it
+by setting its gradient to zero:
+∇xUt(x) = 2x −∇xh(x(t)) = 0
+=⇒
+x(t+1) = 1
+2∇xh(x(t)) = 1
+2A⊤softmax(Ax(t) + c)
+We can add the term −∥x∥2
+2 back to softmax(·) as it is independent of index i. Thus, by denoting
+pi(xi) = softmax(Ax(t) + c) = softmax(s(Ξ, x)) (follows Lemma 5), we have:
+x(t+1) = 1
+2
+N
+X
+i=1
+Ai · pi(x(t))
+=
+N
+X
+i=1
+ξi · pi(x(t)) −1
+2b
+N
+X
+i=1
+pi(x(t))
+= Ξ softmax(s(Ξ, x(t))) −1
+2b
+and this agrees with what we have derived before (Equation 8).
+Then, by convexity of h(x) (recall −h(x) is concave), we have the following inequality:
+h(x) ≥h(x(t)) + ∇xh(x(t))⊤(x −x(t))
+=⇒
+g(x) −h(x) ≤g(x) −h(x(t)) + ∇xh(x(t))⊤(x −x(t)) = Ut(x)
+with the equality holds iff x = x(t), and recall that x(t+1) is the minimum value of Ut(x), we have:
+E(x(t+1)) ≤Ut(x(t+1)) ≤Ut(x(t)) = E(x(t))
+(9)
+with equality holds when x(t) = x(t+1). Thus, E(x(t+1)) ≤E(x(t)) completes the proof.
+22
+
+Under review as a conference paper
+We can see that E(x) = ∥x∥2
+2 −O(∥x∥2), so that E(x) →+∞as ∥x∥2 →+∞, so E(x) is coer-
+cive, meaning its level sets are compact. Additionally, Ut(x) is 2-strongly convex as ∇2
+xUt(x) = 2I,
+therefore,
+Ut(x(t)) −Ut(x(t+1)) ≥∥x(t) −x(t+1)∥2
+2
+Along with Inequality 9:
+E(x(t)) −E(x(t+1)) ≥Ut(x(t)) −Ut(x(t+1)) ≥∥x(t) −x(t+1)∥2
+2
+This yields that
+E(x(0)) −E(x(t)) ≥
+t−1
+X
+τ=0
+∥x(τ+1) −x(τ)∥2
+2
+This mean that E(x(t)) is bounded from above. We can see that the sequence of x: {x(t)} must
+remain within the level set {x | E(x) ≤E(x(0))} as the sequence E(x(0)) is non-increasing.
+Therefore, {x(t)} must remains in the compact set {x | E(x) ≤E(x(0))}, and be bounded.
+Theorem 2: A-Hop energy landscape
+energy Energy E(x) will be monotonically decreasing and its value could be bounded for
+isotropic noisy, and biased variants, if the following energy is used:
+E(x) = −lse (s(Ξ, x))
+Proof. In Lemma 6, we have proven that the energy function will be monotonically decreasing.
+Also, from above analysis we can see that E(x(t)) could be bounded by:
+E(x(t)) ≤E(x(0)) −
+t−1
+X
+τ=0
+∥x(τ+1) −x(τ)∥2
+2
+On the other hand, we can try to bound E(x(t)) from below:
+E(x(t)) = −ln
+N
+X
+i=1
+exp
+ −∥x −ξi∥2
+2 + b⊤(x −ξi)
+
+≥−ln
+N
+X
+i=1
+exp
+ −∥x −ξi∥2
+2 + ∥b∥2 · ∥x −ξi∥2
+
+≥−ln
+N
+X
+i=1
+exp
+"
+−
+∥b∥2
+2
+2
++ ∥b∥2 · ∥b∥2
+2
+#
+= −ln N −∥b∥2
+2
+4
+As ∥b∥2 is bounded, we can see that E(x(t)) is bounded from below.
+We try to find the property for a very different energy landscape and a different retrieval dynamics,
+also these retrieval dynamics can guaratee optimal correct retrieval, for iostropic noisy, and biased
+variant, when the separation function is arg max(·) and has weight b choosen ideally. Theorem 2
+tries to connect the noval correct retrieval and the traditional energy analysis.
+A.3
+DISCUSSION
+A.3.1
+ON GOOD DESIGN CHOICE OF ADAPTIVE SIMILARITY
+Achieving optimal correct retrieval is costly, as it requires designing “weird” similarity function for
+corner cases or use discrete function that makes the model unlearnable. For instance, it is impossible
+for a continuous similarity function to achieve optimal correct retrieval for masked variants, as they
+23
+
+Under review as a conference paper
+have a hard time distinguishing |ξi−xi| = 0 and |ξi−ξi| = ϵ for some arbitrary small ϵ. Also, using
+softmax(·) as the separation function make it hard to prove whether optimal retrieval is achieved or
+not, as we cannot exclude the effect of other memory patherns from the one receive largest similarity
+score, while using softmax(·) is crucial for learnable adpative similarity.
+Therefore, achieving optimal correct retrieval for a certain variant distribution is not the only golden
+criteria for a similarity measure. More generally, we think good (adaptive) simliarty measures should
+be assessed from the following aspects:
+Adaptivity Can the similarity measure adapt to a wide range of variant distribution? This criteria
+measures the breadth of the similarity.
+Optimality How accurate can the similarity measure predicts the variant distribution? This criteria
+measures the depth of the similarity.
+Learnability Can this similarity measure be learned easily when some samples from the variant dis-
+tribution is provided? How many learnable parameters it requires? This criteria measures
+the scale of the similarity.
+Efficiency What is the time complexity of calculating the similarity score? This criteria measures
+the speed of the similarity.
+It is ideal but not likely that we can find a perfect adaptive similarity that meets all above mentioned
+criteria, because there are tradeoffs between these aspects. For example, for the adaptive similarity
+introduced in the proofs to Lemma 2, 3 and 4, they only achieves optimality in noisy, masked and
+biased variants but would have poor performance in other variants (i.e., poor adaptivity). This is
+because adaptivity is sacrified when every corner case (cases happen in a very low probability but
+need extra care) is handled carefully. On the other side, optimality would be limited for similarity
+with strong adaptivity because the outcome for some corner cases could be contradicting for differ-
+ent scenarios. Moreover, learnable adaptivity similarity might not often achieve optimality as the
+learning alogithm cannot always guarantee convergence of weights to the optimum state (e.g., min-
+imum loss). Also, large-scale similarity measure with plenty of learnable parameters are not likely
+to have good efficiency, as their computation procedure could be complicated.
+The design of the adaptive similarity s(ξ, x) = βdisftptdis(ξ, x) + βdotftptdot(ξ, x) in Eq. 4 (il-
+lustrated in Fig. 2) is a balanced result of considering all four aspects — adaptivity, optimality,
+learnability, and efficiency. We will explain the design choice of this adaptive similarity from the
+perspectives of these four criteria.
+The similarity footprint
+The footprint is the core mechanism of adaptive similarity (Eq. 4 and
+Fig. 2). Sorting and cumulative sum is not the essential part of it, while the idea of exploiting
+subspaces is. The idea is that considering subspatial information will give extra benefits compared
+to considering the whole Rd itself. The footprint picks d most useful subspaces from all 2d −
+1 subspaces for much better efficiency (from computationally impossible to possible). However,
+sorting and cumulative sum happen to be the right algorithm for computing the similarity score
+efficiently for decomposable similarity measure (Eq. 6), it doesn’t mean that the footprint is about
+sorting dimensions. Regard the footprint as mining the most valuable subspatial information from
+all 2d −1 subspaces, and it provides useful evidence for guiding the model to make decision.
+Recall that ftptsim(ξ, x)k = sim(k)(ξ, x), and sim(k)(ξ, x) is the k-optimal similarity between ξ
+and x, which finds the optimal k-dimensional subspace such that ξ and x is most associated (closest)
+on this subspace. That is to say, the footprint finds a representative for each dimensionality k ∈[d]
+and regards the one that minimize the distance between ξ and x as the most useful k-dimensional
+subspace. But the positional information of each subspaces is not used (i.e., which dimensions
+contributes to sim(k)(ξ, x) is unkonwn) this would harm the optimality compared to a similarity
+measure that exploits all 2d −1 subspaces. Although finding the positional information of each
+subspaces is possible (which would benefits optimality), it would need O(d2) time for computation
+(which is not worthy).
+However, compared to fixed proximity-based similarity (e.g., ξ⊤x), the footprint offers a multi-scale
+descriptor to the relation between ξ and x (the evidence for deciding whether ξ generates x). The k-
+optimal similarity sim(k)(·, ·) ignores d −k non-informative dimensions, which make it inherently
+24
+
+Under review as a conference paper
+suitable for handling masked dimensions and heavily noisy dimensions (by simply ignore them).
+Therefore, the footprint enables better optimality against fixed proximity-based similarity as it offer
+richer evidence (d v.s. 1) for models to make the right decision.
+Linear combination of footprint elements
+The proposed adaptive similarity calculate the sim-
+ilarity score as the dot product of ftptdis(ξ, x) (a d-dimensional vector) and learnable weight w
+(also a d-dimensional vector). This allows the model to behave differently (by choosing differ-
+ent weight) when facing different variant distribution.
+Also, one can see that when wd = 1
+and wk = 0 for 1 ≤k < d, the adaptive similarity degenerates to its base similarity as
+w⊤ftptsim(ξ, x) = sim(ξ, x). That is to say, the adaptive similarity has better expressiveness
+(better adaptivity) and is at least as good as the fixed proximity-based similarity.
+However, one can use a more complicated method (e.g., train a neural network to let s(ξ, x) =
+MLP(ξ, x, ftptsim(ξ, x))) to extract information from footprints and gains better optimality and
+adaptivity. But this also brings more computation cost and may make the model harder to train.
+Using a linear map is the simplest fastest way to exploit the footprint, and empirical results demon-
+strates that it can largely improve existing associative memory models.
+Aggregating among different base similarities
+The proposed adaptive similarity aggregate
+the similarity footprint with base similarity dis(ξ, x) = −∥ξ −x∥2
+2 and dot(ξ, x) = ξ⊤x.
+Aggregating adaptive similarities with different base similarity would improve model’s adaptivity
+and optimality but reduce its efficiency (scale up the runtime by a constant). Think of base similarity
+as base vectors in a linear space, and the aggregated model resembles the span of these basis.
+The learnable parameter β1···B controls how each base similarity is used in different scenarios.
+Next, we show that the proposed adaptive similarity (Eq. 4) is suitable (has high optimality) for
+noisy + masked variant.
+However, we propose choosing the value of w wisely for adaptive similarity s(ξ, x) = w⊤U˜q to
+achieve “sub-optimal” correct retrieval (well, it is hard to rigorously define sub-optimality).
+[TODO: Probably Approximately Correct (PAC) form here]
+For noisy variant, a choice that setting w1 = 1 and other values to 0 is suggested. This degenerates
+the model to the one defined in the proof to Lemma 1 and enable the model to have global view
+(mauniplate similarity in the largest subspace), and its electron cloud would look like a shpere as
+illustrated in Fig. 1 (a).
+Next, for masked variant, we suggest using wi = iC for some large constant C > 2d2, because this
+punishes patterns that has very limited dimension where ξi = xi, and stress importance on small
+subspaces. By doing so the similarity function will look like the likelihood electron cloud in Fig. 1b.
+Finally, for biased variant, the best way to set w is to set u⊤= w⊤U to ˜d, the sorted bias vector,
+so that they similarity function can focus on how comparing the difference of x −ξ with a unkown
+but almost known bias.
+The main point of this section is that the optimality of correct retrieval is too strict so that achieving
+so force us to abandon good properties. Also, in most cases, some very corner cases set very high
+difficulty for achieve optimal. However, correct retrieval itself is a good property, but making every
+retrieval correct is too strict. Therefore, an open question is that how to define a sub-optimal correct
+retrieval standard so that it guarantees great memory retreival performance and leave us freedom.
+A.3.2
+ON MORE COMPLICATED VARIANT DISTRIBUTION
+Variant distributions discussed so far are actually simple. In previous analysis, we assumes that all
+memory variants follows a similar distribution. For example, (ξ, x) ∼Vnoisy(Ξ) ensures that all
+memory patterns generates a noisy variants, sharing a similar pV(x|ξ). We say a variant distribution
+general if knowing pV(x|ξi) is equivalent to knowing pV(x|ξj) for arbitrary i, j ∈[N] and i ̸= j.
+In other words, we can obtain pV(x|ξj) by substituting xj with xi. However, there could be cases
+where each memory patterns generates variants quite differently. Intuitively, we say each pattern is
+25
+
+Under review as a conference paper
+generates on their own, meaning that pV(x|ξ) has completely different form for different memory
+patterns, and we call such memory variant isolated.
+By looking closely to the adaptive similarity function:
+s(ξ, x) = w⊤U˜q
+One can see that it uses a universal weight w for all pairs of (ξ, x) ∼V(Ξ), assuming that the
+variant distribution it is trying to model is general. However, such limiltaion can be easily broken
+by introducing more weights. For instance, we use separate weights for different memory patterns,
+i.e., for N memory patterns, we spare weight wk to memory pattern ξk. Therefore, the adaptive
+similarity that can suit isolated variant distribution look like:
+s(ξk, x) = w⊤
+k U˜q
+This can fit each isolated likelihood pV(x|ξk) as the weights are no longer shared. But this rises
+more problem: (1) it requires more samples, and it might be impossible in real-world scenarios. (2)
+it requires samples generated by each memory pattern ξk, as each individual weight wk is optimized
+by samples involving ξk.
+Additionally, the adaptive similarities are a family of similarity measures that can fit to the variant
+distribution through sampling, it is not solely Equation 4. When proving the optimal correct retrieval
+for noisy, masked, and biased variants, we propose more adaptive similarity as theoretical tools. We
+wrote Equation 4 in the main text simply because it is the most effective ones for retrieving under
+noisy, masked, biased, and mixed settings, and it requires minimum trainable weight, as examined
+in ablation study (Appendix A.4.6).
+One more thing is that the priori pV(ξ|x) are often ignored in this work. Well, it should not be
+ignored in all cases. However, we can use a bias term b ∈RN and use bk capture the occurrance
+of pattern ξk. By assuming similarity is a logits of the posteriori pV(ξ|x) (e.g., log pV(ξ|x)), then
+we can see that arg maxξ′∈Ξ{log pV(ξ|x)} = arg maxξ′∈Ξ{log pV(x|ξ′) + log pV(ξ′)}, and we
+set pass s(Ξ, x) + b to the separation function so that b handles the term log pV(ξ).
+A.4
+EXPERIMENTS
+A.4.1
+BASELINES AND METRICS
+For memory retrieval test, we compare our Adaptive Hopfield network A-Hop against: Modern
+Hopfield network M-Hop (Ramsauer et al., 2021); Universal Hopfield network U-Hop (Millidge
+et al., 2022) with sim(ξ, x) = −∥ξ −x∥1 and sep(·) = arg max(·) as they report a leading
+performance for such configuration when masking out half of the dimensions in memory pat-
+terns (similar to masked variant, Definition 5); Kernelized Hopfield network K-Hop (Wu et al.,
+2024a) with the kernel optimized by separation loss proposed by Wu et al. (2024a); Kernelized
+Hopfield network K2-Hop with the kernel optimized by loss defined by variant distribution (Equa-
+tion 5) rather than the separation loss; and Multi-Layer Perceptrons MLP that has 4 layers and a
+input dimensionality d, output dimensionality N, trying to fit pV(ξ|x) but unsatisfactory. We es-
+timate the empirical retrieval accuracy of each model (Definition 9), and the mean squared error
+E(ξ,x)∼V(Ξ)
+
+(T (x) −ξ)⊤(T (x) −ξ)
+
+. We wrote a generator that can generate noisy, masked,
+biased, and mixed variants.
+For tabular classification test, we compare the A-Hop with a memory-based classifier (Ap-
+pendix A.4.4) with: M-Hop uses the same classifier framework but the unlearnable similarity func-
+tion; K2-Hop that uses the same classifier framework but a different similarity function, and its
+kernel function is optimized by the classification loss; Extremely Randomized Trees (Geurts et al.,
+2006), or Extra Trees, a tree-based classifier; Random Forest (Breiman, 2001), yes, the famous
+Random Forest classifier; AdaBoost (Freund & Schapire, 1997), a classic boosting classifier; and
+XGBoost (Chen & Guestrin, 2016), an enhanced Gradient Boosting Decision Tree. All models are
+tuned with a 5-fold cross-validation on the training set. We measure the test accuracy for the dataset
+with a positive sample rate 0.2 < % pos < 0.8, and the ROC-AUC score otherwise, following the
+settings in Wang et al. (2025).
+For image classification task, we follow the settings in Wu et al. (2024a), where they replaced the
+attention component with a HopfieldLayer (Ramsauer et al., 2021). We experiment by inte-
+grating A-Hop, M-Hop, and K-Hop into the HopfieldLayer. Similarly, we follow the settings
+26
+
+Under review as a conference paper
+in Ramsauer et al. (2021); Hu et al. (2023), where they use HopfieldPooling for multiple in-
+stance learning. We integrate A-Hop, M-Hop, and K-Hop to HopfieldPooling, and run a
+5-fold cross-validation to report the mean ROC-AUC of all folds as the result.
+For all experiments, we report the results with the mean and standard deviation of five runs.
+A.4.2
+DATASETS
+We used a total of 12 datasets to assess the performance of A-Hop on tasks including tabular clas-
+sification (Adult, Bank, Vaccine, Purchase, and Heart), and image classification (CIFAR 10, CIFAR
+100, and Tiny ImageNet), and multiple instance learning (Tiger, Fox, Elephant, UCSB).
+Adult (Becker & Kohavi, 1996) The prediction task for this dataset is to classify individuals’ in-
+come levels as either above or below $50,000 annually. The data was extracted by Barry
+Becker from the 1994 Census database.
+Bank (Moro et al., 2014) To predict the success of a term deposit subscription, this dataset records
+the outcomes of telemarketing campaigns from a banking institution in Portugal.
+Vaccine (Bull et al., 2016; DrivenData, 2019) We use this dataset from a DrivenData competition
+to predict if a person received a seasonal flu vaccine. The data consists of 26,707 survey
+responses detailing 36 behavioral and personal attributes.
+Purchase (Sakar & Kastro, 2018) The objective with this dataset is to forecast the online shopping
+intentions of visitors to an e-commerce website, determining whether a user will proceed
+with a purchase.
+Heart (Kaggle, 2018) This dataset facilitates the prediction of cardiovascular disease presence. It
+contains health-related data from 70,000 patients, as provided by Ulianova.
+CIFAR 10 (Krizhevsky et al., 2009) is a classic image recognition dataset consisting of 60,000
+32 × 32 color images in 10 classes, with 6,000 images per class.
+CIFAR 100 (Krizhevsky et al., 2009) is a more challenging version of CIFAR 10, containing the
+same number of images but split into 100 fine-grained classes.
+Tiny ImageNet (Le & Yang, 2015) is a subset of the ImageNet dataset designed for educational
+purposes. It contains 100,000 images from 200 classes, downsized to 64 × 64 pixels.
+Tiger, Fox, Elephant (Deng et al., 2009) These are specific class subsets extracted from the large-
+scale ImageNet database, often used for fine-grained image classification tasks.
+UCSB (Gelasca et al., 2008) This dataset is composed of 58 breast cancer histopathology images
+stained with Hematoxylin and Eosin (H&E). The primary challenge it presents is the ac-
+curate segmentation of individual cells from the complex tissue background, which is a
+critical precursor to classifying cells as benign or malignant.
+A.4.3
+MEMORY RETRIEVAL
+We first introduce the intensity of variant setting. A triplet (dmask, dnoise, dbias) ∈[0, 1]3 is used to
+describe a variant setting. This mean that we will first add a Gaussian noise n ∼N(0, dnoiseI) to a
+certain memory pattern ξ ∈Ξ obtaining x ←ξ + n. Then, we will choose d · dmask indices, and set
+these indices of x to random numbers choosen uniformly from [−1, 1]. Finally, we will add a bias
+d to x ←x + d with di = si · dbias, where si is a random sign sampled uniformly from {−1, +1}.
+Then, the generator return (ξ, x) as a sample of V(Ξ). Therefore, different triplet describle different
+variant settings, and thus, corresponds to different variant distribution V(Ξ).
+In the memory retrieval task, we use the retrieval dynamics written in Equation 4. To learn the
+weight w’s and β’s we use optimizer Adam for 200 epoches, and use a learning rate 0.1 in all
+settings. However, we argue that number of epoches (N epoch) and learning rate (lr) should be
+tuned when applying A-Hop to other memory retrieval settings.
+For K-Hop and K2-Hop, we tuned them carefully. For the original K-Hop, it optimize a separation
+loss, and we try to make it as small as possible. However, the retrieval accuracy of K-Hop is not
+satisfactory, and it is reasonable since it is not optimized for correct retrieval, but for ϵ-retrieval. We
+found that the domain of the memory pattern in their experiments is [0, 1]d, and it is harmful to dot
+27
+
+Under review as a conference paper
+product-based methods (think of using only 2−d of the space) as dot product highly relies on signs.
+Therefore, for fair comparision, we sample the random vectors uniformly from [−1, 1]d and change
+the domain of pixels in MNIST images to [−1, 1].
+A.4.4
+TABULAR CLASSIFICATION
+We develop a memory-based model for tabular classification that takes advantage of the excellent
+memory retrieval effectiveness of associative memories. The insight is that classification is hierar-
+chical, and we divide instances into cases, and further classify cases into the final class. For instance,
+there are type I diabetes and type II diabetes, where each type here resembles the idea of cases. An-
+other samples is that cats has plenty of breeds, and associative memory can capture specific idea of
+orange cat, or blue cat, while they have a hard time figuring out the generalize idea of cats. So, we
+let associative memory match instances into cases by choosing some instances in the training set as
+the representatives of cases, or use K-means cluster to produce such representatives, and pass the
+retrieval probability to a multi-layer perceptron (MLP) for classifying cases. That is, the model can
+be represented as y = MLP(LayerNorm(sim(Ξ, x))), and this can be trained on a conventional
+machine learning fashion by minimizing classification loss:
+L(D) = E(x,y)∼D[(y −ˆy)2]
+(10)
+We no longer tune weights in adaptive memories using loss defined in Equation 5, as they can be
+tuned using the classification loss when participanting into going forward in the network.
+We tuned the hyperparameters by grid searching on the training data:
+Table 6: Hyperparameters tuned in tabular classification
+Name
+Domain
+N epoch
+{50, 100, 150, 200, 250}
+batch size
+{100, 1000}
+lr
+{2 · 10−3, 10−3, 5 · 10−4, 2 · 10−4, 10−4}
+init
+Cluster, No cluster
+A.4.5
+IMAGE CLASSIFICATION AND MULTIPLE INSTANCE LEARNING
+For image classification, we follow the settings in Wu et al. (2024a), and place the adaptive similarity
+to the Hopfield layer inside a image Transformer. For M-Hop and K-Hop, we use the hyperparame-
+ter suggested in Wu et al. (2024a), and find the optimal number of epoch and learning rate for A-Hop
+via grid search. We run five iterations of separate loss optimization for A-Hop before testing.
+Table 7: Hyperparameters tuned in image classification
+Name
+Domain
+N epoch
+{25, 40, 50}
+lr
+{10−3, 10−4}
+For multiple instance learning,
+we follow the settings in Hu et al. (2023),
+and use
+HopfieldPooling as the backbone. Similarly, we place the adaptive similarity in the core Hop-
+field component replacing the fixed dot product. All experiments are run on a 5-fold validation, and
+the ROC-AUC scored is taken as the mean of all folds.
+A.4.6
+ABLATION STUDY
+We conduct four different ablation studies to see the effective of different components.
+In the first experiment (Table 9), we tested if sorting the dimension-wise similarity vector q and the
+upper-right triangle matrix U is needed. The results shows that both of them are necessay for high
+retrieval accuracy.
+28
+
+Under review as a conference paper
+Table 8: Hyperparameters tuned in multiple instance learning
+Name
+Domain
+N epoch
+{10, 20, 40}
+lr
+{10−3, 10−4, 10−5}
+lr decay
+{0.9, 0.75}
+Table 9: Retrieval accuracy (↑) and error (↓) between unsorted and sorted q. Each cell contains the
+mean accuracy or error with standard deviation in a smaller font. Results of the best-performing
+model are bolded.
+Conditions
+Synthetic (d = 0.4)
+Synthetic (d = 0.5)
+q sorted?
+use U?
+Accuracy
+Error
+Accuracy
+Error
+✗
+✗
+.5172±.034
+.1900±.017
+.2094±.022
+.2658±.005
+✗
+✓
+.5444±.007
+.1665±.007
+.1888±.015
+.2738±.003
+✓
+✗
+.6928±.034
+.1173±.010
+.3374±.025
+.2324±.006
+✓
+✓
+.7280±.034
+.1033±.011
+.3634±.040
+.2207±.011
+Next, we look for a better matrix U (Table 10), which is the core of similarity measure. Our results
+show that the upper-right triangle structure of U is optimal, while making U learnable and initialize
+it with the upper-right triangle yields the best result, but we does not adopt learnable U in other
+experiments to keep minimum learnable parameters. Another finding is that a randomized matrix U
+is better than not having U (when U = I). Therefore, along with Table 9, we find that the footprint
+structure is essential to adaptive similarities.
+Table 10: Retrieval accuracy (↑) and error (↓) between different configuration of U. Each cell
+contains the mean accuracy or error with standard deviation in a smaller font. Results of the best-
+performing model are bolded, and the second are underlined.
+Conditions
+Synthetic (d = 0.4)
+Synthetic (d = 0.5)
+U learnable?
+initialization?
+Accuracy
+Error
+Accuracy
+Error
+✗
+Random
+.6928±.015
+.1147±.005
+.3340±.019
+.2305±.005
+✗
+I
+.6802±.013
+.1194±.004
+.3458±.025
+.2298±.008
+✗
+U
+.7242±.016
+.1056±.007
+.3600±.024
+.2272±.005
+✓
+Random
+.7176±.027
+.1087±.007
+.3414±.023
+.2292±.006
+✓
+I
+.7114±.019
+.1096±.006
+.3528±.021
+.2270±.005
+✓
+U
+.7280±.034
+.1033±.011
+.3634±.040
+.2207±.011
+We also tested the effect of different footprint with different base similarity (see Table 11). Results
+shows that two footprints (dis and dot) is always better than one alone, and we found that ftptdis
+performs better than ftptdot in this setting. However, even though retrieval accuracy degrades by re-
+moving one of the footprint, using ftptdis or ftptdot only is still better than other Hopfield networks.
+Table 11: Retrieval accuracy (↑) and error (↓) between different usage of footprint. Each cell con-
+tains the mean accuracy or error with standard deviation in a smaller font. Results of the best-
+performing model are bolded.
+Conditions
+Synthetic (d = 0.4)
+Synthetic (d = 0.5)
+use ftptdis?
+use ftptdot?
+Accuracy
+Error
+Accuracy
+Error
+✗
+✓
+.5926±.016
+.1517±.005
+.2520±.027
+.2515±.004
+✓
+✗
+.6458±.042
+.1317±.011
+.3286±.023
+.2326±.007
+✓
+✓
+.7242±.016
+.1056±.007
+.3600±.024
+.2272±.005
+29
+
+Under review as a conference paper
+Finally, we tested the number of samples needed for adaptive similarity to mimic the variant distri-
+bution. It looks like training on only 512 samples provides a good enough adaptive similarity for
+2048 64-dimension memory patterns.
+Table 12: Retrieval accuracy (↑) and error (↓) between different number of samples provided for
+learning. Each cell contains the mean accuracy or error with standard deviation in a smaller font.
+Results of the best-performing model are bolded.
+Conditions
+Synthetic (d = 0.4)
+Synthetic (d = 0.5)
+number of samples?
+Accuracy
+Error
+Accuracy
+Error
+512
+.7204±.029
+.1077±.010
+.3541±.028
+.2311±.004
+∞
+.7242±.016
+.1056±.007
+.3600±.024
+.2272±.005
+Table 13: Retrieval accuracy (↑) between models in multi-modal memory retrieval task. Each cell
+contains the mean accuracy or error with standard deviation in a smaller font. Results of the best-
+performing model are bolded.
+Model
+Number of concepts
+Phrase 1
+Phrase 2
+128
+256
+512
+1024
+M-Hop
+M-Hop
+.173±.02
+.092±.01
+.044±.01
+.021±.00
+K2-Hop
+K2-Hop
+.574±.04
+.349±.02
+.146±.02
+.081±.02
+K2-Hop
+A-Hop
+.636±.03
+.465±.02
+.276±.03
+.183±.02
+A-Hop
+K2-Hop
+.904±.02
+.709±.03
+.492±.04
+.328±.02
+A-Hop
+A-Hop
+.997±.00
+.998±.00
+.993±.00
+.988±.00
+Table 14: Training time (↓) of A-Hop with and without sorting.
+sort?
+Scaling dimensionality d
+Scaling number of patterns N
+d
+64
+128
+256
+64
+64
+64
+N
+2048
+2048
+2048
+2048
+4096
+8192
+Training time (ms, ↓)
+✓
+840
+1573
+3609
+840
+1531
+2949
+✗
+2093
+3059
+8224
+2093
+4011
+7983
+ratio
+2.49×
+1.95×
+2.27×
+2.49×
+2.62×
+2.71×
+Inference time (ms, ↓)
+✓
+.355
+.368
+.414
+.355
+.446
+.570
+✗
+.287
+.318
+.326
+.287
+.364
+.467
+ratio
+1.23×
+1.15×
+1.27×
+1.23×
+1.23×
+1.22×
+30

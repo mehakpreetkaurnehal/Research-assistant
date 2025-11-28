@@ -1,0 +1,1189 @@
+Syn-GRPO: Self-Evolving Data Synthesis for MLLM Perception Reasoning
+Qihan Huang1,2, Haofei Zhang1, Rong Wei2, Yi Wang1, Rui Tang2,
+Mingli Song1, Jie Song1
+1 Zhejiang University, 2 Manycore Tech Inc.
+{qh.huang,haofeizhang,y w,brooksong,sjie}@zju.edu.cn,
+{guangmo,ati}@qunhemail.com
+Abstract
+RL (reinforcement learning) methods (e.g., GRPO) for
+MLLM (Multimodal LLM) perception ability has attracted
+wide research interest owing to its remarkable generaliza-
+tion ability. Nevertheless, existing reinforcement learning
+methods still face the problem of low data quality, where
+data samples cannot elicit diverse responses from MLLMs,
+thus restricting the exploration scope for MLLM reinforce-
+ment learning. Some methods attempt to mitigate this prob-
+lem by imposing constraints on entropy, but none address
+it at its root. Therefore, to tackle this problem, this work
+proposes Syn-GRPO (Synthesis-GRPO), which employs an
+online data generator to synthesize high-quality training
+data with diverse responses in GRPO training. Specifically,
+Syn-GRPO consists of two components: (1) data server; (2)
+GRPO workflow. The data server synthesizes new samples
+from existing ones using an image generation model, featur-
+ing a decoupled and asynchronous scheme to achieve high
+generation efficiency.
+The GRPO workflow provides the
+data server with the new image descriptions, and it lever-
+ages a diversity reward to supervise the MLLM to predict
+image descriptions for synthesizing samples with diverse
+responses. Experiment results across three visual percep-
+tion tasks demonstrate that Syn-GRPO improves the data
+quality by a large margin, achieving significant superior
+performance to existing MLLM perception methods, and
+Syn-GRPO presents promising potential for scaling long-
+term self-evolving RL. Our code is available at https:
+//github.com/hqhQAQ/Syn-GRPO.
+1. Introduction
+MLLM (Multimodal LLM) perception ability has drawn
+widespread research for its role as the prerequisite for all
+core functions of MLLMs. Recently, RL (reinforcement
+learning) methods (e.g., GRPO [6, 20]) fit well with MLLM
+perception training, owing to its strong generalization and
+visual perception tasks’ inherent verifiable labels. There-
+Limited
+Diversity
+Confident Answer 2
+...
+Confident Answer 1
+Confident Answer G
+MLLM
+Low-entropy Answers
+Figure 1. In GRPO training, the MLLM generates non-diverse
+answers with low entropy, restricting the exploration space of RL.
+fore, numerous reasoning methods (e.g., VLM-R1 [22],
+Visual-RFT [13], VisionReasoner [12]) based on GRPO
+have significantly promoted MLLM perception ability.
+Despite these developments, existing RL methods for
+MLLM perception still encounter the problem of low data
+quality. Low data quality refers to the issue where data
+samples fail to stimulate diverse responses from MLLMs,
+thereby limiting the exploration space for MLLM reinforce-
+ment learning, as shown in Figure 1. To investigate this
+problem, this work analyzes the entropy and diversity dur-
+ing GRPO training for perception reasoning. Specifically,
+the entropy reflects the uncertainty of the MLLM’s out-
+put distribution, and the diversity measures the variety of
+multiple responses for each sample. Figure 2 shows that
+the entropy and diversity of the MLLM exhibit a trend of
+rapid decline (referred to as entropy collapse [28] and diver-
+sity collapse), indicating the low quality of visual percep-
+tion data and resulting in extremely low training efficiency.
+Existing LLM RL methods (e.g., CLIP-Higher [28], CLIP-
+Cov [4], KL-Cov [4], Entropy Adv. [3]) attempt to mitigate
+this problem from GRPO itself; however, they still cannot
+overcome the limitations of low-quality data at the root.
+Therefore, to break the data limit, this work proposes
+Syn-GRPO (Synthesis-GRPO), which leverages an online
+data generator to synthesize high-quality training data with
+diverse responses during GRPO training. Syn-GRPO aims
+to synthesize new data to replace the old data when process-
+ing each training batch, through a self-evolving data syn-
+thesis approach. To this end, Syn-GRPO consists of two
+components: (1) data server; (2) GRPO workflow.
+1
+arXiv:2511.19343v1  [cs.CV]  24 Nov 2025
+
+The data server synthesizes new image data based on the
+old image data in the visual perception datasets, featuring
+(1) foreground consistency and (2) decoupled design. For
+the first feature, the data server first adopts a foreground
+segmentation model to remove irrelevant background from
+the image, and then uses an outpainting model to generate a
+new background. The foreground consistency preserves the
+invariance of visual perception task labels after generation,
+ensuring accurate supervisory signals during RL training.
+Meanwhile, by preserving the foreground, this method also
+alleviates the problem of excessive distribution discrepancy
+between new and old data. For the second feature, the data
+server adopts a data generation scheme that is decoupled
+and asynchronous from the GRPO workflow, connected by
+a unified API. This separation enables independent manage-
+ment of the data server and GRPO workflow while preserv-
+ing efficient communication between them.
+The GRPO workflow requires the MLLM to predict two
+outputs in addition to the original reasoning process and fi-
+nal answer: (1) new image description and (2) predicted
+diversity. Specifically, the new image description is the text
+prompt for the new sample, which will be sent to the data
+server along with the old image to generate the new im-
+age. The predicted diversity represents the MLLM’s esti-
+mation of the response diversity for the input sample. How-
+ever, generating images from the predicted image descrip-
+tions does not necessarily yield highly diverse responses.
+To tackle this problem, the GRPO workflow computes
+a diversity reward by comparing the predicted diversity
+with the ground-truth diversity from rollout responses. In
+this manner, the diversity reward effectively supervises the
+MLLM to distinguish whether input samples have diverse
+responses, thereby enhancing its ability to generate image
+descriptions for samples with diverse responses. Addition-
+ally, this work identifies a diversity drift problem, where the
+declining trend of the ground-truth diversity causes a shift
+in the predicted diversity, and accordingly proposes a diver-
+sity smoothing strategy to mitigate it.
+We perform comprehensive experiments to validate the
+performance of the proposed Syn-GRPO. Specifically, we
+apply Syn-GRPO to three types of visual perception tasks:
+REC (Referring Expression Comprehension), OVD (Open-
+Vocabulary Object Detection), and ISR (Indoor Scene Re-
+finement). The experiment results demonstrate that Syn-
+GRPO improves the training efficiency of original GRPO
+by a large margin, achieving significantly superior perfor-
+mance to existing MLLM perception methods.
+Further-
+more, we reveal two intriguing phenomena: (1) as the size
+of the original training dataset increases, Syn-GRPO ex-
+hibits a stable performance improvement trend; (2) as train-
+ing progresses through iterations, the generated data shows
+an increasingly complex trend. These phenomena indicate
+that Syn-GRPO, a self-evolving data synthesis approach,
+(a) Entropy
+(b) Diversity
+Figure 2. Entropy collapse and diversity collapse of GRPO for
+Qwen2.5-VL-3B on the visual perception task (REC). Note that
+20% training progress corresponds to one training epoch.
+has the potential to achieve long-term scalability in RL.
+To sum up, the main contributions of this work can be
+summarized as follows:
+• We identify and analyze the problem of low data qual-
+ity in RL training for MLLM perception.
+• We propose Syn-GRPO to tackle this problem, with a
+data server to efficiently synthesize data in an asynchronous
+manner, and a GRPO workflow to achieve self-evolving
+data synthesis through a proposed diversity reward.
+• Experiment results across three visual perception tasks
+demonstrate that Syn-GRPO significantly outperforms ex-
+isting MLLM perception methods, and Syn-GRPO exhibits
+promising potential for long-horizon scalability in RL.
+2. Related Work
+Reinforcement Learning for MLLM Perception.
+Af-
+ter the emergence of DeepSeek-R1, researchers discov-
+ered that reinforcement learning (e.g., GRPO) can sig-
+nificantly improve the reasoning abilities of LLMs and
+MLLMs by triggering chain-of-thought (CoT) reasoning,
+with many studies applying this method to various do-
+mains of LLMs and MLLMs. Among these, RL is par-
+ticularly well-suited for MLLM perception tasks, as such
+tasks typically come with verifiable labels (e.g., bounding
+box annotations). Specifically, VLM-R1 [22] and Visual-
+RFT [13] first demonstrate that GRPO significantly outper-
+forms SFT on visual perception tasks by directly extend-
+ing GRPO through carefully designed task-specific rewards.
+Built upon GRPO, SATORI-R1 [21] (three-stage decompo-
+sition), Visionary-R1 [25] (caption-reason-answer format),
+UniVG-R1 [2] (difficulty-aware weight adjustment), Vi-
+sionReasoner [12] (unified framework with non-repeat re-
+ward), and Rex-Thinker [8] (HumanRef-CoT dataset) im-
+prove MLLM perception by addressing distinct issues and
+enhancing framework & structured reasoning.
+However,
+these methods still suffer from low data quality, resulting
+in suboptimal performance.
+Entropy Mechanism of LLM Reinforcement Learning.
+Recently, the entropy mechanism has become a key re-
+search focus in LLM RL, because of its close connec-
+2
+
+MLLM
+Data Pool
+Original Image
+Outpaint
+Model
+Update
+Data Server
+Original
+Image
+Foreground
+"A dog in a messy
+living room with knit
+blanket, warm and
+soft floor lamps."
+<think> <score>
+<description> 
+<answer>
+<think>
+<think>
+...
+<score>
+<score>
+<description> 
+<description> 
+<answer>
+<answer>
+...
+Diversity Smoothing
+Diversity
+GRPO
+Training
+Description Selection
+GRPO Workflow
+Unified API
+...
+Figure 3. Framework of Syn-GRPO. Syn-GRPO consists of a data server and a GRPO workflow. The data server generates new high-
+quality images with diverse responses, based on the original images and image descriptions di∗. The GRPO workflow predicts new image
+descriptions for the data server, and it employs a diversity reward Rdiversity(oi) to supervise the generation of these descriptions.
+tion with the exploration space of LLM RL. DAPO [28]
+first identified that during GRPO training, the entropy of
+the model’s predicted tokens rapidly decreases. After this,
+CLIP-Higher [28] (higher GRPO sampling ratio clipping
+threshold), Clip-Cov [4] (clip high-covariance tokens), KL-
+Cov [4] (KL penalty on high-covariance tokens), and En-
+tropy Adv. [3] (entropy-included GRPO advantage) attempt
+to address this issue by imposing constraints on entropy.
+Despite their advances, these methods remain fundamen-
+tally constrained by data quality and exhibit degraded per-
+formance on visual perception tasks where data samples fol-
+low more uniform formats.
+Data Synthesis for LLM Reinforcement Learning. Syn-
+thetic data holds great potential to address the problem of
+missing data, and data synthesis methods have emerged for
+LLM RL. Specifically, PROMPTCOT [31] (emulate expert
+problem designers for math problem synthesis), Genetic-
+Instruct [15] (Instructor & Coder & Judge-LLM collabora-
+tive instruction-code synthesis), METASYNTH [19] (meta-
+prompting with multiple-LLM agent collaboration), and
+TaskCraft [24] (automated workflow for multi-tool verifi-
+able agent tasks) advance data synthesis via distinct collab-
+orative or workflow-driven strategies. Absolute Zero [30]
+and R-Zero [7] propose an additional generation scheme
+to synthesize data along with the GRPO training. How-
+ever, these data synthesis methods are either inapplicable
+to visual perception tasks or offline-generated, lacking self-
+evolution and failing to adaptively synthesize data.
+3. Method
+3.1. Preliminaries
+Supervised Fine-tuning (SFT). SFT trains the LLM
+on curated query-output pairs to improve its instruction-
+following ability. The aim of SFT is to maximize the fol-
+lowing objective:
+JSFT(θ)=E[q, o∼P(Q, O)]
+
+1
+|o|
+|o|
+X
+t=1
+log πθ(ot|q, o<t)
+
+,
+where q, o is the query-output pair sampled from the
+SFT dataset P(Q, O), θ denotes the model parameters,
+πθ(ot|q, o<t) represents the logit of the model predicting
+the next token ot from q and previous tokens o<t.
+Group Relative Policy Optimization (GRPO). GRPO cal-
+culates the advantage ˆAi,t for the t-th token using the av-
+erage reward of multiple sampled outputs, eliminating the
+additional value function Vψ in PPO. Specifically, GRPO
+samples a group of G outputs {o1, o2, ..., oG} from the old
+model πθold, then optimizes the model by maximizing the
+following objective (min & clip operations omitted here):
+JGRPO(θ) = E[q ∼P(Q), {oi}G
+i=1 ∼πθold(O|q)]
+1
+G
+G
+X
+i=1
+1
+|oi|
+|oi|
+X
+t=1
+ πθ(oi,t|q, oi,<t)
+πθold(oi,t|q, oi,<t)
+ˆAi,t −βDKL[πθ||πref]
+
+,
+where DKL[πθ||πref] serves as a regularization term that
+prevents the new model πθ from deviating too far from the
+3
+
+original model πref (the model before training). As an ORM
+method, GRPO provides the reward ri at the end of each
+output oi (ri = 1 if the reasoning result is correct, otherwise
+ri = 0), and sets the advantage ˆAi,t of all tokens in oi as the
+normalized reward (r = {r1, r2, ..., rG}, mean(·) denotes
+the average, and std(·) denotes the standard deviation):
+ˆAi,t = ˜ri = ri −mean(r)
+std(r)
+.
+(1)
+Task-Specific Rewards.
+This work applies Syn-GRPO
+to three types of visual perception tasks (REC, OVD, and
+ISR) (Figure 4), each with a task-specific accuracy reward.
+REC (Referring Expression Comprehension) aims to lo-
+calize the object in an image from a given referring expres-
+sion. Following VLM-R1 [22], denote q, o as the query-
+output pair, bgt as the ground-truth bounding box, frec(o)
+as the predicted bounding box extracted from o, and IoU(·)
+as the intersection-over-union metric, then the accuracy re-
+ward Rrec
+acc(o) for REC is calculated as:
+Rrec
+acc(o) = IoU(bgt, frec(o)).
+(2)
+OVD (Open-Vocabulary Object Detection) aims to de-
+tect the objects in the image and output the corresponding
+bounding boxes and class labels. Following VLM-R1 [22],
+denote ˆbgt = {(bgt
+i , cgt
+i )}Ngt
+i=1 as the list of N gt ground-truth
+bounding-boxes and class labels, fovd(o) = {(bi, ci)}Npred
+i=1
+as the list of N pred predicted bounding-boxes and class la-
+bels, and mAP(·) as the mean average precision metric,
+then the accuracy reward Rovd
+acc (o) for OVD is calculated
+as (sovd aims to penalizes redundant predictions):
+
+
+
+
+
+Rovd
+acc (o) = sovd · mAP(ˆbgt, fovd(o)).
+sovd = min
+
+1, N gt
+N pred
+
+.
+(3)
+ISR (Indoor Scene Refinement) refines the indoor scene
+based on top-view rendering images to enhance its aesthetic
+quality. This work decomposes ISR into two stages: per-
+ception and refinement, with Syn-GRPO applied in the first
+stage. Specifically, the perception stage equals OVD, with
+ISR’s accuracy reward Risr
+acc(o) identical to Rovd
+acc (o). More
+details about ISR are in §2.2 of the appendix.
+3.2. Data Quality Analysis
+Although current RL methods have significantly enhanced
+MLLM perception ability, they suffer from the problem of
+low data quality. Low data quality refers to data samples
+failing to elicit diverse responses from MLLMs, thereby
+constraining the exploration space in MLLM RL. To inves-
+tigate this problem, this work examines the entropy and
+diversity of MLLM during GRPO training.
+Entropy quantifies the predictability or randomness in-
+herent in the tokens predicted by the LLM. Following Clip-
+Cov & KL-Cov [4], the entropy H(q) corresponding to sam-
+REC
+OVD
+ISR
+Figure 4. Samples of three visual perception tasks (REC, OVD,
+and ISR) with the bounding box annotations.
+ple q is calculated as the average of the entropy of each pre-
+dicted token (note that πθ denotes the model):
+H(q) = −E{oi}G
+i=1∼πθ(O|q) [log πθ(oi,t|q, oi,<t)]
+= −1
+G
+G
+X
+i=1
+1
+|oi|
+|oi|
+X
+t=1
+Eoi,t∼πθ(O|q) [log πθ(oi,t|q, oi,<t)] .
+Diversity measures the extent to which an MLLM gen-
+erates diverse responses for each sample, quantified by the
+variance of the accuracy rewards Racc(oi) across G re-
+sponses. Let var(·) denote the variance, then the diversity
+V(q) corresponding to sample q is calculated as:
+V(q) = var
+
+{Racc(oi)}G
+i=1
+
+.
+(4)
+In practice, each metric is averaged over the samples in
+the training batch. As shown in Figure 2, MLLM exhibits
+entropy collapse and diversity collapse in the visual percep-
+tion task (REC), characterized by a rapid decline in both en-
+tropy and diversity during GRPO training. Entropy collapse
+and diversity collapse indicate that the current visual per-
+ception datasets are low-quality, exhibiting overly uniform
+formatting, which constrains the RL exploration space.
+3.3. Syn-GRPO
+To tackle the low-quality data problem, this work proposes
+Syn-GRPO (Synthesis-GRPO), which utilizes an online
+data generator to adaptively synthesize high-quality training
+data with diverse responses along with the GRPO training.
+As shown in Figure 3, Syn-GRPO consists of two compo-
+nents: (1) data server; (2) GRPO workflow.
+3.3.1. Data Server
+Previous data synthesis methods use advanced LLMs (e.g.,
+GPT) to generate new text responses from existing images
+without modifying the images. The proposed data server,
+the first to overcome image-modality data limitations, lever-
+ages an image-outpainting model to create new images via
+original images and new image descriptions. To accom-
+modate visual perception tasks and enhance training effi-
+ciency, this data server incorporates two key features: (1)
+foreground consistency and (2) decoupled design.
+4
+
+Foreground consistency. In data synthesis for RL, it
+is essential to ensure the accuracy of labels in the synthe-
+sized data. Therefore, to preserve visual perception task
+labels, the data server masks out image regions beyond the
+ground-truth bounding boxes and then employs an outpaint-
+ing model to generate new images according to the new
+image descriptions. Besides, the data server also employs
+a foreground segmentation model to more accurately re-
+move the background. As shown in Figure 5, the labels
+(i.e., bounding boxes) for visual perception tasks remain
+unchanged in the new images, ensuring their correctness.
+Furthermore, by modifying the original image instead of
+generating one from scratch, the data server can reduce dis-
+crepancies between new and old data distributions.
+Decoupled design. The data server adopts a modular de-
+sign decoupled from the GRPO workflow, implemented via
+Python’s HTTPServer package. Through a unified com-
+munication API, the GRPO workflow requests data genera-
+tion from the data server with the generation parameters and
+receives the results upon completion. The decoupled design
+enables asynchronous execution of GRPO training and data
+generation, enhancing training efficiency. Moreover, this
+design readily supports future extensions to other forms of
+data synthesis, promoting our method’s generalization.
+3.3.2. GRPO workflow
+The GRPO workflow builds upon the original GRPO with
+three key modifications: (1) New image description, (2)
+Diversity reward, and (3) Description selection.
+New image description.
+In addition to the original
+reasoning process and final answer, the GRPO workflow
+prompts the MLLM to predict a text description for gen-
+erating a new high-quality image (with diverse responses)
+from the input image. Specifically, during GRPO training,
+the MLLM generates G responses {oi}G
+i=1 for each sample
+q, with each oi containing a distinct new image description
+di to form the set {di}G
+i=1.
+Diversity reward.
+However, the generated samples
+from the predicted image descriptions {di}G
+i=1 do not en-
+sure highly diverse responses. Thus, this work proposes a
+diversity reward to supervise the MLLM in distinguishing
+whether input samples elicit diverse responses, thereby en-
+couraging it to learn image descriptions associated with
+such diversity. To this end, the diversity reward is calcu-
+lated by comparing the predicted diversity with the ground-
+truth diversity. Specifically, the predicted diversity vi of
+each response oi is generated by the MLLM and lies in the
+range [0, 1]. Next, the ground-truth diversity V(q) for each
+sample q is calculated as the variance of accuracy rewards
+across G responses (Equation 4). Besides, V(q) is normal-
+ized to the range of [0, 1] for the convenience of compar-
+ison, using its original upper bound 1
+4 as a reference (see
+§1 of the appendix). Consequently, the diversity reward
+Rdiversity(oi) of the i-th response oi is calculated as:
+Rdiversity(oi) = 1 −|vi −V(q)|.
+(5)
+Moreover, this work identifies a diversity drift problem:
+the ground-truth diversity of the model evolves with train-
+ing; thus, the predicted diversity of the current model is
+generated for the prior model as it is supervised by the
+ground-truth diversity of the prior model. Given the over-
+all declining trend in diversity (Figure 2), this work pro-
+poses a diversity smoothing method that mitigates this is-
+sue by calibrating the diversity of each training batch us-
+ing an exponential moving average of historical diversity.
+Specifically, let Bk denote the training batch at the k-th step,
+β ∈[0, 1] denote the smooth weight, Vbatch avg
+k
+denote the
+average diversity of Bk, Vglobal avg
+k
+denote the moving aver-
+age of diversity at the k-th step, then the smoothed ground-
+truth diversity ˜V(q) for sample q at the k-th step is calcu-
+lated as (note that clip(·) clamps a value to a range):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Vbatch avg
+k
+=
+1
+|Bk|
+X
+q′∈Bk
+V(q′).
+Vglobal avg
+k
+= β · Vglobal avg
+k−1
++ (1 −β) · Vbatch avg
+k
+.
+˜V(q) = clip
+ 
+V(q) · Vglobal avg
+k
+Vbatch avg
+k
+, 0, 1
+!
+.
+Note that Vglobal avg
+1
+, the Vglobal avg
+k
+at the first step, is
+equal to Vbatch avg
+1
+. The diversity smoothing method aligns
+the current model’s diversity distribution with the previ-
+ous one through the ratio of Vglobal avg
+k
+and Vbatch avg
+k
+, en-
+hancing reward training accuracy and stability. Finally, the
+updated diversity reward Rdiversity(oi) is calculated as in
+Equation 6, which also lies in the range [0, 1].
+Rdiversity(oi) = 1 −|vi −˜V(q)|.
+(6)
+Therefore, the final reward ri for the i-th response
+oi is calculated as the summation of its accuracy reward
+Racc(oi), format reward Rformat(oi), and diversity reward
+Rdiversity(oi). Note that Rformat(oi) supervises oi to incor-
+porate the reasoning process, predicted diversity, new image
+description, and the final answer.
+ri = Racc(oi) + Rformat(oi) + Rdiversity(oi).
+(7)
+Description selection. For the G new image descrip-
+tions {di}G
+i=1 derived from the MLLM-generated responses
+{oi}G
+i=1, the GRPO workflow requires selecting one for
+transmission to the data server. To this end, this work selects
+the image description with the highest Rdiversity(oi), as this
+response more accurately assesses the diversity of answers
+for the input q, leading to a more accurate image descrip-
+tion for the new image with diverse responses. Specifically,
+5
+
+Method
+Qwen2.5-VL-3B
+Qwen2.5-VL-7B
+LISA
+RefCOCO
+RefCOCO+
+RefCOCOg
+LISA
+RefCOCO
+RefCOCO+
+RefCOCOg
+Original
+56.51
+88.70
+81.95
+86.05
+61.34
+90.00
+84.20
+87.20
+Visionary-R1
+60.80
+86.85
+82.65
+86.50
+N/A
+N/A
+N/A
+N/A
+SATORI-R1
+58.38
+85.80
+82.20
+85.25
+N/A
+N/A
+N/A
+N/A
+Rex-Thinker
+N/A
+N/A
+N/A
+N/A
+67.49
+91.20
+86.35
+87.80
+SFT
+54.82
+88.70
+82.25
+85.95
+63.27
+89.10
+85.95
+86.65
+VLM-R1
+63.14
+90.55
+84.30
+87.10
+66.71
+92.60
+89.40
+89.00
+GRPO
+62.24
+89.40
+84.10
+86.60
+65.26
+91.90
+89.85
+87.80
+GRPO + Entropy Loss
+64.23
+90.20
+82.55
+85.60
+66.59
+91.40
+87.65
+87.95
+GRPO + Entropy Adv.
+63.69
+90.90
+83.85
+86.40
+67.25
+92.05
+88.30
+87.30
+GRPO + Offline Generation
+64.23
+91.10
+83.40
+86.30
+66.95
+91.80
+89.85
+88.55
+Syn-GRPO (w/o Rdiversity)
+64.60
+91.35
+83.85
+85.85
+67.67
+92.75
+89.50
+88.75
+Syn-GRPO
+68.28
+92.15
+85.30
+87.45
+70.14
+93.55
+90.65
+89.25
+Table 1. Experiment results of two MLLMs on the REC task. The table has two sections: upper for existing models’ performance, lower
+for existing methods & our method trained in the same setting. LISA abbreviates LISA-Grounding, and bold font denotes the best result.
+Method
+mAP
+GP (IoU=0.5)
+GR (IoU=0.5)
+Original
+14.20
+56.06
+33.79
+SFT
+18.50
+53.15
+39.40
+VLM-R1
+21.10
+67.34
+43.84
+GRPO
+18.66
+63.83
+36.95
+Syn-GRPO
+23.74
+71.42
+46.44
+Table 2. Experiment results on the OVD task.
+the selected index i∗is calculated as in Equation 8, and the
+corresponding selected description is di∗.
+i∗=
+argmax
+i∈{1,2,...,G}
+Rdiversity(oi).
+(8)
+4. Experiments
+Implementation details. Following existing MLLM per-
+ception methods (e.g., VLM-R1 [22], Visionary-R1 [25],
+and SATORI-R1 [21]), we conduct the main experiments
+using Qwen2.5-VL-3B [1] and Qwen2.5-VL-7B [1] as base
+models.
+This work implements Syn-GRPO on the verl
+framework [23], leveraging the vLLM engine [9] for RL
+rollout acceleration and FSDP [32] for distributed training.
+In the data server, the image-outpainting model is a Con-
+trolNet [29] based on the SDXL [18] model, and the fore-
+ground segmentation model is BEN2 (Background Erase
+Network) [17].
+For all three types of visual perception
+tasks, we adopt the AdamW optimizer [14] to train the
+model for 5 epochs, with a learning rate of 1 × 10−6, a
+batch size of 20, and a rollout number G of 6. Besides, we
+allocate 4 GPUs for the GRPO workflow, and 1 GPU for the
+data server. The hyper-parameter γ in the diversity reward
+is set to 0.7, as validated by ablation experiments.
+Training datasets. For the REC task, we follow VLM-
+R1 to use the RefCOCO & RefCOCO+ & RefCOCOg
+datasets [16, 27] for training. Specifically, we randomly se-
+Original
+Synthesized Images
+Figure 5. Synthesized images of three visual perception tasks.
+lect 2,000 samples from their training sets and train for 5
+epochs (resulting in 10,000 sample updates), which is com-
+parable to VLM-R1’s total training budget of 9,600 sam-
+ples. For the OVD task, we also follow VLM-R1 to use the
+D3 dataset [26] for training, and randomly select 2,000 sam-
+ples likewise. For the ISR task, we utilize the 3D-FRONT
+dataset [5] for training, and randomly select 2,000 samples.
+Test datasets.
+For the REC task, following VLM-R1,
+we evaluate on out-of-domain data (the test set of LISA-
+Grounding [10]) and in-domain data (validation sets of Re-
+fCOCO, RefCOCO+, and RefCOCOg). For the OVD task,
+we also follow VLM-R1 to evaluate on the COCOfilter
+dataset [11], a filtered subset derived from the COCO vali-
+dation set. For the ISR task, we randomly select 500 sam-
+ples from the 3D-FRONT dataset for evaluation.
+Evaluation Metric. For the REC task, we follow VLM-R1
+and calculate the accuracy as the ratio of predicted bound-
+ing boxes with IoU > 0.5 relative to the ground-truth box.
+For the OVD task and the perception stage of ISR task, we
+6
+
+Method
+mAP
+GP (IoU=0.5)
+GR (IoU=0.5)
+Original
+26.18
+65.20
+42.52
+SFT
+28.11
+69.30
+44.99
+GRPO
+33.46
+74.12
+50.98
+Syn-GRPO
+35.77
+76.32
+53.52
+Table 3. Experiment results on the first stage of ISR task.
+follow VLM-R1 to utilize mAP (mean Average Precision),
+GP (Greedy Precision), and GR (Greedy Recall) for eval-
+uation. Specifically, GP is the fraction of predicted boxes
+that match any ground-truth box, while GR is the reverse.
+For the refinement stage of ISR task, we employ Sbbox and
+Srotation to evaluate the refinement quality, assessing object
+position and rotation, respectively. More details about GP,
+GR, Sbbox, and Srotation are in §2.3 of the appendix.
+4.1. Comparison Analysis
+REC. Table 1 demonstrates the performance comparison of
+different methods on the REC task, evaluated with two base
+MLLMs: Qwen2.5-VL-3B and Qwen2.5-VL-7B. Several
+conclusions can be drawn from Table 1.
+(1) In the upper portion of the table, RL methods with
+entropy constraints (Entropy Loss, Entropy Adv.) partially
+mitigate entropy collapse, preserving exploration capacity
+on low-quality data. However, they fail to fundamentally
+resolve the core data quality issue, yielding only marginal
+improvements over GRPO.
+(2) In the lower portion of the table, GRPO underper-
+forms VLM-R1, attributed to its utilization of fewer training
+samples (2,000 versus 9,600).
+(3) In the lower portion of the table, Syn-GRPO outper-
+forms both standard RL methods, entropy-based methods,
+and the offline generation method (using the descriptions
+from GPT-4o) by synthesizing high-quality data through a
+self-evolutionary mechanism.
+(4) Syn-GRPO exhibits more pronounced performance
+gains on out-of-domain data (LISA-Grounding) than on
+in-domain benchmarks (RefCOCO, RefCOCO+, and Re-
+fCOCOg), as the synthesized data spans a broader, more
+comprehensive distribution, endowing the MLLM with
+more robust and comprehensive perception abilities.
+OVD & ISR. Table 2 and Table 3 show that Syn-GRPO
+also surpasses GRPO in these two visual perception tasks.
+Moreover, the performance gain is more pronounced on
+OVD than on ISR, as the training and test datasets in OVD
+are out-of-domain, whereas those in ISR are in-domain.
+Furthermore, experiments in §2.5 of the appendix demon-
+strate that Syn-GRPO also enhances the performance of the
+refinement stage (i.e., second stage) of ISR.
+(a) Qwen2.5-VL-3B
+(b) Qwen2.5-VL-7B
+Figure 6. Ablation experiments of data size for Syn-GRPO on the
+LISA-Grounding dataset.
+(a) Diversity Reward
+(b) Test Accuracy
+Figure 7. Ablation experiments of the diversity smoothing method
+for Qwen2.5-VL-3B on the LISA-Grounding dataset.
+4.2. Ablation Experiments
+This section presents ablation studies of Syn-GRPO: (1)
+Variations in entropy & diversity; (2) Effect of data size;
+(3) Diversity smoothing; (4) Asynchronous data synthesis.
+Variations in entropy & diversity. As shown in Figure 2,
+during the original GRPO training, the entropy and diversity
+of the MLLM exhibit a rapid decreasing trend. By contrast,
+Syn-GRPO sustains high entropy and diversity from the first
+epoch (20% training progress), substantially mitigating the
+issues of entropy collapse and diversity collapse using the
+newly generated samples.
+Effect of data size. This experiment varies data size (400
+to 2,000 samples) in the REC task, investigating the im-
+pact of data size on model performance. As shown in Fig-
+ure 6, Syn-GRPO performance displays a steady upward
+trend with increasing data size, indicating a data scaling law
+and suggesting strong potential for generalization to long-
+term reinforcement learning.
+Diversity smoothing.
+This experiment verifies the ef-
+fect of the diversity smoothing method on the proposed
+diversity reward.
+Figure 7 (a) demonstrates that, with
+diversity smoothing, the diversity reward increases more
+steadily (with reduced fluctuations).
+Moreover, it also
+shows that diversity smoothing leads to a more rapid in-
+crease in the diversity reward. Figure 7 (b) presents that,
+with diversity smoothing, the test accuracy increases more
+rapidly and ultimately reaches a higher plateau. Overall,
+these two figures verify that diversity smoothing effectively
+7
+
+Epoch 1
+Epoch 2
+Epoch 3
+Epoch 4
+Figure 8. Generated images show a growingly complex trend.
+Original
+Original
+Synthesized
+Synthesized
+Figure 9. Two examples of surreal generated images.
+Model
+0.1
+0.3
+0.5
+0.7†
+0.9
+Qwen2.5-VL-3B
+67.43
+67.31
+67.85
+68.28
+67.55
+Qwen2.5-VL-7B
+68.88
+69.60
+69.84
+70.14
+69.24
+Table 4. Ablation experiments of γ for diversity smoothing on the
+LISA-Grounding dataset. † denotes the selected one.
+aligns the current model’s diversity distribution with the
+previous one, yielding a more accurate diversity reward and
+enabling stable and precise training. Furthermore, Table 4
+shows that performance improves with initial increases in γ
+but degrades when γ is excessively large, as it restricts the
+update of smoothed diversity.
+Asynchronous data synthesis. Table 5 shows that the syn-
+chronous data server design nearly doubles training time
+versus the original GRPO, as it must generate new data
+for each batch before proceeding. To tackle this problem,
+the data server adopts a modular design decoupled from
+the GRPO workflow, enabling asynchronous data synthesis
+with negligible overhead, as shown in Table 5.
+4.3. Visualization Analysis
+Visualization of generated images. Figure 5 presents ex-
+amples of generated images for three types of visual per-
+ception tasks. These visualizations show that the generated
+images possess high image fidelity and foreground consis-
+tency, thereby ensuring the accuracy of labels for the new
+data and satisfying the requirements for RL training.
+Trends in generated images. Figure 8 illustrates the gen-
+erated images from the same original image at various
+epochs, highlighting their increasing complexity and dif-
+ficulty, thereby preserving the diversity in reinforcement
+learning. This phenomenon demonstrates Syn-GRPO’s po-
+tential for adapting to long-term scalable RL by generating
+increasingly challenging images throughout RL training.
+Surreal generated images. We observe an intriguing phe-
+nomenon wherein the MLLM occasionally generates sur-
+Correct Answer (Syn-GRPO): 
+<think> The recreational vehicle in the
+figure is designed for transport and
+sleeping accommodations.  </think>
+<answer> [2.3, 0.2, 634.9,
+341.3] </answer>
+Question: Locate a vehicle
+that can transport belongings
+and offer a place to sleep.
+Wrong Answer (GRPO):
+<think> The orange truck is ideal for
+hauling belongings and
+sleeping. </think> <answer> [139.6,
+129.5, 824.7, 643.9] </answer>
+Figure 10. Example of Syn-GRPO’s outputs.
+Model
+GRPO
+Synchronous Asynchronous
+Qwen2.5-VL-3B
+6.10 Hours
+13.16 Hours
+6.45 Hours
+Qwen2.5-VL-7B 13.66 Hours
+28.47 Hours
+13.93 Hours
+Table 5. Training time of original GRPO on the REC task, Syn-
+GRPO (Synchronous), and Syn-GRPO (Asynchronous).
+real textual descriptions for new images, as illustrated in
+Figure 9. Although these images do not exist in reality,
+they hold potential to benefit RL training by stimulating the
+MLLM’s reasoning capability through eliciting novel rea-
+soning pathways from new perspectives.
+Visualization w/ & w/o Syn-GRPO. Figure 10 demon-
+strates that, in contrast to GRPO, Syn-GRPO accurately lo-
+calizes a partially occluded recreational vehicle. This in-
+dicates that Syn-GRPO enhances the MLLM’s perception
+ability under challenging conditions such as object occlu-
+sion and complex backgrounds, by synthesizing a large vol-
+ume of high-quality, complex training data.
+Furthermore, we have provided more visualization anal-
+ysis in §3 of the appendix.
+5. Conclusion
+In this work, we provide a thorough analysis of the low-
+quality data problem in RL for MLLM perception, where
+data samples fail to elicit diverse responses from MLLMs,
+thereby limiting the exploration scope for RL. To tackle
+this problem, we propose Syn-GRPO (Synthesis-GRPO),
+which utilizes an online data generator to synthesize high-
+quality training data with diverse responses in GRPO train-
+ing. Specifically, Syn-GRPO consists of a data server and
+a GRPO workflow.
+The data server leverages an image
+generation model to synthesize new samples with an asyn-
+chronous design. The GRPO workflow provides new image
+descriptions to the server and proposes a diversity reward,
+8
+
+supervising the MLLM to predict descriptions for high-
+quality images with diverse responses. Experimental results
+across three visual perception tasks indicate that Syn-GRPO
+substantially enhances data quality, significantly outper-
+forming existing RL methods. We hope our framework can
+contribute to the community of MLLM reasoning.
+References
+[1] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin
+Ge, Sibo Song, Kai Dang, Peng Wang, Shijie Wang, Jun
+Tang, et al. Qwen2. 5-vl technical report. arXiv preprint
+arXiv:2502.13923, 2025. 6
+[2] Sule Bai, Mingxing Li, Yong Liu, Jing Tang, Haoji Zhang,
+Lei Sun, Xiangxiang Chu, and Yansong Tang.
+Univg-r1:
+Reasoning guided universal visual grounding with reinforce-
+ment learning. arXiv preprint arXiv:2505.14231, 2025. 2
+[3] Daixuan Cheng, Shaohan Huang, Xuekai Zhu, Bo Dai,
+Wayne Xin Zhao, Zhenliang Zhang, and Furu Wei. Reason-
+ing with exploration: An entropy perspective. arXiv preprint
+arXiv:2506.14758, 2025. 1, 3
+[4] Ganqu Cui, Yuchen Zhang, Jiacheng Chen, Lifan Yuan, Zhi
+Wang, Yuxin Zuo, Haozhan Li, Yuchen Fan, Huayu Chen,
+Weize Chen, et al.
+The entropy mechanism of reinforce-
+ment learning for reasoning language models. arXiv preprint
+arXiv:2505.22617, 2025. 1, 3, 4
+[5] Huan Fu, Bowen Cai, Lin Gao, Lingxiao Zhang, Jiaming
+Wang, Cao Li, Qixun Zeng, Chengyue Sun, Rongfei Jia, Bin-
+qiang Zhao, and Hao Zhang. 3d-front: 3d furnished rooms
+with layouts and semantics. In ICCV 2021, pages 10913–
+10922. IEEE, 2021. 6
+[6] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song,
+Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi
+Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning
+capability in llms via reinforcement learning. arXiv preprint
+arXiv:2501.12948, 2025. 1
+[7] Chengsong Huang, Wenhao Yu, Xiaoyang Wang, Hongming
+Zhang, Zongxia Li, Ruosen Li, Jiaxin Huang, Haitao Mi, and
+Dong Yu. R-zero: Self-evolving reasoning llm from zero
+data. arXiv preprint arXiv:2508.05004, 2025. 3
+[8] Qing Jiang, Xingyu Chen, Zhaoyang Zeng, Junzhi Yu,
+and Lei Zhang.
+Rex-thinker:
+Grounded object re-
+ferring via chain-of-thought reasoning.
+arXiv preprint
+arXiv:2506.04034, 2025. 2
+[9] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng,
+Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao
+Zhang, and Ion Stoica. Efficient memory management for
+large language model serving with pagedattention. In Pro-
+ceedings of the ACM SIGOPS 29th Symposium on Operating
+Systems Principles, 2023. 6
+[10] Xin Lai, Zhuotao Tian, Yukang Chen, Yanwei Li, Yuhui
+Yuan, Shu Liu, and Jiaya Jia. LISA: reasoning segmentation
+via large language model. In CVPR 2024, pages 9579–9589.
+IEEE, 2024. 6
+[11] Tsung-Yi Lin, Michael Maire, Serge J. Belongie, James
+Hays, Pietro Perona, Deva Ramanan, Piotr Doll´ar, and
+C. Lawrence Zitnick. Microsoft COCO: common objects in
+context. In ECCV 2014, pages 740–755. Springer, 2014. 6
+[12] Yuqi Liu, Tianyuan Qu, Zhisheng Zhong, Bohao Peng, Shu
+Liu, Bei Yu, and Jiaya Jia. Visionreasoner: Unified visual
+perception and reasoning via reinforcement learning. arXiv
+preprint arXiv:2505.12081, 2025. 1, 2
+[13] Ziyu Liu, Zeyi Sun, Yuhang Zang, Xiaoyi Dong, Yuhang
+Cao, Haodong Duan, Dahua Lin, and Jiaqi Wang. Visual-
+rft:
+Visual reinforcement fine-tuning.
+arXiv preprint
+arXiv:2503.01785, 2025. 1, 2
+[14] Ilya Loshchilov and Frank Hutter. Decoupled weight decay
+regularization. In ICLR 2019. OpenReview.net, 2019. 6
+[15] Somshubra Majumdar, Vahid Noroozi, Mehrzad Samadi,
+Sean Narenthiran, Aleksander Ficek, Wasi Ahmad, Jocelyn
+Huang, Jagadeesh Balam, and Boris Ginsburg. Genetic in-
+struct: Scaling up synthetic generation of coding instructions
+for large language models. In Proceedings of the 63rd An-
+nual Meeting of the Association for Computational Linguis-
+tics (Volume 6: Industry Track), pages 208–221, 2025. 3
+[16] Junhua Mao, Jonathan Huang, Alexander Toshev, Oana
+Camburu, Alan L. Yuille, and Kevin Murphy. Generation
+and comprehension of unambiguous object descriptions. In
+CVPR 2016, pages 11–20. IEEE Computer Society, 2016. 6
+[17] Maxwell Meyer and Jack Spruyt. Ben: Using confidence-
+guided matting for dichotomous image segmentation. arXiv
+preprint arXiv:2501.06230, 2025. 6
+[18] Dustin
+Podell,
+Zion
+English,
+Kyle
+Lacey,
+Andreas
+Blattmann, Tim Dockhorn, Jonas M¨uller, Joe Penna, and
+Robin Rombach.
+Sdxl: Improving latent diffusion mod-
+els for high-resolution image synthesis.
+arXiv preprint
+arXiv:2307.01952, 2023. 6
+[19] Haris Riaz, Sourav Sanjukta Bhabesh, Vinayak Arannil,
+Miguel Ballesteros, and Graham Horwood.
+Metasynth:
+Meta-prompting-driven agentic scaffolds for diverse syn-
+thetic data generation.
+In Findings of the Association for
+Computational Linguistics: ACL 2025, pages 18770–18803,
+2025. 3
+[20] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao
+Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li,
+Y Wu, et al. Deepseekmath: Pushing the limits of mathe-
+matical reasoning in open language models. arXiv preprint
+arXiv:2402.03300, 2024. 1
+[21] Chuming Shen, Wei Wei, Xiaoye Qu, and Yu Cheng. Satori-
+r1: Incentivizing multimodal reasoning with spatial ground-
+ing and verifiable rewards. arXiv preprint arXiv:2505.19094,
+2025. 2, 6
+[22] Haozhan Shen, Peng Liu, Jingcheng Li, Chunxin Fang, Yibo
+Ma, Jiajia Liao, Qiaoli Shen, Zilun Zhang, Kangjia Zhao,
+Qianqian Zhang, et al.
+Vlm-r1: A stable and generaliz-
+able r1-style large vision-language model.
+arXiv preprint
+arXiv:2504.07615, 2025. 1, 2, 4, 6
+[23] Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu,
+Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and
+Chuan Wu. Hybridflow: A flexible and efficient rlhf frame-
+work. arXiv preprint arXiv: 2409.19256, 2024. 6
+[24] Dingfeng Shi, Jingyi Cao, Qianben Chen, Weichen Sun,
+Weizhen Li, Hongxuan Lu, Fangchen Dong, Tianrui Qin,
+King Zhu, Minghao Liu, et al. Taskcraft: Automated gen-
+eration of agentic tasks. arXiv preprint arXiv:2506.10055,
+2025. 3
+9
+
+[25] Jiaer Xia, Yuhang Zang, Peng Gao, Yixuan Li, and
+Kaiyang Zhou.
+Visionary-r1: Mitigating shortcuts in vi-
+sual reasoning with reinforcement learning. arXiv preprint
+arXiv:2505.14677, 2025. 2, 6
+[26] Chi Xie, Zhao Zhang, Yixuan Wu, Feng Zhu, Rui Zhao, and
+Shuang Liang. Described object detection: Liberating object
+detection with flexible expressions. In NeurIPS 2023, 2023.
+6
+[27] Licheng Yu, Patrick Poirson, Shan Yang, Alexander C. Berg,
+and Tamara L. Berg. Modeling context in referring expres-
+sions. In ECCV 2016, pages 69–85. Springer, 2016. 6
+[28] Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xi-
+aochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gao-
+hong Liu, Lingjun Liu, et al.
+Dapo:
+An open-source
+llm reinforcement learning system at scale. arXiv preprint
+arXiv:2503.14476, 2025. 1, 3
+[29] Lvmin Zhang, Anyi Rao, and Maneesh Agrawala. Adding
+conditional control to text-to-image diffusion models.
+In
+ICCV 2023, pages 3813–3824. IEEE, 2023. 6
+[30] Andrew Zhao, Yiran Wu, Yang Yue, Tong Wu, Quentin Xu,
+Matthieu Lin, Shenzhi Wang, Qingyun Wu, Zilong Zheng,
+and Gao Huang. Absolute zero: Reinforced self-play reason-
+ing with zero data. arXiv preprint arXiv:2505.03335, 2025.
+3
+[31] Xueliang Zhao, Wei Wu, Jian Guan, and Lingpeng Kong.
+Promptcot: Synthesizing olympiad-level problems for math-
+ematical reasoning in large language models. arXiv preprint
+arXiv:2503.02324, 2025. 3
+[32] Yanli Zhao, Andrew Gu, Rohan Varma, Liang Luo, Chien-
+Chin Huang, Min Xu, Less Wright, Hamid Shojanazeri,
+Myle Ott, Sam Shleifer, Alban Desmaison, Can Balioglu,
+Pritam Damania, Bernard Nguyen, Geeta Chauhan, Yuchen
+Hao, Ajit Mathews, and Shen Li. Pytorch FSDP: experiences
+on scaling fully sharded data parallel. Proc. VLDB Endow.,
+16(12):3848–3860, 2023. 6
+10

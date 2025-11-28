@@ -1,0 +1,1210 @@
+Scalable Parameter-Light Spectral Method for Clustering Short
+Text Embeddings with a Cohesion-Based Evaluation Metric
+Nikita Neveditsin
+Saint Mary’s University
+Halifax, Nova Scotia, Canada
+nikita.neveditsin@smu.ca
+Pawan Lingras
+Saint Mary’s University
+Halifax, Nova Scotia, Canada
+pawan.lingras@smu.ca
+Vijay Mago
+York University
+Toronto, Ontario, Canada
+vmago@yorku.ca
+Abstract
+Clustering short text embeddings is a foundational task in natural
+language processing, yet remains challenging due to the need to
+specify the number of clusters in advance. We introduce a scalable
+spectral method that estimates the number of clusters directly from
+the structure of the Laplacian eigenspectrum, constructed using
+cosine similarities and guided by an adaptive sampling strategy.
+This sampling approach enables our estimator to efficiently scale
+to large datasets without sacrificing reliability. To support intrin-
+sic evaluation of cluster quality without ground-truth labels, we
+propose the Cohesion Ratio, a simple and interpretable evaluation
+metric that quantifies how much intra-cluster similarity exceeds
+the global similarity background. It has an information-theoretic
+motivation inspired by mutual information, and in our experiments
+it correlates closely with extrinsic measures such as normalized
+mutual information and homogeneity. Extensive experiments on
+six short-text datasets and four modern embedding models show
+that standard algorithms like K-Means and HAC, when guided by
+our estimator, significantly outperform popular parameter-light
+methods such as HDBSCAN, OPTICS, and Leiden. These results
+demonstrate the practical value of our spectral estimator and Co-
+hesion Ratio for unsupervised organization and evaluation of short
+text data. Implementation of our estimator of 𝑘and Cohesion Ratio,
+along with code for reproducing the experiments, is available at
+https://anonymous.4open.science/r/towards_clustering-0C2E.
+CCS Concepts
+• Computing methodologies →Machine learning; Natural
+language processing; • Mathematics of computing →Informa-
+tion theory; • Information systems →Document topic models;
+Content analysis and feature selection; Clustering.
+Keywords
+clustering, short text, spectral methods, number of clusters, Lapla-
+cian spectrum, unsupervised learning, embedding models, intrinsic
+evaluation, cohesion ratio, parameter-light methods
+1
+Introduction
+Clustering short texts, represented as dense embeddings from trans-
+former models [27], is a foundational task for organizing seman-
+tically related information in domains from social media analysis
+to digital health. A critical and persistent challenge in this domain,
+however, is the determination of the number of clusters, k. Most
+clustering algorithms either require k to be specified a priori or
+depend on other sensitive hyperparameters [7, 15], which is im-
+practical in exploratory settings where ground-truth structure is
+unknown. This limitation severely hinders the application of clus-
+tering for unsupervised knowledge discovery [16, 26].
+To address the challenge of estimating the number of clusters
+without prior specification, we extend the classical eigengap heuris-
+tic from spectral graph theory [25, 35] to high-dimensional text
+embeddings. Our method constructs a normalized graph Laplacian
+from cosine similarities and applies adaptive thresholding to detect
+the eigengap, yielding a data-driven estimate of k without manual
+tuning. A random subsampling strategy ensures scalability on large
+datasets, improving robustness across diverse text collections.
+In addition, to evaluate clustering quality in the absence of
+ground-truth labels, we propose the Cohesion Ratio, a simple
+and interpretable intrinsic metric. This metric evaluates a clus-
+tering’s quality by comparing the average intra-cluster similarity
+against the global average similarity of the entire dataset. It is de-
+signed to reward semantically coherent clusters and, as we will
+show, correlates strongly with human-based extrinsic evaluations.
+To validate our proposed methods, we conduct a large-scale em-
+pirical study on six diverse short-text datasets and four modern
+embedding models. We use our spectral method to guide tradi-
+tional algorithms (K-Means and HAC) and compare their perfor-
+mance against prominent low-configuration methods, including
+HDBSCAN, OPTICS, Leiden, and Affinity Propagation. Our ex-
+periments are designed to answer two central questions: (i) can
+a robust spectral estimator enable traditional algorithms to out-
+perform modern parameter-light methods? and (ii) how well do
+intrinsic metrics, including our proposed Cohesion Ratio, align with
+human-annotated labels?
+This study makes the following key contributions:
+• A Refined Spectral Method for Cluster Estimation:
+Building on foundational work in spectral clustering, we
+introduce a refined and scalable method for estimating 𝑘.
+Our approach adapts the classic eigengap heuristic for high-
+dimensional text embeddings through an adaptive thresh-
+olding scheme and a sampling strategy inspired by recent
+large-scale estimation techniques [11, 13, 21].
+• The Cohesion Ratio Metric: We introduce a simple, in-
+terpretable, and effective intrinsic metric for evaluating
+cluster quality. Empirical results demonstrate that it corre-
+lates strongly with extrinsic, label-based metrics grounded
+in mutual information.
+• Extensive Empirical Validation: Through rigorous ex-
+periments, we show that our spectral estimation method
+enables standard algorithms like HAC and K-Means to sig-
+nificantly outperform dedicated low-configuration methods
+on short-text clustering tasks. This provides direct, practical
+guidance for researchers and practitioners.
+arXiv:2511.19350v1  [cs.LG]  24 Nov 2025
+
+Nikita Neveditsin, Pawan Lingras, and Vijay Mago
+2
+Related Work
+2.1
+Exploratory Text Clustering When Number
+of Clusters is Unknown
+Clustering of text representations has been widely explored in
+natural language processing, particularly in the context of topic
+discovery, concept organization, and data profiling. Traditional
+approaches rely on models such as Latent Dirichlet Allocation [5]
+or methods operating on a vector space model of term frequencies,
+which infer latent topics by modeling word co-occurrence statistics.
+While effective on large corpora, these methods require substantial
+preprocessing, hyperparameter tuning (e.g., number of topics), and
+do not generalize well to short or sparse texts. Some attempts to
+address the unknown cluster count problem within this paradigm
+introduced their own limitations. For instance, the online clustering
+scheme proposed by Yin and Wang [39] still required the user to
+specify a maximum possible number of clusters, 𝑘𝑚𝑎𝑥.
+In contrast, modern embedding-based clustering methods oper-
+ate directly on dense vector representations produced by pretrained
+models. Sentence-level embedding models such as Sentence-BERT
+[27], E5 [36], and more recent instruction-tuned transformers have
+been shown to yield high-quality representations across tasks. The
+Massive Text Embedding Benchmark (MTEB) [24] includes clus-
+tering tasks using K-Means with known cluster counts, providing
+insight into relative model performance. However, such evalua-
+tions assume prior knowledge of the number of clusters, which, as
+noted, remains a persistent challenge in real-world settings. This
+issue is not merely an inconvenience but a fundamental barrier
+to exploratory data mining, a challenge articulated compellingly
+by Keogh et al. [19], who argued for a community-wide shift to-
+wards parameter-free algorithms to enable more objective and re-
+producible data analysis.
+2.2
+Parameter-Light Algorithms
+Density-based methods [10] such as OPTICS [1] and HDBSCAN
+[7] and message-passing approaches like Affinity Propagation [15]
+attempt to remove the need for a user-specified 𝑘by exposing alter-
+native hyper-parameters such as minimum cluster size, preference,
+or reachability radius. Community-detection algorithms such as
+Louvain and Leiden transfer this idea to similarity graphs, using
+resolution parameters instead of 𝑘and offering strong scalability on
+large corpora [34]. However, each of the methods have their own
+shortcomings. Density-based methods are known to be sensitive to
+parameter selection [23], Affinity Propagation struggles on larger
+datasets due to its quadratic complexity, and community-detection
+algorithms such as Louvain and Leiden are known to sometimes
+produce poorly connected communities and encounter scalability
+limitations on massive graphs [30].
+2.3
+Spectral Clustering and Estimating the
+Number of Clusters
+Spectral clustering constructs a graph from the similarity matrix
+and derives its Laplacian, whose spectrum reveals underlying com-
+munity structure [25, 35]. A widely used method for estimating
+the number of clusters 𝑘is the eigengap heuristic, which selects 𝑘
+based on the largest gap between consecutive eigenvalues. While
+conceptually simple and computationally efficient, this heuristic
+often breaks down when clusters differ significantly in scale or
+density.
+To address its limitations, several refinements have been pro-
+posed. Self-tuning spectral clustering replaces a global scale pa-
+rameter with locally adaptive bandwidths [41]. The Normalised
+Maximum Eigengap approach jointly optimizes graph parameters
+and 𝑘[26], while the Spectral Information Criterion formalizes
+the “elbow” method using information-theoretic bounds [22]. More
+recently, Yu et al. [40] introduced fuzzy spectral clustering, which
+incorporates a fuzzy index to reduce sensitivity to the similarity
+matrix and simultaneously learns the clustering structure.
+Despite these advances, estimating 𝑘remains a persistent chal-
+lenge, particularly in high-dimensional or semantically rich settings
+such as textual embeddings. Our work builds on this shortcoming
+by proposing a more robust and interpretable estimation technique
+tailored specifically to this domain.
+3
+Methodology
+3.1
+Problem Formulation
+Let D = {𝑥1,𝑥2, . . . ,𝑥𝑛} denote a collection of short text segments,
+and let Φ : D →R𝑑be a pretrained embedding function mapping
+each 𝑥𝑖to a dense vector z𝑖= Φ(𝑥𝑖). The objective is to partition the
+embedding set {z1, . . . , z𝑛} into semantically meaningful clusters
+using a function 𝑓: R𝑑→N, without assuming prior knowledge of
+the number of clusters 𝑘or relying on extensive hyper-parameter
+tuning. Here, semantically meaningful refers to clusters whose mem-
+bers convey similar underlying topics, intents, or concepts, even if
+they differ lexically or syntactically.
+This problem setting reflects real-world exploratory scenarios
+where human-aligned semantic groupings must be discovered with-
+out supervision. It presents two core challenges: (i) estimating the
+number of clusters𝑘in a scalable and robust way, and (ii) evaluating
+clustering quality intrinsically, without reference to external labels.
+3.2
+Datasets
+We evaluate clustering methods on six diverse short-text datasets
+spanning a range of domains, including encyclopedic knowledge,
+news articles, conceptual categories, and user-generated discus-
+sions. Each dataset is standardized into a text-label format, where
+labels correspond to gold-standard semantic categories. To ensure
+fair evaluation across different sizes and label distributions, we
+apply both random and stratified sampling at fixed size intervals,
+resulting in a total of 62 dataset variants.
+The DBpedia datasets consist of short titles and longer article
+bodies from the DBpedia 14 collection, each covering 14 uniformly
+distributed categories [24]. The 20 Newsgroups corpus contains
+over 11,000 long-form documents grouped into 20 topical categories
+with moderate imbalance [20]. BLESS is a compact concept cate-
+gorization benchmark with 200 noun entries distributed across 17
+fine-grained semantic classes [3]. Finally, we include two large-scale
+user-generated datasets from MTEB: Reddit and StackExchange.
+These cover 50 and 121 categories respectively, and are charac-
+terized by moderate-length texts and substantial label imbalance
+[24].
+
+Scalable Parameter-Light Spectral Method for Clustering Short Text Embeddings with a Cohesion-Based Evaluation Metric
+For each dataset, we compute summary statistics including the
+number of instances, number of classes, average input length (in
+words), and cluster imbalance (measured as the coefficient of vari-
+ation of label counts). Table 1 presents the full statistics for the
+original datasets.
+Table 1: Full dataset statistics
+Dataset
+Instances
+Clusters
+Avg. Len. (Words)
+Imbalance
+DBpedia Title
+560,000
+14
+2.74
+0.000
+DBpedia Text
+560,000
+14
+46.13
+0.000
+20 Newsgroups
+11,314
+20
+185.83
+0.100
+BLESS
+200
+17
+1.00
+0.360
+Reddit
+420,464
+50
+11.07
+0.179
+StackExchange
+373,850
+121
+9.67
+0.400
+3.3
+Embedding Models
+To represent short texts in a dense semantic space, we employ a
+selection of pretrained sentence embedding models with diverse
+architectures and training objectives. All models are openly avail-
+able and can be used without fine-tuning. This diversity enables us
+to evaluate the robustness of clustering methods across embedding
+spaces that differ in scale, origin, and linguistic capabilities.
+Our selected models include both compact encoders suitable for
+low-resource scenarios and larger instruction-tuned or retrieval-
+optimized architectures. Table 2 summarizes the models along with
+their parameter sizes and reported performance on the Massive
+Text Embedding Benchmark (as of July, 2025).
+Table 2: Embedding models used for clustering. Parameter
+counts are given in millions (M) or billions (B). MTEB ranks
+are for English tasks as of July 2025
+Model
+Params
+MTEB Rank
+multilingual-e5-large-instruct
+560M
+25
+Qwen3-Embedding-0.6B
+600M
+4
+Qwen3-Embedding-8B
+8B
+2
+Linq-Embed-Mistral
+7B
+5
+The models were chosen to balance accessibility, representational
+diversity, and empirical competitiveness. This selection allows us to
+disentangle clustering algorithm behavior from embedding model
+biases and to test generalizability across small, multilingual, and
+instruction-optimized transformers.
+3.4
+Clustering Algorithms
+To evaluate the effectiveness of our proposed cluster count esti-
+mator, we apply it in combination with two standard algorithms
+that require 𝑘as input: K-Means and Hierarchical Agglomerative
+Clustering (HAC). These algorithms are widely used and provide
+a controlled setting for isolating the impact of 𝑘estimation on
+clustering performance.
+For comparison, we include a set of representative low-configuration
+algorithms that infer the number of clusters automatically or are in-
+herently non-parametric. These serve as competitive baselines and
+fall into three categories: density-based, graph-based, and similarity-
+based methods.
+Among the density-based methods, HDBSCAN generalizes DB-
+SCAN via hierarchical density estimation, constructing a condensed
+cluster tree and extracting a flat clustering with minimal param-
+eter tuning. OPTICS similarly builds on the DBSCAN framework
+but uses reachability plots to handle variable-density structures
+without requiring a global threshold.
+In the graph-based category, we employ Leiden clustering on
+similarity graphs constructed from cosine similarities between em-
+beddings. The algorithm detects communities using the Constant
+Potts Model (CPM) [33], which promotes the discovery of well-
+connected subgraphs without needing to specify 𝑘.
+Finally, Affinity Propagation adopts a message-passing strategy
+to identify exemplar points and induce clusters based on pairwise
+similarities. Like the other baselines, it does not require 𝑘to be
+predefined.
+This setup allows us to assess whether traditional algorithms,
+when guided by our spectral 𝑘-estimator, can outperform mod-
+ern parameter-light methods under low-supervision constraints.
+Appendix A provides details on algorithm usage.
+3.5
+Adaptive Estimation of the Number of
+Clusters via Laplacian Spectrum
+We propose a method to estimate the number of clusters in a dataset
+by analyzing the eigenspectrum of a normalized Laplacian derived
+from the cosine similarity of the samples. The approach combines
+spectral gap detection with adaptive sampling to remain efficient
+on large datasets.
+Our method builds upon the well-established eigengap heuristic
+from spectral graph theory, which suggests that a large difference
+between consecutive eigenvalues of the normalized Laplacian ma-
+trix corresponds to a natural cluster boundary in the data [25, 35].
+Formally, an ideal graph with 𝑘disconnected components has ex-
+actly 𝑘zero eigenvalues of the Laplacian [35].
+However, real-world similarity graphs derived from sentence em-
+beddings are typically noisy, dense, and lack clearly disconnected
+components, which leads to a smoothed Laplacian spectrum and
+weakens the eigengap signal. To mitigate this, our estimator incor-
+porates a moving-average normalization over the spectrum and
+applies adaptive sampling to increase robustness at scale.
+Estimation Procedure. Let X ∈R𝑛×𝑑denote the matrix of em-
+beddings for a dataset with 𝑛samples, where each sample has
+been mapped to a 𝑑-dimensional dense vector using the embedding
+function Φ described earlier. We compute the cosine similarity ma-
+trix S ∈R𝑛×𝑛and clip its entries to ensure non-negative affinities.
+Since negative cosine similarities are rare in semantic embedding
+spaces and usually lack meaningful interpretation [8, 12, 18], we
+set 𝑆𝑖𝑗←max(𝑆𝑖𝑗, 0). We then construct the normalized Laplacian:
+Lsym = I −D−1/2SD−1/2,
+where D is the diagonal degree matrix with 𝐷𝑖𝑖= Í
+𝑗𝑆𝑖𝑗. The
+eigenvalues 𝜆1 ≤𝜆2 ≤· · · ≤𝜆𝑛of Lsym are then analyzed. A
+significant jump in the spectrum, often referred to as an eigengap,
+is traditionally taken as an indicator of the number of clusters.
+However, in high-dimensional semantic spaces, the spectrum tends
+
+Nikita Neveditsin, Pawan Lingras, and Vijay Mago
+to decay smoothly, making it difficult to identify a single dominant
+gap.
+Rather than seeking the largest eigengap, our method identifies
+the point at which the spectrum begins to flatten, indicating that
+further eigenvalues contribute little additional structure. To detect
+this transition, we employ a moving average normalization strategy.
+For a given window size 𝑤, we define the normalized spectral
+difference at position 𝑖as:
+𝛿𝑖=
+|𝜆𝑖−𝜆𝑖−1|
+1
+𝑤
+Í𝑖−1
+𝑗=𝑖−𝑤𝜆𝑗+ 𝜖
+,
+for 𝑖= 𝑤+ 1, . . . ,𝑛, where 𝜖is a small constant to ensure numerical
+stability. We compute these normalized differences 𝛿𝑖across the
+upper half of the spectrum (i.e., for indices 𝑖> 𝑛/2, since we do
+not expect the number of clusters to exceed half the sample size),
+and denote their sample mean and standard deviation by E[𝛿] and
+𝜎[𝛿], respectively.
+Notably, preliminary experiments on our text embedding datasets
+reveal that standard eigengap heuristics consistently return values
+of 𝑘< 5, even when the ground truth number of categories is
+substantially larger. This behavior supports the interpretation that
+classic eigengap heuristics are ill-suited for spectral analysis over
+dense semantic graphs, where signal is distributed more gradually
+across the spectrum. Thus, we traverse the spectrum in reverse,
+searching for the first index 𝑖such that:
+𝛿𝑖> E[𝛿]
+
+1 +
+𝜎[𝛿]
+E[𝛿] + 𝜖
+
+.
+The multiplicative term reflects a data-dependent threshold that
+scales with the relative variation in spectral differences. This for-
+mulation ensures that the selected point in the spectrum is not
+only larger than the average change but also exceeds typical fluctu-
+ations observed across the spectrum, capturing only meaningful
+transitions in spectral decay. An example of this detection process
+is shown in Figure 1, which visualizes the Laplacian spectrum, nor-
+malized differences, and adaptive threshold for the BLESS dataset.
+To scale this method to large datasets, we apply adaptive sam-
+pling: if 𝑛> 𝜏, where 𝜏is a maximum sample size (e.g., 1000), we
+draw multiple random subsets and average the estimated number
+of clusters across replicates. We set the number of replicates as
+𝑟= log2(𝑛) · 10, allowing the number of subsampled evaluations
+to scale smoothly with dataset size. This adaptive growth balances
+computational cost with the stability of cluster number estimation,
+similar to practices in bootstrap-based and ensemble clustering
+methods. This ensemble approach is motivated by recent work in
+scalable cluster estimation, such as the kluster procedure [11],
+bootstrap-based estimators [13], and ensemble eigengap estimation
+methods for big data [21]. Algorithm 1 summarizes the procedure.
+The ComputeEigenvalues subroutine computes the cosine simi-
+larity matrix S from X, rectifies to non-negative, forms symmetric
+normalized Laplacian, and returns sorted eigenvalues Λ. The Esti-
+mateKFromSpectrum subroutine computes normalized differences
+𝛿𝑖with window 𝑤on eigenvalues Λ, sets the adaptive threshold,
+traverses reverse to find first 𝛿𝑖> threshold for ˆ𝑘, defaulting to
+𝑘default (chosen as a conservative prior for short-text corpora) if
+none found.
+Figure 1: First half of Laplacian eigenvalue spectrum and nor-
+malized spectral differences (𝛿𝑖) for the BLESS dataset. The
+detected number of clusters ˆ𝑘is shown as a vertical dashed
+line. The detection window (light gray) marks the region
+used for local averaging before the detected jump. The dotted
+line represents 𝛿𝑖values, and the horizontal dashed line indi-
+cates the adaptive threshold computed from the mean and
+variance of spectral differences. A significant over-threshold
+jump at ˆ𝑘signals the point where spectral flattening begins,
+suggesting the cut-off for meaningful clustering.
+Algorithm 1 Adaptive Cluster Count Estimation
+Require: Data matrix X ∈R𝑛×𝑑, sample cap 𝜏, window size 𝑤,
+fallback default 𝑘default = 5
+1: if 𝑛≤𝜏then
+2:
+Λ ←ComputeEigenvalues(X)
+3:
+return EstimateKFromSpectrum(Λ,𝑤,𝑘default)
+4: else
+5:
+𝑟←log2(𝑛) · 10
+6:
+for 𝑖= 1 to 𝑟do
+7:
+Draw random subset X𝑖⊂X, |X𝑖| = 𝜏
+8:
+Λ𝑖←ComputeEigenvalues(X𝑖)
+9:
+𝑘𝑖←EstimateKFromSpectrum(Λ𝑖,𝑤,𝑘default)
+10:
+end for
+11:
+return 1
+𝑟
+Í𝑟
+𝑖=1 𝑘𝑖
+12: end if
+Sensitivity Analysis for 𝑤and 𝜏. We evaluate the effect of the
+moving average window size 𝑤on the accuracy of cluster count
+estimation. For each value of 𝑤, we compute the mean relative error
+between the estimated and true number of clusters across datasets,
+along with the average fraction of failed predictions returned by
+the estimator (when it needed to fall back to 𝑘default).
+Figure 2 summarizes these results. As the window size increases,
+the average relative error tends to grow, indicating reduced esti-
+mation precision due to oversmoothing. Notably, the fraction of
+invalid predictions also rises with larger windows, reflecting a loss
+in estimator selectivity. Moderate window sizes 𝑤≲7 offer the best
+trade-off between accuracy and robustness. These results support
+the use of 𝑤= 3 as a default setting.
+Further, to balance estimation accuracy and computational cost,
+we conducted an ablation study across multiple values of the sam-
+pling threshold𝜏∈{200, 500, 1000, 2000}. Results showed that while
+
+Scalable Parameter-Light Spectral Method for Clustering Short Text Embeddings with a Cohesion-Based Evaluation Metric
+Figure 2: Impact of window size 𝑤on mean relative error
+(solid line, left axis) and average fraction of invalid predic-
+tions (dashed line, right axis).
+larger values of 𝜏increase the runtime due to the O(𝜏3) complexity
+of eigendecomposition, they do not consistently improve cluster
+estimation accuracy. Most datasets perform well in the 500–1000
+range, with 𝜏= 1000 offering a reliable trade-off. Notably, smaller
+values were inadequate for datasets with many clusters, where
+the truncated spectrum lacked sufficient resolution to detect the
+spectral flattening point.
+Optional Normalization Variant. While our core algorithm op-
+erates directly on raw cosine similarities, we also performed an
+ablation study in which Z-score normalization (followed by rectifi-
+cation) was applied prior to Laplacian construction. This step aims
+to suppress weak inter-cluster affinities and highlight confident
+intra-cluster connections.
+We evaluated the impact of Z-score normalization across a range
+of moving average window sizes 𝑤∈{3, 4, 5, 6, 7} and subsam-
+ple caps 𝜏∈{200, 500, 1000, 2000}. Overall, the Z-score variant
+yielded a lower mean relative error (0.6017) compared to the raw
+similarity baseline (0.7201), with a Wilcoxon signed-rank test in-
+dicating the difference was statistically significant (𝑝< 0.05). At
+the dataset level, Z-scoring led to significant improvements on four
+out of six datasets, while degrading performance on Reddit and
+StackExchange. Given these mixed outcomes, we do not include
+normalization in the default pipeline, but offer it as an optional pre-
+processing step that may benefit datasets with balanced and seman-
+tically well-separated clusters. Appendix B shows heatmaps of raw
+and normalized cosine similarity matrices for selected datasets, il-
+lustrating that normalization can reveal sharper intra-cluster blocks
+and reduce background noise in some cases.
+Computational Complexity. We cap each subsample at size 𝜏,
+and draw 𝑟= log2(𝑛) · 10 subsets, yielding total complexity 𝑂(𝑟·
+𝜏3) = 𝑂(log𝑛· 𝜏3), dominated by the eigendecomposition of 𝜏× 𝜏
+similarity matrices. This is substantially more efficient than full
+spectral clustering, which incurs 𝑂(𝑛3) time.
+Our estimator is modular and algorithm-agnostic, making it suit-
+able as a general-purpose 𝑘-estimation module for any clustering
+algorithm that benefits from a prior on the number of clusters.
+Philosophically, our use of subsampling parallels fast approxi-
+mate spectral clustering methods [38], though we apply it to the
+problem of estimating 𝑘, not clustering itself. The strong perfor-
+mance of our method, particularly its stable relative error in cluster
+estimate across dataset sizes (see Section 4.3 for details) supports
+its viability as a scalable and reliable 𝑘-estimator.
+3.6
+Extrinsic and Intrinsic Evaluation
+We evaluate the effectiveness of parameter-light clustering algo-
+rithms on sentence-level embeddings of short texts, comparing their
+performance against our proposed 𝑘-estimation method combined
+with K-Means and HAC.
+3.6.1
+Extrinsic Evaluation Metrics. We evaluate clustering perfor-
+mance using three standard extrinsic metrics that quantify align-
+ment with gold-standard labels:
+Normalized Mutual Information (NMI) [28, 32]: Measures
+mutual dependence between predicted and true clusters, normalized
+to the range [0, 1]. It is equivalent to the V-measure under sym-
+metric normalization, which decomposes into homogeneity (each
+cluster contains only members of a single class) and completeness
+(all members of a class are assigned to the same cluster).
+Adjusted Rand Index (ARI) [17]: Quantifies pairwise agree-
+ment between clusterings, adjusted for chance. A value of 0 indi-
+cates random agreement; 1 indicates perfect alignment.
+Fowlkes-Mallows Index (FMI) [14]: Measures the geometric
+mean of precision and recall between pairs of points in predicted
+and true clusters. Values range from 0 (no agreement) to 1 (perfect
+match), with higher values indicating greater consistency between
+the predicted and ground-truth clustering structures.
+𝑘-Relative Error: Measures the deviation between the estimated
+number of clusters ˆ𝑘and the ground-truth count 𝑘:
+RE𝑘= | ˆ𝑘−𝑘|
+𝑘
+3.6.2
+Intrinsic Evaluation Metrics. We assess clustering structure
+using intrinsic metrics that do not rely on ground-truth labels:
+Silhouette Score [29]: Captures both intra-cluster cohesion and
+inter-cluster separation. Ranges from −1 to 1, with higher values
+indicating more compact and well-separated clusters.
+Davies-Bouldin Index (DBI) [9]: Computes average similar-
+ity between each cluster and its most similar peer. Lower values
+indicate better-defined clusters.
+Calinski-Harabasz Index (CHI) [6]: Measures the ratio of
+between-cluster to within-cluster dispersion. Higher values reflect
+more distinct and well-separated clusters.
+Cohesion Ratio. We propose a cohesion-based internal metric
+that evaluates the average intra-cluster similarity of a clustering
+solution relative to the overall similarity structure of the dataset.
+The core intuition is that a meaningful clustering should exhibit
+stronger internal coherence than the background similarity present
+across the entire dataset. Mathematically, this formulation adapts
+the Pairwise Discriminative Power (PDP) statistic, originally intro-
+duced for supervised product-resolution similarity evaluation [2].
+However, our application differs substantially in scope and intent:
+whereas PDP is defined with respect to ground-truth equivalence
+classes, we employ this ratio purely on the predicted clustering
+as a label-free intrinsic index for assessing the quality of cluster-
+ings over short-text embeddings. Let 𝑋= {𝑥1, . . . ,𝑥𝑛} be the set of
+
+Nikita Neveditsin, Pawan Lingras, and Vijay Mago
+data points, partitioned into clusters C = {𝐶1, . . . ,𝐶𝐾}, where each
+𝐶𝑘⊂𝑋is a subset of indices corresponding to a single cluster. Let
+𝑆𝑖𝑗denote a general similarity measure between points 𝑥𝑖and 𝑥𝑗;
+in our implementation, we use cosine similarity.
+We first compute the global average pairwise similarity across
+all unordered pairs of points:
+𝜇𝐺= 1 𝑛
+2
+
+∑︁
+1≤𝑖<𝑗≤𝑛
+𝑆𝑖𝑗.
+Next, we compute the average intra-cluster similarity, denoted 𝜇𝐼,
+by summing the similarities between all unordered point pairs
+within each cluster and dividing by the total number of such pairs:
+𝜇𝐼= 1
+𝑃
+𝐾
+∑︁
+𝑘=1
+∑︁
+𝑖,𝑗∈𝐶𝑘
+𝑖<𝑗
+𝑆𝑖𝑗,
+where 𝑃= Í𝐾
+𝑘=1
+ |𝐶𝑘|
+2
+ + 𝑁1, and 𝑁1 is the number of singleton
+clusters. Singleton clusters are treated as contributing a default
+similarity equal to the global average 𝜇𝐺, and each contributes a
+single virtual pair to the total. This treatment ensures that singletons
+are neutral in the cohesion calculation, as they neither inflate nor
+penalize the score, reflecting their ambiguous contribution to the
+overall cluster structure.
+The final cohesion ratio is defined as:
+𝜌𝐶= 𝜇𝐼
+𝜇𝐺
+.
+Since 𝑆𝑖𝑗∈[0, 1], both 𝜇𝐼and 𝜇𝐺lie in the interval [0, 1]. Therefore,
+the Cohesion Ratio 𝜌𝐶= 𝜇𝐼/𝜇𝐺is well-defined and satisfies 𝜌𝐶∈
+[0, ∞), with 𝜌𝐶= 1 corresponding to a clustering whose internal
+cohesion is equal to the global background similarity. In practice,
+most well-formed clusterings yield 𝜌𝐶> 1, while poorly formed or
+random clusterings tend to have 𝜌𝐶≈1. This boundedness makes
+𝜌𝐶robust and interpretable across datasets with varying structure
+and density.
+The ratio thus quantifies the relative strength of intra-cluster
+similarity compared to the background similarity structure of the
+data. It is agnostic to geometric shape, convexity, or distributional
+assumptions, making it broadly applicable across a range of domains
+and similarity measures.
+Theoretical Motivation via an Information-Theoretic Analogy. We
+interpret 𝜌𝐶as a proxy for the information gained by conditioning
+pairwise affinities on the predicted cluster assignments 𝐶. From a
+null-model perspective [17], the global average affinity 𝜇𝐺repre-
+sents the expected similarity under random assignments (back-
+ground “noise”), while 𝜇𝐼reflects the concentration of affinity
+within clusters (signal).
+To formalize this contrast, we model the affinity space as a binary
+channel with two states (“similar” vs. “not similar”). Let 𝐴∈{0, 1}
+denote a Bernoulli random variable indicating whether a randomly
+sampled pair is similar, induced from the underlying affinities 𝑆𝑖𝑗. In
+this abstraction, we treat the global mean 𝜇𝐺as the prior probability
+of similarity, 𝑃(𝐴=1) ≈𝜇𝐺, and the intra-cluster mean 𝜇𝐼as the
+conditional probability given cluster agreement, 𝑃(𝐴=1 | 𝐶same) ≈
+𝜇𝐼.
+The divergence between the cluster-conditioned model and the
+background null model can be expressed using the Kullback-Leibler
+divergence between two Bernoulli distributions:
+𝐷KL(𝜇𝐼∥𝜇𝐺) = 𝜇𝐼log
+ 𝜇𝐼
+𝜇𝐺
+
++ (1 −𝜇𝐼) log
+ 1 −𝜇𝐼
+1 −𝜇𝐺
+
+.
+In the regime typical for short-text clustering, where semantic con-
+nections are sparse (𝜇𝐺→0) but clusters are coherent (𝜇𝐼≫𝜇𝐺),
+the first term tends to dominate the divergence. This term corre-
+sponds to the expected log-likelihood ratio of observing a “similar”
+pair under the cluster hypothesis versus the null hypothesis.
+Consequently, the logarithm of our Cohesion Ratio corresponds
+directly to the Pointwise Mutual Information of this binary event:
+log 𝜌𝐶= log
+ 𝜇𝐼
+𝜇𝐺
+
+≈log 𝑃(𝐴=1 | 𝐶same)
+𝑃(𝐴=1)
+= PMI(𝐴=1,𝐶same).
+Under this analogy, 𝜌𝐶≈1 implies PMI ≈0, meaning that condi-
+tioning on cluster membership provides no information gain regard-
+ing similarity. In contrast, 𝜌𝐶≫1 indicates substantial deviation
+from the null, corresponding to meaningful structural information.
+Empirically, our results confirm that 𝜌𝐶correlates strongly with ex-
+trinsic information-theoretic measures such as normalized mutual
+information.
+Appendix C discusses differences between Cohesion Ratio and
+Silhouette Score.
+4
+Results
+4.1
+Extrinsic and Intrinsic Evaluation
+Table 3 compares the clustering algorithms across extrinsic and
+intrinsic evaluation metrics. The Friedman test with𝑘= 6 clustering
+methods and 𝑁= 248 dataset-model pairs revealed statistically
+significant differences (𝑝≪0.05) among the algorithms across all
+evaluation metrics.
+Table 3: Overall Scores for the Algorithms: Extrinsic and
+Intrinsic Evaluation. Bold values indicate the best score per
+column, while italic values indicate the worst. The term k-est
+refers to our method for estimating the number of clusters
+(𝑘).
+Algorithm
+ARI
+NMI
+F-M
+𝑅𝐸𝑘
+Silh.
+DBI
+CHI
+𝜌
+HDBSCAN
+0.0163
+0.2661
+0.1582
+16.3348
+-0.0725
+2.9791
+3.8561
+1.0057
+OPTICS
+0.0045
+0.3486
+0.1384
+33.3208
+-0.1216
+1.7632
+2.1513
+0.9949
+Aff. Prop.
+0.1293
+0.5730
+0.1900
+20.6124
+0.0567
+2.8967
+5.9439
+1.5112
+Leiden
+0.2767
+0.6162
+0.3278
+9.0217
+0.0264
+2.0598
+7.0905
+1.3303
+K-Means (k-est)
+0.3534
+0.5929
+0.3916
+0.5203
+0.0664
+4.1446
+53.1836
+1.2969
+HAC (k-est)
+0.3799
+0.5932
+0.4175
+0.5223
+0.0597
+4.1397
+47.8207
+1.2786
+To assess the robustness of clustering performance differences,
+we conducted the Nemenyi post-hoc test at a significance level of
+𝛼= 0.05. The results indicate that both K-Means and HAC show
+statistically significant improvements over several other clustering
+algorithms across multiple evaluation metrics. Specifically, for the
+F-M score, HAC significantly outperforms all other methods. For
+the ARI score and 𝑅𝐸𝑘, HAC significantly outperforms all other
+methods except K-Means, with which it shows no significant dif-
+ference.
+For NMI, Leiden significantly outperforms all other methods. K-
+Means and HAC are statistically indistinguishable from each other
+and from Affinity Propagation. A deeper analysis of these differ-
+ences shows that Affinity Propagation significantly outperforms all
+
+Scalable Parameter-Light Spectral Method for Clustering Short Text Embeddings with a Cohesion-Based Evaluation Metric
+other methods in terms of homogeneity, with Leiden ranking sec-
+ond, and K-Means and HAC tied for third. The completeness score
+shows a different pattern, with K-Means, HAC, and Leiden ranked
+first, followed by Affinity Propagation. Notably, the Cohesion Ratio
+aligns with the statistical ranking of the Homogeneity score, while
+exhibiting moderate concordance with the Completeness score. In
+the latter case, HAC emerges as the clear leader, whereas Affinity
+Propagation outperforms only OPTICS and HDBSCAN.
+For the Silhouette Score, K-Means and HAC are statistically in-
+distinguishable from one another and both significantly outperform
+all other methods, except in the case where HAC does not differ
+significantly from Affinity Propagation. For the Calinski-Harabasz
+Index, K-Means significantly outperforms all other methods, with
+HAC ranked second.
+These findings highlight the consistent and robust performance
+of the spectral estimate-based K-Means and HAC methods across
+both extrinsic and intrinsic clustering quality measures. Interest-
+ingly, Affinity Propagation demonstrates strong performance in
+terms of Homogeneity, Cohesion Ratio, and Silhouette Score, but
+underperforms on Completeness and exhibits a tendency to se-
+verely overestimate the number of clusters, which is reflected in its
+moderate extrinsic evaluation scores.
+4.2
+Correlation Between Extrinsic and Intrinsic
+Evaluation Metrics
+To further understand the relationship between internal cluster
+validity indices and external evaluation measures, we compute
+Spearman correlation coefficients across all clustering configura-
+tions. The resulting heatmap in Figure 3 illustrates the degree to
+which each intrinsic metric aligns with extrinsic clustering quality
+scores.
+Figure 3: Spearman correlations between intrinsic and ex-
+trinsic clustering metrics. Higher values indicate stronger
+agreement with extrinsic clustering scores.
+The correlation heatmap indicates that, while the Silhouette
+Score remains a widely used and effective intrinsic metric, ex-
+hibiting strong positive correlations with most extrinsic evaluation
+metrics, the proposed Cohesion Ratio demonstrates even greater
+alignment in several key areas when applied to clustering of text
+representations. In particular, Cohesion Ratio attains the highest
+correlation among all intrinsic metrics with Normalized Mutual
+Information and Homogeneity, and its correlation with Adjusted
+Rand Index is comparable to that of the Silhouette Score. These
+findings suggest that, in the context of clustering high-dimensional
+textual embeddings, the Cohesion Ratio is not merely a simpler
+alternative, but a robust and effective intrinsic metric that exhibits
+strong alignment with extrinsic measures grounded in mutual infor-
+mation. Interestingly, the Davies-Bouldin Index (negated, as lower
+values indicate better clustering) exhibits negative correlations with
+most extrinsic metrics. This suggests that DBI may be ill-suited for
+evaluating the clustering quality of dense text embeddings, likely
+due to its underlying assumption of convex and well-separated
+cluster structures, a condition that rarely holds in high-dimensional
+text embeddings.
+4.3
+Relationship Between Predicted Clusters
+and True Classes, Scalability of Proposed
+Estimator
+Figure 4 illustrates the distribution of predicted cluster counts across
+stratified datasets for a set of representative clustering algorithms.
+Figure 4: Predicted number of clusters (log scale) across strat-
+ified datasets for different clustering algorithms. Each box
+shows the distribution over multiple runs. Black diamonds
+indicate the true number of underlying classes. Our method
+tends to produce cluster counts closest to ground truth across
+most datasets.
+Additional visualizations illustrating how evaluation metrics
+vary with the number of clusters are provided in Appendix D. These
+plots offer insight into the relatively limited performance of the
+estimator on the StackExchange dataset. In particular, the curves
+for extrinsic evaluation metrics: ARI and F-M, are comparatively
+flat and low, indicating that current embedding models may inade-
+quately capture the underlying structure of this dataset. Nonethe-
+less, it is noteworthy that the estimated number of clusters closely
+corresponds to the peak of the Silhouette score, suggesting that the
+estimator remains sensitive to intrinsic structure. Furthermore, the
+visual alignment between the Cohesion Ratio and Homogeneity
+
+Nikita Neveditsin, Pawan Lingras, and Vijay Mago
+curves provides empirical support for the conceptual relationship
+between the Cohesion Ratio and mutual information.
+To evaluate robustness to dataset size, we conducted a Kruskal-
+Wallis H-test to assess whether the estimated number of clusters us-
+ing our method varies significantly across sizes within each dataset
+group. The null hypothesis assumes that the estimates come from
+the same distribution regardless of dataset size. Our evaluation
+spans four dataset groups: DBpedia Title, DBpedia Text, Reddit,
+and StackExchange. For each group, we tested our estimator on
+stratified subsets ranging from fewer than 1,000 instances to over
+300,000 instances. The test returned a p-value of 0.429 for all groups,
+indicating no statistically significant difference. This supports the
+claim that our proposed estimator is both scalable and robust to
+variations in dataset size.
+5
+Discussion and Conclusion
+In this study, we addressed the challenge of clustering short-text
+embeddings in parameter-light settings by proposing and evalu-
+ating a scalable method for estimating the number of clusters (𝑘).
+Our analysis demonstrates that this spectral estimation technique
+is highly effective. When paired with traditional algorithms like Hi-
+erarchical Agglomerative Clustering and K-Means, it significantly
+outperforms established parameter-light methods across multiple
+datasets and evaluation criteria.
+Another key contribution of this work is the development and
+analysis of the Cohesion Ratio (𝜌𝐶), a simple and interpretable label-
+free intrinsic metric with an information-theoretic interpretation
+inspired by mutual information. Our findings validate its utility,
+showing that it has a stronger correlation with extrinsic metrics like
+Normalized Mutual Information and Homogeneity than traditional
+indices. These results position the Cohesion Ratio as a robust alter-
+native to metrics like the Silhouette Score for assessing clusterings
+of high-dimensional text embeddings where ground-truth labels
+are absent.
+Ultimately, this study provides practitioners with a validated,
+data-driven approach for clustering short texts without prior knowl-
+edge of 𝑘. The proposed spectral estimation method and the Cohe-
+sion Ratio offer powerful tools for the unsupervised organization
+and evaluation of textual data, for practitioners faced with clus-
+tering short-text data without prior knowledge of the number of
+clusters, our findings suggest that using our spectral estimator with
+a standard algorithm like HAC or K-Means is a more effective and
+robust strategy than relying on popular out-of-the-box parameter-
+light methods, paving the way for more robust and interpretable
+knowledge discovery.
+6
+Limitations
+First, while we evaluate a diverse range of classical and parameter-
+light clustering methods, we do not include recent deep clustering
+[37] approaches in our benchmarks. These methods often require
+task-specific tuning for pretraining or fine-tuning, which contra-
+dicts our core objective: to develop practical, label-free tools for
+exploratory clustering of short text.
+Second, the ground-truth labels used for extrinsic evaluation
+may themselves reflect subjective or task-specific categorizations,
+introducing further interpretive variability.
+Third, while our estimator performs well across several datasets,
+its robustness may depend on factors such as the number of clusters,
+cluster granularity, and semantic density. Our current evaluation is
+limited to a small set of high-quality short-text datasets, many of
+which fall within a narrow cluster range. Broader validation across
+more diverse and well-annotated datasets is needed, but further
+research is hindered by the limited availability of such resources.
+7
+Further Research
+Future work can advance this study along three complementary
+lines. First, clustering objectives could be designed to directly opti-
+mize Cohesion Ratio, potentially balanced by auxiliary metrics such
+as the Silhouette Score to avoid over-fragmentation. Such objectives
+could be explored through heuristic search methods like simulated
+annealing [31] or via differentiable relaxations, opening the door
+to more intuitive and human-aligned cluster structures. Second,
+Cohesion Ratio could be embedded into recent unified clustering
+frameworks, such as the density-connectivity distance formula-
+tion of Beer et al. [4], enabling parameter-light algorithms that
+bridge density-, centroid-, and spectral-based approaches within
+a principled formalism. Finally, the proposed spectral 𝑘-estimator
+can be developed further in several directions: devising adaptive
+mechanisms for selecting smoothing parameters (𝑤,𝜏) based on
+stability or information criteria; quantifying estimator uncertainty
+with confidence intervals through subsampling or bootstrapping;
+improving robustness to different graph constructions (e.g., spar-
+sification, normalization, or rectification choices). Together, these
+avenues promise both theoretical foundations and practical algo-
+rithms for more reliable, interpretable, and parameter-light cluster-
+ing in high-dimensional embedding spaces.
+References
+[1] Mihael Ankerst, Markus M Breunig, Hans-Peter Kriegel, and Joerg Sander. 1999.
+OPTICS: Ordering Points to Identify the Clustering Structure. In Proceedings of
+the 1999 ACM SIGMOD International Conference on Management of Data (SIGMOD
+’99). ACM, 49–60.
+[2] Krisztian Balog. 2011. On the Investigation of Similarity Measures for Product
+Resolution.. In LDH. 49–54.
+[3] Marco Baroni and Alessandro Lenci. 2011. How we BLESSed distributional
+semantic evaluation. In Proceedings of the GEMS 2011 Workshop on GEometrical
+Models of Natural Language Semantics. Association for Computational Linguistics,
+Edinburgh, UK, 1–10.
+[4] Anna Beer, Andrew Draganov, Ellen Hohma, Philipp Jahn, Christian M.M. Frey,
+and Ira Assent. 2023. Connecting the Dots – Density-Connectivity Distance
+unifies DBSCAN, k-Center and Spectral Clustering. In Proceedings of the 29th
+ACM SIGKDD Conference on Knowledge Discovery and Data Mining (Long Beach,
+CA, USA) (KDD ’23). Association for Computing Machinery, New York, NY, USA,
+80–92. doi:10.1145/3580305.3599283
+[5] David M Blei, Andrew Y Ng, and Michael I Jordan. 2003. Latent Dirichlet Alloca-
+tion. Journal of Machine Learning Research 3, 4-5 (2003), 993–1022.
+[6] Tadeusz Caliński and Jerzy Harabasz. 1974. A dendrite method for cluster
+analysis. Communications in Statistics-theory and Methods 3, 1 (1974), 1–27.
+[7] Ricardo J G B Campello, Davoud Moulavi, and Joerg Sander. 2013. Density-
+based clustering based on hierarchical density estimates. In Proceedings of the
+17th Pacific-Asia Conference on Knowledge Discovery and Data Mining (PAKDD).
+Springer, 160–172.
+[8] Tristan JB Cann, Ben Dennes, Travis Coan, Saffron O’Neill, and Hywel TP
+Williams. 2025. Using semantic similarity to measure the echo of strategic
+communications. EPJ Data Science 14, 1 (2025), 20.
+[9] D. L. Davies and D. W. Bouldin. 1979. A Cluster Separation Measure. IEEE
+Transactions on Pattern Analysis and Machine Intelligence 1, 2 (1979), 224–227.
+doi:10.1109/TPAMI.1979.4766909
+[10] Martin Ester, Hans-Peter Kriegel, Jörg Sander, and Xiaowei Xu. 1996. A Density-
+Based Algorithm for Discovering Clusters in Large Spatial Databases with Noise.
+In Second International Conference on Knowledge Discovery and Data Mining
+
+Scalable Parameter-Light Spectral Method for Clustering Short Text Embeddings with a Cohesion-Based Evaluation Metric
+(KDD’96). Proceedings of a conference held August 2-4. 226–231.
+[11] Hossein Estiri, Behzad Abounia Omran, and Shawn N. Murphy. 2018. kluster:
+An Efficient Scalable Procedure for Approximating the Number of Clusters in
+Unsupervised Learning. Big Data Research 13 (2018), 38–51. doi:10.1016/j.bdr.
+2018.05.003
+[12] Kawin Ethayarajh. 2019. How Contextual are Contextualized Word Represen-
+tations? Comparing the Geometry of BERT, ELMo, and GPT-2 Embeddings. In
+Proceedings of the 2019 Conference on Empirical Methods in Natural Language
+Processing and the 9th International Joint Conference on Natural Language Pro-
+cessing (EMNLP-IJCNLP), Kentaro Inui, Jing Jiang, Vincent Ng, and Xiaojun Wan
+(Eds.). Association for Computational Linguistics, Hong Kong, China, 55–65.
+doi:10.18653/v1/D19-1006
+[13] Yixin Fang and Junhui Wang. 2012. Selection of the number of clusters via the
+bootstrap method. Computational Statistics & Data Analysis 56, 3 (2012), 468–477.
+doi:10.1016/j.csda.2011.09.003
+[14] Edward B Fowlkes and Colin L Mallows. 1983. A method for comparing two
+hierarchical clusterings. Journal of the American statistical association 78, 383
+(1983), 553–569.
+[15] Brendan J Frey and Delbert Dueck. 2007. Clustering by passing messages between
+data points. Science 315, 5814 (2007), 972–976.
+[16] Julia Handl, Joshua Knowles, and Douglas B. Kell. 2005. Computational cluster
+validation in post-genomic data analysis. Bioinformatics 21, 15 (2005), 3201–3212.
+[17] Lawrence Hubert and Phipps Arabie. 1985. Comparing partitions. Journal of
+classification 2 (1985), 193–218.
+[18] Daniel Jurafsky and James H. Martin. 2025. Speech and Language Processing:
+An Introduction to Natural Language Processing, Computational Linguistics, and
+Speech Recognition with Language Models (3rd ed.). https://web.stanford.edu/
+~jurafsky/slp3/ Online manuscript released January 12, 2025.
+[19] Eamonn Keogh, Stefano Lonardi, and Chotirat Ann Ratanamahatana. 2004. To-
+wards parameter-free data mining. In Proceedings of the tenth ACM SIGKDD
+international conference on Knowledge discovery and data mining. 206–215.
+[20] Ken Lang. 1995. NewsWeeder: Learning to Filter Netnews. In Machine Learning
+Proceedings 1995, Armand Prieditis and Stuart Russell (Eds.). Morgan Kaufmann,
+San Francisco, CA, 331–339.
+[21] Mohammad Sultan Mahmud, Joshua Zhexue Huang, Rukhsana Ruby, and
+Kaishun Wu. 2023. An Ensemble Method for Estimating the Number of Clusters
+in a Big Data Set Using Multiple Random Samples. Journal of Big Data 10, 40
+(2023), 1–27. doi:10.1186/s40537-023-00709-4
+[22] Luca Martino, Roberto San Millán-Castillo, and Eduardo Morgado. 2023. Spec-
+tral information criterion for automatic elbow detection. Expert Systems with
+Applications 231 (2023), 120705.
+[23] Gaurav Menghani. 2023. Efficient Deep Learning: A Survey on Making Deep
+Learning Models Smaller, Faster, and Better. ACM Comput. Surv. 55, 12, Article
+259 (March 2023), 37 pages. doi:10.1145/3578938
+[24] Niklas Muennighoff, Nouamane Tazi, Loic Magne, and Nils Reimers. 2023. MTEB:
+Massive Text Embedding Benchmark. In Proceedings of the 17th Conference of
+the European Chapter of the Association for Computational Linguistics (EACL).
+Association for Computational Linguistics, 2014–2037.
+[25] Andrew Y. Ng, Michael I. Jordan, and Yair Weiss. 2002. On spectral clustering:
+Analysis and an algorithm. In Advances in Neural Information Processing Systems,
+Vol. 14. 849–856.
+[26] Tae Jin Park, Kyu J Han, Manoj Kumar, and Shrikanth Narayanan. 2019. Auto-
+tuning spectral clustering for speaker diarization using normalized maximum
+eigengap. IEEE Signal Processing Letters 27 (2019), 381–385.
+[27] Nils Reimers and Iryna Gurevych. 2019. Sentence-BERT: Sentence Embeddings
+using Siamese BERT-Networks. In Proceedings of the 2019 Conference on Empirical
+Methods in Natural Language Processing and the 9th International Joint Conference
+on Natural Language Processing (EMNLP-IJCNLP). Association for Computational
+Linguistics, 3980–3990.
+[28] Andrew Rosenberg and Julia Hirschberg. 2007.
+V-Measure: A Conditional
+Entropy-Based External Cluster Evaluation Measure. In Proceedings of the 2007
+Joint Conference on Empirical Methods in Natural Language Processing and
+Computational Natural Language Learning (EMNLP-CoNLL), Jason Eisner (Ed.).
+Association for Computational Linguistics, Prague, Czech Republic, 410–420.
+https://aclanthology.org/D07-1043/
+[29] Peter J Rousseeuw. 1987. Silhouettes: a graphical aid to the interpretation and
+validation of cluster analysis. Journal of computational and applied mathematics
+20 (1987), 53–65.
+[30] Subhajit Sahu, Kishore Kothapalli, and Dip Sankar Banerjee. 2024. Fast Leiden
+Algorithm for Community Detection in Shared Memory Setting. In Proceedings
+of the 53rd International Conference on Parallel Processing (Gotland, Sweden)
+(ICPP ’24). Association for Computing Machinery, New York, NY, USA, 11–20.
+doi:10.1145/3673038.3673146
+[31] Shokri Z. Selim and Khalid S. Al-Sultan. 1991. A simulated annealing algorithm
+for the clustering problem. Pattern Recognition 24, 10 (1991), 1003–1008.
+[32] Alexander Strehl and Joydeep Ghosh. 2002. Cluster ensembles—a knowledge
+reuse framework for combining multiple partitions. Journal of machine learning
+research 3, Dec (2002), 583–617.
+[33] V. A. Traag, P. Van Dooren, and Y. Nesterov. 2011. Narrow scope for resolution-
+limit-free community detection. Phys. Rev. E 84 (Jul 2011), 016114. Issue 1.
+doi:10.1103/PhysRevE.84.016114
+[34] Vincent A Traag, Ludo Waltman, and Nees Jan van Eck. 2019. From Louvain to
+Leiden: guaranteeing well-connected communities. Scientific Reports 9, 1 (2019),
+5233.
+[35] Ulrike von Luxburg. 2007. A Tutorial on Spectral Clustering. Statistics and
+Computing 17, 4 (2007), 395–416. doi:10.1007/s11222-007-9033-z
+[36] Liang Wang, Nan Yang, Xiaolong Huang, Binxing Jiao, Linjun Yang, Daxin Jiang,
+Rangan Majumder, and Furu Wei. 2022. Text embeddings by weakly-supervised
+contrastive pre-training. arXiv preprint arXiv:2212.03533 (2022).
+[37] Junyuan Xie, Ross Girshick, and Ali Farhadi. 2016. Unsupervised Deep Embed-
+ding for Clustering Analysis. In Proceedings of the 33rd International Conference
+on Machine Learning (ICML). 478–487.
+[38] Donghui Yan, Ling Huang, and Michael I Jordan. 2009. Fast approximate spectral
+clustering. In Proceedings of the 15th ACM SIGKDD international conference on
+Knowledge discovery and data mining. 907–916.
+[39] Jianhua Yin and Jianyong Wang. 2016. A text clustering algorithm using an online
+clustering scheme for initialization. In Proceedings of the 22nd ACM SIGKDD
+international conference on Knowledge discovery and data mining. 1995–2004.
+[40] Qiangguo Yu, Liangquan Jia, Yuxuan Shao, Jianhao He, Jinsheng Wang, Xinhui
+Yuan, Miao Huan, and Yi Yang. 2025. A local adaptive fuzzy spectral clustering
+method for robust and practical clustering. Scientific Reports 15, 1 (2025), 7833.
+[41] Lihi Zelnik-Manor and Pietro Perona. 2004. Self-tuning spectral clustering.
+Advances in neural information processing systems 17 (2004).
+
+Nikita Neveditsin, Pawan Lingras, and Vijay Mago
+A
+Configurations of algorithms
+Table 4: Configuration Details of Clustering Algorithms Used in the Study
+Algorithm
+Configurable Parameters
+Notes
+Affinity Propagation
+preference (implicit default: mean
+similarity)
+Uses default preference.
+HDBSCAN
+min_cluster_size=2
+Preliminary experiments with min_cluster_size values of 2, 5, and 10 showed
+that a value of 2 provided a slightly better balance between ARI and NMI across
+datasets, so we report results with this setting.
+OPTICS
+min_samples=2,
+clus-
+ter_method=’xi’
+Preliminary experiments with min_samples=5 and 10 led to a noticeable degrada-
+tion in NMI compared to 2, so we adopt the latter as the main configuration.
+Leiden
+(CPM
+on
+Similarity
+Graph)
+resolution_parameter=1
+(default
+setting)
+We apply the Leiden algorithm for community detection on the cosine similarity
+graph with the resolution parameter fixed at its default value of 1.0. For construct-
+ing the graph, we tested two normalization strategies on the cosine similarities: (i)
+simple rectification 𝑆𝑖𝑗←max(𝑆𝑖𝑗, 0), and (ii) z-score normalization followed
+by rectification. Preliminary experiments showed that approach (ii) produced
+slightly better results in terms of ARI and NMI across datasets, so we adopted it
+for the main experiments.
+B
+Similarity Matrices: Raw vs. Z-score Normalized and Rectified
+Figure 5: Heatmaps of cosine similarity matrices for BLESS dataset and two stratified samples of DBpedia and Reddit datasets.
+Each pair shows the (left) raw cosine similarities and (right) z-score normalized and rectified versions. The first row corresponds
+to embeddings from the multilingual-e5-large-instruct model (smallest model from our experiments), while the second
+row uses the Qwen3-Embedding-8B model (largest model from our experiments). Normalization emphasizes strong intra-cluster
+similarities while suppressing noise, resulting in clearer block-like structures aligned with true class boundaries in some cases.
+
+Scalable Parameter-Light Spectral Method for Clustering Short Text Embeddings with a Cohesion-Based Evaluation Metric
+C
+Discussion on Cohesion Ratio vs Silhouette Score
+While the Cohesion Ratio and the Silhouette Score both aim to quantify intra-cluster cohesion, they rely on fundamentally different
+formulations. In the Silhouette Score, cohesion is captured by the pointwise term 𝑎(𝑖), defined as the average distance from a point 𝑥𝑖to all
+other points within its assigned cluster:
+𝑎(𝑖) =
+1
+|𝐶𝑘| −1
+∑︁
+𝑥𝑗∈𝐶𝑘
+𝑗≠𝑖
+dist(𝑥𝑖,𝑥𝑗),
+where 𝐶𝑘denotes the cluster containing 𝑥𝑖, and dist is typically Euclidean distance. This formulation emphasizes the local geometric
+compactness of each point’s neighborhood and is sensitive to the shape, size, and boundary structure of individual clusters.
+In contrast, the Cohesion Ratio aggregates intra-cluster structure at the global level. Its intra-cluster term 𝜇𝐼is defined as the average
+similarity across all unordered pairs of points within the same cluster. Unlike 𝑎(𝑖), 𝜇𝐼is not computed per point and is unaffected by individual
+point geometry. It offers a shape-agnostic, distribution-independent summary of global cluster cohesion. This distinction is especially important
+for clustering in text embeddings derived from transformer-based models where semantic similarity does not always manifest as compact
+geometric clusters. In such spaces, the Silhouette Score may penalize well-formed clusters that are non-convex or overlapping, while the
+Cohesion Ratio remains robust to such structures, focusing solely on internal semantic tightness. This makes 𝜌𝐶a more interpretable for
+evaluating clustering quality in high-dimensional, meaning-centered domains like natural language.
+The Cohesion Ratio can also be interpreted from a null model perspective [17]. The global similarity 𝜇𝐺serves as the expected intra-cluster
+similarity under a null clustering model, where cluster assignments are independent of the data distribution. Thus, a ratio 𝜌𝐶> 1 indicates
+that the clustering exhibits stronger internal cohesion than would be expected under random assignments, suggesting meaningful structure
+beyond chance.
+C.0.1
+Computational Complexity Analysis.
+Cohesion Ratio. The computation of the Cohesion Ratio 𝜌𝐶involves two main components: the global similarity 𝜇𝐺and the intra-cluster
+similarity 𝜇𝐼.
+The global similarity is defined as
+𝜇𝐺= 1 𝑛
+2
+
+∑︁
+1≤𝑖<𝑗≤𝑛
+𝑆𝑖𝑗.
+which requires evaluating the similarity for all  𝑛
+2
+ ∈O(𝑛2) unordered pairs. In practice, these similarities can be stored in a precomputed
+similarity matrix.
+The intra-cluster similarity 𝜇𝐼is given by
+𝜇𝐼= 1
+𝑃
+𝐾
+∑︁
+𝑘=1
+∑︁
+𝑖,𝑗∈𝐶𝑘
+𝑖<𝑗
+𝑆𝑖𝑗,
+where 𝑃= Í𝐾
+𝑘=1
+ |𝐶𝑘|
+2
+ + 𝑁1. In the worst case (e.g., a single cluster), computing 𝜇𝐼also requires O(𝑛2) operations. However, for typical
+clusterings with multiple clusters, the number of intra-cluster pairs is substantially smaller, yielding faster runtimes in practice. The overall
+complexity for computing 𝜌𝐶is therefore O(𝑛2), though this can be reduced in practice via memoization and parallelism over cluster-level
+subcomputations.
+Silhouette Score. The worst-case complexity of the Silhouette Score is also O(𝑛2) [29]. However, the pointwise formulation limits
+opportunities for vectorization or efficient reuse of intermediate computations.
+Comparison. While both metrics have worst-case complexity of O(𝑛2), they differ in computational profile:
+• The Cohesion Ratio is computed via a global aggregation over a fixed set of pairs, allowing use of precomputed similarity matrices
+and efficient batching or vectorization.
+• The Silhouette Score requires pointwise access to intra- and inter-cluster distances, making it more expensive to compute and less
+amenable to parallelization.
+Consequently, the Cohesion Ratio is typically faster and more scalable in practice, particularly for large datasets with many small clusters
+or sparse similarity structures.
+
+Nikita Neveditsin, Pawan Lingras, and Vijay Mago
+D
+Metric Profiles Across Cluster Counts
+Figure 6: Variation of clustering metrics (ARI, Homogeneity, Completeness, Fowlkes-Mallows, Silhouette, and Cohesion Ratio)
+across different numbers of clusters for HAC and K-Means for selected datasets (stratified samples of approx. 5000 data points
+for each dataset and full BLESS dataset). Each row corresponds to a dataset; each column corresponds to a clustering method.
+The vertical dashed lines indicate the true (black) and predicted (gray) number of clusters. Metrics are plotted to analyze
+alignment with ground truth and to highlight the relationship between extrinsic and intrinsic evaluations.

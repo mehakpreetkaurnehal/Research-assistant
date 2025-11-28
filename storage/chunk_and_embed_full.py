@@ -8,14 +8,16 @@ from sentence_transformers import SentenceTransformer
 import faiss
 from tqdm import tqdm
 
-
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 
 FULLTEXT_FOLDER    = "data/raw/fulltexts"            # folder with full-text .txt files
 DB_PATH            = "data/storage/metadata_full.db"
 FAISS_INDEX_PATH   = "data/storage/faiss_index.bin"
 
 EMBED_MODEL_NAME   = "sentence-transformers/all-MiniLM-L6-v2"  # lightweight model
-CHUNK_SIZE         = 1000     # approximate characters per chunk
+CHUNK_SIZE         = 1200     # approximate characters per chunk earlier 1000
 CHUNK_OVERLAP      = 200      # overlap characters
 # TOP_K for retrieval later but not used here
 
@@ -95,7 +97,7 @@ def main():
             text = f.read()
 
         chunks = chunk_text(text)
-        print(f"  => {paper_id}: {len(chunks)} chunks")
+        print(f"  -> {paper_id}: {len(chunks)} chunks")
 
         # Generate embeddings
         try:
@@ -127,7 +129,7 @@ def main():
     if faiss_index is not None:
         save_faiss(faiss_index)
     conn.close()
-    print("✔ Chunking & embedding completed.")
+    print("Chunking & embedding completed.")
 
 if __name__ == "__main__":
     main()

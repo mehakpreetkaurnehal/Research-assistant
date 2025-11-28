@@ -10,11 +10,15 @@ import faiss
 from sentence_transformers import SentenceTransformer
 from generation.generate import llm_generate
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 # Configuration
 DB_PATH          = "data/storage/metadata_full.db"
 FAISS_INDEX_PATH = "data/storage/faiss_index.bin"
 EMBED_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-TOP_K            = 5
+TOP_K            = 10
 
 # Load embedding model & index at startup
 model = SentenceTransformer(EMBED_MODEL_NAME)
@@ -90,27 +94,55 @@ def ask_question(req: QARequest):
     # 4. Build prompt
     context = "\n\n".join([r["chunk_text"] for r in retrieved])
    
-    prompt = (
-        "You are an expert research assistant.\n"
-        "Write a detailed, human-like answer.\n"
-        "Important: DO NOT list sources, citations, references, or paper IDs in your answer.\n"
-        "I will add the sources separately.\n\n"
-        f"Context:\n{context}\n\n"
-    f"Question: {question}\n"
-    )
+    # prompt = (
+    #     "You are an expert research assistant.\n"
+    #     "Write a detailed, human-like answer.\n"
+    #     "Important: DO NOT list sources, citations, references, or paper IDs in your answer.\n"
+    #     "I will add the sources separately.\n\n"
+    #     f"Context:\n{context}\n\n"
+    # f"Question: {question}\n"
+    # )
+   
+    prompt = f"""
+    You are an expert AI research assistant.
+
+    Your job:
+    - Read ALL context chunks.
+    - Combine information from ALL papers.
+    - Provide a long, detailed, human-like explanation.
+    - Include ALL methods, steps, components, definitions, or procedures mentioned.
+    - NEVER miss important points.
+    - Do NOT write sources inside the answer. I will add them separately.
+    VERY IMPORTANT:
+    - Even if context appears small, expand the explanation using all available details.
+    - Answer must be multi-paragraph and fully cover the topic.
+    User Question:
+    {question}
+    Context:
+    {context}
+    Write the MOST complete explanation possible:
+    """
+
 
     # 5. Call the generation function
     answer = llm_generate(prompt)
 
     # 6. Build sources list (one per paper)
     # sources = [{"paper_id": r["paper_id"]} for r in retrieved]
+    # sources = [
+    #     Source(
+    #         paper_id=r["paper_id"],
+    #         pdf_url=r["metadata"].get("pdf_url", "")
+    #     )
+    #     for r in retrieved
+    # ]
     sources = [
-        Source(
-            paper_id=r["paper_id"],
-            pdf_url=r["metadata"].get("pdf_url", "")
-        )
-        for r in retrieved
-    ]
+    Source(
+        paper_id=r["paper_id"],
+        pdf_url=f"https://arxiv.org/pdf/{r['paper_id']}.pdf"
+    )
+    for r in retrieved]
+
 
     return QAResponse(answer=answer, sources=sources)
 
@@ -238,131 +270,4 @@ def ask_question(req: QARequest):
 
 
 
-
-
-
-# from fastapi import FastAPI, HTTPException
-# from pydantic import BaseModel
-# import sqlite3
-# import json
-# import numpy as np
-# import faiss
-# import logging
-# from generation.generate import llm_generate
-
-# # Setup logging
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format="%(asctime)s %(levelname)s %(message)s",
-#     filename="logs/api_request.log",
-#     filemode="a"
-# )
-# logger = logging.getLogger(__name__)
-
-# app = FastAPI()
-
-# DB_PATH = "data/storage/metadata_full.db"
-# FAISS_INDEX_PATH = "data/storage/faiss_index.bin"
-# TOP_K = 5
-
-# class QARequest(BaseModel):
-#     question: str
-#     category: str = None  # Optional
-
-# class Source(BaseModel):
-#     paper_id: str
-#     title: str = None
-
-# class QAResponse(BaseModel):
-#     answer: str
-#     sources: list[Source]
-
-# def load_faiss_index(index_path=FAISS_INDEX_PATH):
-#     index = faiss.read_index(index_path)
-#     return index
-
-# def embed_query(query: str, embed_model):
-#     vec = embed_model.encode([query], convert_to_numpy=True).astype("float32")
-#     return vec
-
-# def normalize_category(cat: str) -> str:
-#     """Normalize category string to a canonical form."""
-#     if cat is None:
-#         return None
-#     # Strip whitespace, lowercase, replace spaces/hyphens with underscore
-#     norm = cat.strip().lower().replace(" ", "_").replace("-", "_")
-#     return norm
-
-# @app.on_event("startup")
-# def startup_event():
-#     app.state.faiss_index = load_faiss_index()
-#     from sentence_transformers import SentenceTransformer
-#     app.state.embed_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-#     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-#     app.state.db_conn = conn
-#     logger.info("Startup complete: FAISS index & DB loaded.")
-
-# @app.post("/ask", response_model=QAResponse)
-# def ask_question(req: QARequest):
-#     question = req.question
-#     raw_cat  = req.category
-#     category = normalize_category(raw_cat)
-
-#     # Log the received inputs
-#     logger.info(f"Received question: {question}")
-#     logger.info(f"Received category (raw): {raw_cat} → normalized: {category}")
-
-#     q_vec = embed_query(question, app.state.embed_model)
-
-#     D, I = app.state.faiss_index.search(q_vec, TOP_K)
-#     sources = []
-#     context_texts = []
-#     used_papers = set()
-
-#     cursor = app.state.db_conn.cursor()
-#     for idx in I[0]:
-#         if idx < 0:
-#             continue
-#         cursor.execute("SELECT paper_id, chunk_text, metadata FROM chunks WHERE id = ?", (idx + 1,))
-#         row = cursor.fetchone()
-#         if not row:
-#             continue
-#         paper_id, chunk_text, meta_json = row
-#         meta = json.loads(meta_json)
-
-#         # Normalize metadata category if it exists
-#         meta_cat = meta.get("category")
-#         if meta_cat:
-#             meta_cat_norm = normalize_category(meta_cat)
-#         else:
-#             meta_cat_norm = None
-
-#         if category and meta_cat_norm != category:
-#             # Skip chunk if category filter is applied and doesn't match
-#             continue
-
-#         context_texts.append(chunk_text)
-#         if paper_id not in used_papers:
-#             used_papers.add(paper_id)
-#             sources.append(Source(paper_id=paper_id))
-
-#     if not context_texts:
-#         raise HTTPException(
-#             status_code=404,
-#             detail="No relevant research paper chunks found for given query/category"
-#         )
-
-#     # Build prompt (avoiding backslashes inside f-string expressions)
-#     newline = "\n\n"
-#     prompt = (
-#         "You are a research assistant. Use only the following research paper excerpts "
-#         "to answer the question. Include references with paper IDs.\n\n"
-#         "Context:\n" + newline.join(context_texts) +
-#         "\n\nQuestion:\n" + question +
-#         "\n\nAnswer (and include references):"
-#     )
-
-#     answer = llm_generate(prompt)
-
-#     return QAResponse(answer=answer, sources=sources)
 

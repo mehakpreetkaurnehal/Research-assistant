@@ -1,0 +1,1164 @@
+MonoMSK: Monocular 3D Musculoskeletal Dynamics Estimation
+Farnoosh Koleini, Hongfei Xue, Ahmed Helmy, Pu Wang
+University of North Carolina at Charlotte
+{fkoleini, hongfei.xue, ahmed.helmy, pu.wang}@charlotte.edu
+Abstract
+Reconstructing biomechanically realistic 3D human mo-
+tion—recovering both kinematics (motion) and kinetics
+(forces)—is a critical challenge. While marker-based sys-
+tems are lab-bound and slow, popular monocular meth-
+ods use oversimplified, anatomically-inaccurate models
+(e.g., SMPL) and ignore physics, fundamentally limiting
+their biomechanical fidelity. In this work, we introduce
+MonoMSK, a hybrid framework that bridges data-driven
+learning and physics-based simulation for biomechanically
+realistic 3D human motion estimation from monocular video.
+MonoMSK jointly recovers both kinematics (motions) and
+kinetics (forces and torques) through an anatomically ac-
+curate musculoskeletal model. By integrating transformer-
+based inverse dynamics with differentiable forward kinemat-
+ics and dynamics layers governed by ODE-based simulation,
+MonoMSK establishes a physics-regulated inverse–forward
+loop that enforces biomechanical causality and physical
+plausibility. A novel forward–inverse consistency loss fur-
+ther aligns motion reconstruction with the underlying ki-
+netic reasoning. Experiments on BML-MoVi, BEDLAM, and
+OpenCap show MonoMSK significantly outperforms state-
+of-the-art methods in kinematic accuracy, while, for the first
+time, enabling precise monocular kinetics estimations.
+1. Introduction
+Understanding and reconstructing human motion with
+biomechanical and physical realism is a long-standing
+goal in computer vision, biomechanics, and robotics.
+Biomechanically-accurate 3D human motion estimation
+aims to recover not only anatomically valid joint config-
+urations but also the underlying physical quantities, such as
+forces and torques, that drive those motions. Such physically-
+grounded representations are critical for applications in clin-
+ical motion analysis, sports science, rehabilitation, and hu-
+man–robot interaction [19, 20]. While Biomechanically-
+accurate motion estimation offers numerous benefits, its
+widespread adoption is hindered by significant barriers.
+The gold standard approach for biomechanics-accurate
+Figure 1. MonoMSK is a framework for physically grounded 3D
+human motion estimation from monocular videos. It couples a
+transformer-based Inverse Dynamics Transformer (IDT) that infers
+joint torques and ground reaction forces with a differentiable For-
+ward Dynamics (FD) ODE solver that integrates these forces over
+time to produce biomechanically consistent motion.
+motion estimation combines multi-camera, marker-based
+motion capture with biomechanical optimization tools,
+which are expensive, labor-intensive, and time-consuming
+[5]. In practice, current workflows use multiple cameras to
+track the markers on the body [22]. The captured marker
+data are then processed with time-consuming optimization-
+based simulations such as OpenSim [19]. For example, the
+state-of-the-art OpenCap system takes approximately 2 min-
+utes for kinematics (e.g., joint rotation angles and velocities)
+and 35 minutes for kinetics (e.g., joint force and torques)
+[20].
+Learning-based monocular motion estimation frame-
+works [8, 11, 17] have achieved impressive results in 3D
+human pose reconstruction by employing deep learning mod-
+els to recover parametric body representations such as SMPL
+1
+arXiv:2511.19326v1  [cs.CV]  24 Nov 2025
+
+[15] from single-camera monocular videos. Despite their
+strong visual realism and accessibility, these models typically
+rely on oversimplified skeletal structures with anatomically
+inaccurate joint positions and bone orientations, fundamen-
+tally limiting their biomechanical fidelity. Recent efforts
+have sought to mitigate these issues by incorporating biome-
+chanically accurate skeletal models [1, 13]. However, they
+overlook the underlying physical laws that govern the causal
+relationships between forces (kinetics) and motions (kine-
+matics). Consequently, these approaches are incapable of
+estimating kinetics and often exhibit reduced accuracy in
+kinematic reconstruction, as well.
+To address these challenges, we introduce MonoMSK,
+a hybrid framework that integrates learning-based in-
+verse dynamics with a differentiable, anatomically-accurate
+musculoskeletal (MSK) forward simulation to recover
+biomechanically-accurate motion dynamics from monoc-
+ular video. MonoMSK comprises five integrated compo-
+nents: (1) a pretrained human-mesh-recovery model to ex-
+tract anatomically-grounded virtual markers from the input
+video; (2) an Inverse Kinematics Transformer (IKT) to pre-
+dict joint angles from these markers; (3) an Inverse Dynam-
+ics Transformer (IDT) to infer kinetic quantities (e.g., joint
+torques, ground-reaction forces) from the predicted kine-
+matics; (4) a differentiable Forward Kinematics (FK) layer;
+and (5) a differentiable Forward Dynamics (FD) layer that
+leverages an ODE solver to simulate physically-consistent
+trajectories from the inferred kinetics.
+This novel integrated kinematics–kinetics design tightly
+couples data-driven temporal modeling with continuous-time
+physical simulation. Specifically, our data-driven inverse
+transformers (IKT, IDT) are trained to infer the kinetic causes
+(joint torques) from the observed kinematic consequences
+(joint motion). The differentiable FD and FK layers then act
+as a physics-based verifier: it uses these inferred kinetics to
+simulate the resulting motion, ensuring the predicted forces
+can faithfully reconstruct the original observation. More-
+over, by leveraging anatomy-constrained FK and FD layers,
+this physics-regulated loop embeds domain knowledge dur-
+ing both training and inference, ensuring estimated motion
+remains physically plausible and anatomically coherent
+Our key contributions are summarized as follows:
+• We introduce MonoMSK, a hybrid motion dynamics es-
+timation framework that couples learning-based inverse
+dynamics with a differentiable, anatomically accurate
+musculoskeletal forward simulator to recover physically
+grounded 3D motion dynamics (kinematics and kinetics)
+from monocular video
+• We introduce a biomechanics-informed training scheme,
+which combines optimal-control biomechanics simula-
+tions for ground-truth generations with kinetics and kine-
+matics supervision losses and forward-inverse consistency
+loss that align the bidirectional translation between kine-
+matics (e.g., motion) and kinetics (e.g., force).
+• Experiments on BML-MoVi, BEDLAM, and OpenCap
+show MonoMSK significantly outperforms state-of-the-art
+methods in kinematic accuracy, while, for the first time,
+enabling precise monocular kinetics estimations.
+2. Related Work
+2.1. Monocular 3D Human Pose Estimation
+Monocular 3D human pose estimation has progressed rapidly
+with the advent of deep learning and parametric body mod-
+els such as SMPL [15].
+Early approaches [14] employ
+convolutional networks to regress SMPL parameters from
+single images, while later works extend this to video se-
+quences using temporal transformers [23]. The introduction
+of transformer-based Human Mesh Recovery (HMR) mod-
+els, such as HMR2.0 [11], TokenHMR [8], and CameraHMR
+[17], , have significantly improved human mesh reconstruc-
+tion accuracy. However, these models are fundamentally lim-
+ited for the applications that require biomechanical-accurate
+kinematics estimations. In particular, these models typically
+rely on oversimplified skeletal structures with anatomically
+inaccurate joint positions and bone orientations, fundamen-
+tally limiting their biomechanical fidelity. To address this
+limitations, we leverage the 3D human mesh reconstructed
+from the HMR models to extract virtual tracking markers,
+which then are leveraged by our MonoMSK model to in-
+fer physically grounded kinetics and kinematics estimations
+based on anatomically-accurate human MSK model. As a
+result, MonoMSK can serve as the plug-and-play module for
+any HMR models so that they can produce biomechanically-
+accurate
+2.2. Biomechnically-accurate Motion Estimation
+The current gold standard for biomechanics analysis com-
+bines multi-camera, marker-based motion capture systems
+with optimization-based musculoskeletal solvers such as
+OpenSim [19]. These systems rely on retro-reflective mark-
+ers tracked by synchronized infrared cameras in controlled
+laboratory environments. The recorded marker trajectories
+are then processed through inverse kinematics and dynamics
+pipelines to estimate joint torques, ground reaction forces,
+and muscle activations. Although these workflows achieve
+high biomechanical accuracy, they are expensive, labor-
+intensive, and limited to specialized lab setups. They also
+require expert supervision, precise calibration, and time-
+consuming optimal control simulations. For example, Open-
+Cap [20] reports approximately two minutes per trial for
+kinematic reconstruction and up to thirty-five minutes for
+kinetic estimation. Such constraints make these methods
+impractical for large-scale or real-world deployment. Recent
+work, such as BioPose and D3KE has begun to incorporate
+biomechanically accurate skeletal models [1, 13]. How-
+2
+
+ever, these methods typically omit explicit physical laws
+that govern the causal link between forces (kinetics) and mo-
+tion (kinematics). As a result, they cannot estimate kinetic
+variables and often yield diminished accuracy in kinematic
+reconstruction.
+In contrast to prior approaches, our proposed MonoMSK
+framework unifies kinematic perception and dynamic
+reasoning within a single, end-to-end trainable model.
+By embedding a differentiable physics solver directly
+into a transformer-based motion prediction architec-
+ture, MonoMSK simultaneously learns inverse dynamics
+(force–torque inference) and forward dynamics (motion
+generation) without separate optimization stages. This in-
+tegration enables physically stable, temporally coherent,
+and anatomically consistent motion trajectories—achieving
+biomechanical accuracy comparable to laboratory systems
+while maintaining the scalability and flexibility of modern
+deep learning.
+3. Proposed Method: MonoMSK
+The objective of MonoMSK is to estimate biomechanically
+accurate and physically consistent 3D human motion directly
+from monocular video. As illustrated in Figure 2, MonoMSK
+builds upon a detailed musculoskeletal (MSK) model and
+integrates kinematic inference with physics-based dynamic
+reasoning. The pipeline begins with a pretrained Human
+Mesh Recovery (HMR) models, which regress pose and
+shape parameters and generate SMPL meshes whose ver-
+tices serve as virtual motion-capture markers (§3.2). These
+marker trajectories are processed by an Inverse Kinemat-
+ics Transformer (IKT) (§3.2.1) to estimate the generalized
+MSK kinematic state q = {T, R, qr}, capturing anatom-
+ically valid joint rotations. The recovered kinematics are
+then provided to the Inverse Dynamics Transformer (IDT)
+(§3.2.2), which predicts internal joint torques τ and external
+ground-reaction forces λ that generate the observed motion.
+To enforce biomechanical correctness, MonoMSK integrates
+a differentiable Forward Dynamics (FD) layer based on an
+ODE formulation of the MSK dynamics (§3.2.3). This layer
+simulates the forward-time evolution of the body under the
+predicted forces and torques, producing physically coherent
+kinematic states that are matched back to the IKT estimates
+through inverse–forward consistency. Together, these com-
+ponents form a unified, end-to-end differentiable framework
+that tightly couples perception with musculoskeletal physics,
+enabling accurate, stable, and interpretable human motion
+reconstruction.
+3.1. Human Musculoskeletal Model
+The biomechanical human model consists of two core com-
+ponents: the musculoskeletal (MSK) body model and the
+musculoskeletal (MSK) dynamics model (See Figure 3).
+MSK Body Model.
+The MSK body model, e.g., the
+widely-adopted OpenSim model [19], represents the body
+as Ns = 24 rigid bone segments interconnected by anatom-
+ically constrained joints. Each joint i defines motion ac-
+cording to its physiological Degrees of Freedom (DoFs)
+Di, thus determining the human body’s valid kinematic and
+dynamic configuration space. Each joint i is parameter-
+ized by the anatomy-dependent bone orientation qo
+i ∈R3,
+muscle-induced joint rotation qr
+i ∈RDi (Di ≤3), and bone
+scaling si ∈R3 [9, 16, 19]. The scaling process tailors a
+generic anatomical MSK body model to fit subject-specific
+body geometry, such as bone lengths and muscle attachment
+points. These parameters (qo, qr, s) collectively defines for
+the entire skeleton [6]. The 3D motion kinematics can be
+described compactly in a generalized coordinate system as
+q = {T, R, qr},
+(1)
+where T∈R3 and R∈R3 represent global translation and
+rotation of the root segment, and qr encodes the motion-
+induced joint rotations of the 24-joint MSK model. Corre-
+spondingly, ˙q and ¨q are used to represent the velocity and
+acceleration of generalized coordinates.
+Muscle-driven Forward Dynamics. It uses differential-
+algebraic equations to predict body motion from muscle
+excitations. Muscles attach to skeleton bones through de-
+fined paths to determine fiber and tendon lengths, which,
+combining with body segment parameters (e.g., mass, center
+of mass, and inertia), generates the forces and torques ap-
+plied at joints, according to muscle activation, contraction
+dynamics, and multibody dynamics [4]. In particular, multi-
+body dynamics, following the Newton-Euler equations of
+motion, defines forward dynamics that predict motion from
+internal joint torques τ and external forces λ (e.g., ground
+reaction forces, GRFs)
+JT
+Cλ + τ = M(q)¨q + C(q, ˙q) + g(q),
+(2)
+where M, C, and g denote the generalized inertia ma-
+trix, Coriolis/centrifugal terms, and gravitational generalized
+torques, respectively. JC is the contact Jacobian matrix that
+translates the generalized velocities ˙q to the velocities at
+the point of contact between foot and ground. Each joint
+torque τi is expressed as the net contribution of muscle forces
+transmitted through moment arms:
+τi =
+Nm
+X
+j=1
+rij Fj(aj, lj, vj) + τ tm
+i
+,
+(3)
+where rij is the moment arm of muscle j about joint i, Nm
+is the number of muscles, aj is the muscle activation, lj
+and vj are fiber length and velocity, and τ tm
+i
+denotes an
+ideal torque motor at major joints (e.g., lumbar, shoulder,
+elbow) for residual actuation. Muscle forces Fj follow a
+Hill-type model [4]: Fj(aj, lj, vj) = ajF max
+j
+fl(lj)fv(vj)+
+3
+
+Figure 2. Overview of the MonoMSK pipeline. A monocular video is processed by a pretrained Human Mesh Recovery (HMR) model to
+obtain 3D meshes and virtual markers. The Inverse Kinematics Transformer (IKT) converts these markers into anatomically constrained
+musculoskeletal joint states q. The Inverse Dynamics Transformer (IDT) infers the latent dynamic quantities, internal torques τ and
+external ground-reaction forces λ. A differentiable Forward Dynamics (FD)- ODE solver ODE solver integrates these forces through the
+Euler–Lagrange MSK dynamics to produce physically coherent future motion.
+F pass
+j
+(lj), where F max
+j
+is maximal isometric force, fl and
+fv are the force–length and force–velocity relationships, and
+F pass
+j
+represents passive elastic tension.
+Figure 3. Musculoskeletal (MSK) body model with anatomically
+precise joint positions, bone orientations, and muscle geometry
+(red). Pink spheres indicate virtual model markers attached to bone
+segments for accurate biomechanical tracking. The zoomed region
+illustrates detailed muscle–joint structure around the knee.
+Ground Reaction Forces. To simulate realistic foot-ground
+interactions, ground reaction forces are modeled through
+six foot-ground contact spheres attached to the foot seg-
+ments. Each contact sphere k generates normal and tan-
+gential ground reaction forces modeled by the compliant
+Hunt–Crossley formulation [12]:
+Fn,k = knδ1.5
+k (1+cn ˙δk)n,
+Ft,k = −µ∥Fn,k∥
+vt,k
+∥vt,k∥+ ϵ,
+where δk and ˙δk are the penetration depth and velocity, n the
+ground normal, vt,k the tangential velocity, and (kn, cn, µ)
+are stiffness, damping, and friction coefficients. The total
+ground reaction force is
+λ =
+X
+k
+(Fn,k + Ft,k),
+(4)
+This physically grounded contact model captures smooth
+transitions through heel-strike, mid-stance, and toe-off
+phases [18, 19].
+3.2. Biomechanics-informed Motion Estimation
+Model (MonoMSK)
+Built on top of the MSK model, we introduce MonoMSK
+to estimate kinematics and kinetics from monocular videos.
+First, we will leverage the existing monocular human mesh
+recovery (HMR) models, which estimate 3D pose θ and
+shape β parameters to generate a 3D mesh via a paramet-
+ric model like SMPL. Any subset of the 6,890 vertices on
+the SMPL mesh can act as virtual motion capture mark-
+ers. Leveraging these virtual marker tracking data as in-
+puts, MonoMSK will first learn to estimate kinematics
+q = {T, R, qr} via Inverse Kinematics Transformer (IKT).
+Then, the kinematic estimation q serves as the input of the
+Inverse Dynamics Transformer (IDT) to predict kinetic at-
+tributes, including internal joint torques τ and external con-
+tact forces λ. To incorporate biomechanics priors into the
+network architecture, we directly inject a physics-based ODE
+solver into the network, which leverages forward dynamics
+to transform the estimated joint torques and contact forces
+{τ, λ} back to joint kinematics q. The kinematic estima-
+tion q will then be translated into joint positions via an
+anatomical-aware forward kinematic layer. Inverse-forward
+4
+
+consistency training is leveraged to ensure the biomechani-
+cally accurate motion estimations.
+3.2.1. Inverse Kinematics Transformer (IKT)
+Given a monocular RGB video sequence {It}T
+t=1, we em-
+ploy a pretrained human mesh recovery model to regress
+per-frame pose and shape parameters {ˆθt, ˆβt}T
+t=1. The pose
+θt ∈R23×3 encodes axis-angle rotations of the 23 joints,
+while the shape βt ∈R10 represents low-dimensional body
+morphology [15]. By combining these pose and shape pa-
+rameters, the SMPL model produces a detailed 3D mesh
+M(θ, β) ∈R3×N, where N = 6890 vertices represent
+the surface of the body. The positions of the body joints
+J ∈R3×k are then derived as a weighted sum of these ver-
+tices, formulated as J = MW, where W ∈RN×23 contains
+the predefined linear blending weights that map vertices to
+the joints. With the joint positions J as inputs, we employ
+the pretrained global trajectory predictor [3] to estimate per-
+frame translation and rotation {ˆTt, ˆRt}T
+t=1.
+Since the SMPL model employs a simplified skeleton
+rig with inaccurate joint location and bone orientations,
+θt ∈R23×3 cannot be directly used to estimate anatomi-
+cal joint rotation qr ∈R24×3. Following BioPose [13], we
+select a set of M tracking markers x = {xi}M
+i=1 that attached
+to the bone segments in such a way that each bone segment is
+associated with at least Di markers to ensure the unique solu-
+tions of the derived rotation angles at joint i with Di degrees
+of freedom. The transformer encoder takes a sequence of
+marker data {xt}T
+t=1 over T frames as inputs to predict the
+muscle-induced joint rotation { ˆqr
+t}T
+t=1 = EIKT({xt}T
+t=1)
+which, combing with predicted global translation and rota-
+tion, yields the kinematic estimation [23]
+{ˆqt}T
+t=1 = {ˆTt, ˆRt, ˆqrt}T
+t=1
+3.2.2. Inverse Dynamics Transformer (IDT)
+Given the kinematic estimations {ˆqt}T
+t=1 from IKT en-
+coder, the IDT predicts the joint torques and contact forces
+{τ t, λt}T
+t=1. At each time step t, a motion feature vector
+ft ∈Rfdim is formed by concatenating the generalized co-
+ordinates and their temporal derivatives, i.e., ft = [ˆqt, ˆ˙qt].
+Each feature is projected into the transformer embedding
+space using an MLP encoder:
+zt = MLPenc(ft) ∈Rdmodel,
+followed by sinusoidal positional encoding PE(·) to main-
+tain temporal order. The encoded sequence z1:T is then
+processed by a transformer encoder:
+h1:T = EIDT(PE(z1:T )),
+yielding temporally contextualized motion embeddings h1:T
+that capture biomechanical dependencies and long-range
+temporal context across the motion sequence. From h1:T , a
+dedicated MLP head predicts the per-frame kinetics parame-
+ters:
+{ˆλt, ˆτ t}T
+t=1 = MLPforce(h1:T ),
+3.2.3. Forward Dynamics (FD) Layer via ODE Solver
+Given the predicted kinetics {ˆλt, ˆτ t}T
+t=1 from IDT, the FD
+layer predict continuous-time kinematics via the differential
+ODE solver, which numerically integrates the human body’s
+motion over time using the the Newton-Euler equations of
+motions defined in Eq. (2), enabling simulation of future
+body states consistent with physical laws. The kinematic
+state at time t is
+xt = [ qt, ˙qt ]T,
+where qt = {Tt, Rt, qr
+t} represents generalized states and
+˙qt their velocities. The second-order dynamics are rewritten
+as a first-order ODE system fODE(xt):
+d
+dt
+
+qt
+˙qt
+
+=
+
+˙qt
+M−1(qt)
+ JT
+Cλt + τ t −C(qt, ˙qt) −g(qt)
+
+
+,
+(5)
+which defines a differentiable mapping that governs the tem-
+poral evolution of the biomechanical system. To compute
+the predicted trajectory {ˆqt+n}N
+n=1, we integrate Eq. (5)
+forward in time using a differentiable ODE solver. In prac-
+tice, a fourth-order Runge–Kutta (RK4) or adaptive Dor-
+mand–Prince (RK45) solver can be adopted [24], which en-
+sures numerical stability while maintaining differentiability
+for backpropagation:
+xt+∆t = ODEsolver
+ fODE, xt, ∆t; ϕ
+
+,
+(6)
+where ϕ denotes physical parameters (e.g., segmental
+masses, inertia, joint stiffness, and damping). The solver
+predicts subsequent generalized states as:
+˙
+qt+1
+fd = ˙qt
+fd + ¨qt
+fd∆t,
+qfd
+t+1 = qfd
+t
++ ˙qt
+fd∆t,
+(7)
+This iterative process simulates motion under the learned
+forces and torques, producing continuous, dynamically co-
+herent trajectories.
+3.2.4. Anatomical Forward Kinematic (FK) Layer
+The FK layer transforms the rest-pose anatomical joint mark-
+ers to the new positions according to the ODE-simulated
+kinematic dynamics {qfd
+t }T
+t=1. In particular, the global po-
+sition of joint i is computed recursively through:
+Jfk
+i
+= Ri(J0
+i ⊙si) + Jpar(i),
+(8)
+where J0
+i is the local joint position offset, ⊙denotes
+element-wise bone scaling, and par(i) indicates the par-
+ent joint. The corresponding rotation is obtained as Ri =
+Rpar(i) R(qo
+i ) R(qr
+i ).
+Since we employed a full-body
+biomechanical MSK model, the FK transformation is in-
+herently constrained by the realistic joint degrees of freedom
+qr
+i ∈RDi (Di ≤3), bone orientations qo and scales si.
+5
+
+3.3. Biomechanics-informed Model Training
+To enforce biomechanics-accurate estimations, our model
+is trained with multiple physics-informed losses including
+supervision losses on kinematic states {ˆqt}T
+t=1 and kinetic
+forces {ˆλt, ˆτ t}T
+t=1 along with the consistency loss between
+inverse and forward motion dynamics.
+Ground-truth Dynamics via Optimal-control Forward
+Simulation. To facilitate supervised training, we obtain
+ground-truth MSK dynamics via optimal control simulations
+in physics engines like OpenSim-Moco [7]. This has become
+the gold standard practice for non-invasive measurement of
+variables such as muscle forces and joint torques, which are
+difficult to measure directly in vivo. In particular, the goal is
+to find the optimal muscle excitation signals e that minimize
+muscular effort and maximize agreement between simulated
+and observed motion under the constraints of Newton-Euler
+equations of motion defined in (2), i.e.,
+arg min
+e
+Z tf
+t0
+
+w1∥et∥2
+2 + w2∥qt −˜qt∥2
+2
++w3∥˙qt −˜˙qt∥2
+2 + w4∥¨qt −˜¨qt∥2
+2
+
+dt,
+where wi are weighting coefficients and (˜q, ˜˙q, ˜¨q) are ground-
+truth kinematics derived from inverse kinematics optimiza-
+tion based on the marker tracking data detailed in the Sup-
+plementary material. The optimal control simulation can
+be transcribed into a finite-dimensional nonlinear program
+using direct collocation, which is then solved using a large-
+scale nonlinear optimization solver such as IPOPT [21]. The
+simulation outputs are reference torque ˜τt and force ˜λt.
+Kinetics Losses. By training the model with supervised
+losses for the contact force and joint torque, it will learn the
+physiological dynamics of the MSK system. Based on the
+reference torque ˜τt and force ˜λt, the training objective is to
+minimize the mean squared absolute errors
+Lkinetic = wλ Lλ + wτ Lτ,
+(9)
+where
+Lλ =
+T
+X
+t=1
+∥ˆλt −˜λt∥2
+2,
+Lτ =
+T
+X
+t=1
+∥ˆτ t −˜τ t∥2
+2
+Lλ promotes accurate estimation of foot–ground contact,
+and Lτ enforces the accurate joint torque estimation.
+Inverse-Forward Consistency Losses. To embed the biome-
+chanics causality into the model, we exploit the property that
+the translation between kinematics (e.g., motion) and ki-
+netics (e.g., force) should be consistent. In particular, if
+the model inversely translates from kinematic consequences
+(e.g., rotation angles and joint positions) to the kinetic causes
+(e.g., muscle forces and joint torque), it should be able to
+arrive back at the original kinematic observations from its
+own kinetics predictions through physics-governed forward
+reasoning (e.g., the forward dynamics ODE simulations). In
+particular, we adopt two consistency losses
+Lcon = wqLq + wJLJ,
+(10)
+where
+Lq =
+T
+X
+t=1
+∥ˆqfd
+t
+−˜qt∥2
+2
+LJ =
+N
+X
+t=1
+∥ˆJfk
+t
+−˜Jt∥2
+2.
+Here, ˜qt and ˜Jt denote ground-truth joint rotations and posi-
+tions, while ˆqfd
+t
+are joint rotations obtained from the forward
+dynamics ODE solver and ˆJfk
+t
+are joint positions derived
+via anatomical-constrained forward kinematics.
+Moreover, the ODE-based forward kinetics module func-
+tions as a differentiable physics simulator embedded within
+the transformer’s decoder loop. During training, the gra-
+dients of LODE are backpropagated through both the neu-
+ral network parameters and the ODE solver, allowing the
+model to learn intrinsic dynamic properties—such as stiff-
+ness, damping, and contact responses—directly from data.
+This integration tightly couples data-driven temporal model-
+ing with continuous-time physics, resulting in biomechan-
+ically faithful and dynamically smooth human motion tra-
+jectories. Furthermore, through the physics-regulated and
+anatomy-constrained FD and FK layers, domain knowledge
+is embedded not only during training but also during infer-
+ence, ensuring consistent physical plausibility and anatomi-
+cal coherence throughout the generation process.
+4. Experiments
+Datasets. During training, we use BML-MoVi [10], which
+provides rich biomechanical motion capture and video data
+from multiple actors performing everyday activities. BML-
+Movi consists of 90 subjects performing 21 different actions,
+captured using two cameras and a marker-based motion cap-
+ture system. For evaluation, we utilize the test set of Open-
+Cap and BEDLAM, MonoMSK is not trained on OpenCap
+[20] and BEDLAM [2] datasets to show its cross-dataset
+generalization performance. OpenCap includes data from
+ten subjects performing various actions such as walking,
+squatting, standing up from a chair, drop jumps, and their
+asymmetric variations. The recordings were made using five
+RGB cameras alongside a marker-based motion capture sys-
+tem. Additionally, OpenCap offers processed marker data
+and kinematic annotations for a comprehensive full-body
+OpenSim skeletal model [19]. BEDLAM dataset comprises
+synthetic video data featuring a total of 271 subjects, in-
+cluding 109 men and 162 women. It includes monocular
+RGB videos, covering a diverse range of body shapes, and
+motions.
+Implementation. The transformer backbone employs a
+standard encoder–decoder architecture consisting of 6 layers,
+8 attention heads, and an embedding dimension of 1024. The
+model operates on input sequences of length 16, consistent
+6
+
+Table 1. We evaluate mean per–bony–landmark position error (MPBLPE, mm), joint–angle mean absolute error (MAEangle, deg), and
+physics–plausibility metrics acceleration error (ACCL, mm/frame2) and velocity error (VEL, mm/frame). Lower values (↓) indicate better
+performance. Blue percentages represent relative improvements over the best kinematics-only baseline (BioPose). MonoMask uses the
+MQ-HMR in [13] to extract virtual markers
+BML-MoVi
+BEDLAM
+OpenCap
+Methods
+MPBLPE
+(↓)
+MAEangle
+(↓)
+Acc.
+(↓)
+Vel.
+(↓)
+MPBLPE
+(↓)
+MAEangle
+(↓)
+Acc.
+(↓)
+Vel.
+(↓)
+MPBLPE
+(↓)
+MAEangle
+(↓)
+Acc.
+(↓)
+Vel.
+(↓)
+HMR2.0 [11]
+48.32
+3.78
+8.70
+6.28
+53.21
+3.92
+9.58
+6.92
+50.16
+3.81
+9.03
+6.52
+TokenHMR [8]
+44.54
+3.54
+8.02
+5.79
+48.42
+3.69
+8.72
+6.29
+46.17
+3.57
+8.31
+6.00
+CameraHMR [17]
+39.63
+3.28
+7.13
+5.15
+42.17
+3.39
+7.59
+5.48
+39.48
+3.31
+7.11
+5.13
+D3KE [1]
+36.98
+3.54
+–
+–
+39.45
+6.72
+–
+–
+38.62
+5.92
+–
+–
+OpenCap Multi-Camera [20]
+–
+–
+–
+–
+–
+–
+–
+–
+–
+4.50
+–
+–
+BioPose [13]
+25.76
+2.84
+6.30
+5.18
+26.54
+3.14
+6.84
+4.37
+26.34
+3.19
+5.68
+4.23
+MonoMSK (Ours)
+24.36
+(5.4%↓)
+1.93
+(32.0%↓)
+4.38
+(30.5%↓)
+3.17
+(38.8%↓)
+25.62
+(3.5%↓)
+2.57
+(18.1%↓)
+4.61
+(32.6%↓)
+3.33
+(23.8%↓)
+25.28
+(4.0%↓)
+2.84
+(11.0%↓)
+4.55
+(19.9%↓)
+3.29
+(22.2%↓)
+Table 2. Impact of Human Mesh Recovery (HMR) backbones on
+kinetics estimation of MonoMSK. MAEλ : ground-reaction forces
+and MAEτ: joint torques, MAEτ.
+HMR Backbone
+BML-MoVi
+BEDLAM
+OpenCap
+MAEλ
+(↓)
+MAEτ
+(↓)
+MAEλ
+(↓)
+MAEτ
+(↓)
+MAEλ
+(↓)
+MAEτ
+(↓)
+HMR2.0 [11] + MonoMSK
+0.0162
+0.0584
+0.0489
+0.0841
+0.0398
+0.0726
+TokenHMR [8] + MonoMSK
+0.0150
+0.0553
+0.0463
+0.0802
+0.0379
+0.0704
+CameraHMR [17] + MonoMSK
+0.0144
+0.0528
+0.0441
+0.0781
+0.0367
+0.0689
+MQ-HMR [13] + MonoMSK
+0.0139
+0.0498
+0.0422
+0.0748
+0.0351
+0.0675
+Table 3. Ablation on the Training Losses for the MonoMSK frame-
+work. Lower values (↓) indicate better performance. The first row
+corresponds to the kinematic-only baseline.
+Training Losses
+Performance (↓)
+Lλ
+Lτ
+Lq
+LJ
+Lλ
+Lτ
+Lq
+LJ
+–
+–
+–
+–
+–
+–
+2.84
+25.76
+✓
+–
+–
+–
+0.0156
+0.0538
+2.57
+25.62
+✓
+✓
+–
+–
+0.0148
+0.0512
+2.45
+25.28
+✓
+✓
+✓
+–
+0.0142
+0.0501
+2.17
+24.86
+✓
+✓
+✓
+✓
+0.0139
+0.0498
+1.93
+24.36
+with common configurations in prior works. For efficient
+training, we first use the ground-truth supervision to extract
+output embeddings for 20 epochs, followed by an additional
+5 epochs using predicted embeddings. The Adam optimizer
+is utilized with a weight decay of 10−4. The initial learning
+rate is set to 10−5 and is decayed by a factor of 0.8 every 5
+epochs. Empirically, the hyperparameters are configured as
+γq = 2 × 103, γJ = 1 × 105, γτ = 5, γλ = 1, γv = 100,
+and γz = 200.
+Evaluation Metrics. We evaluate MonoMSK using both
+kinematic and dynamic measures. Kinematic accuracy is
+assessed using the MPBLPE (mm), which measures 3D
+bony-landmark positional error, and MAEangle (deg), which
+quantifies joint-angle accuracy. To evaluate physical plausi-
+bility, we report the acceleration error (ACCL) and velocity
+error (VEL), capturing deviations in joint accelerations and
+velocities that reflect dynamic consistency. Finally, for direct
+kinetics estimation, we compute MAEλ (ground-reaction
+forces) and MAEτ (joint torques), which assess the correct-
+ness of predicted external and internal forces.
+4.1. Comparison to State-of-the-art Approaches
+Improvements to Kinematics-based Methods. As shown
+in Table 1, the proposed MonoMSK framework establishes
+a new benchmark for biomechanically consistent 3D hu-
+man motion estimation across the BML-MoVi, BEDLAM,
+and OpenCap datasets. By combining transformer-based
+force–torque prediction with physics-aware motion integra-
+tion through a differentiable ODE solver, our model achieves
+substantial gains in both kinematic accuracy and physical
+plausibility compared to existing approaches. On BML-
+MoVi, MonoMSK reduces the joint-angle error (MAEangle)
+by 32.0% and the bony-landmark position error (MPBLPE)
+by 5.4% relative to the BioPose baseline, while decreas-
+ing the acceleration (ACCL) and velocity (VEL) errors by
+30.5% and 38.8%, respectively. Similarly, on BEDLAM,
+our method achieves an 18.1% improvement in MAEangle, a
+3.5% gain in MPBLPE, and consistent reductions in ACCL
+(32.6%) and VEL (23.8%), confirming robustness across
+large-scale synthetic motion data with complex dynamics.
+For OpenCap, which contains real-world motion capture
+sequences, MonoMSK continues to outperform BioPose,
+lowering MAEangle by 11.0%, MPBLPE by 4.0%, ACCL by
+19.9%, and VEL by 22.2%. These consistent improvements
+across all benchmarks highlight the effectiveness of inte-
+grating differentiable physics into transformer architectures,
+enabling anatomically accurate, and physically interpretable
+human motion estimation from monocular videos.
+4.2. Ablation Study
+Ablation on HMR Backbones. Table 2 presents a quan-
+titative comparison of different Human Mesh Recovery
+(HMR) backbones used to initialize the kinematic esti-
+7
+
+Table 4. Comparison between Single Frame Out and Multiple Frames Out MonoMSK models across three datasets. Lower values (↓)
+indicate better performance.
+BML-MoVi
+BEDLAM
+OpenCap
+Model
+MAEλ
+MAEτ
+MAEangle
+MAEλ
+MAEτ
+MAEangle
+MAEλ
+MAEτ
+MAEangle
+Multiple Frames Out
+0.0156
+0.0538
+2.45
+0.0472
+0.0785
+2.81
+0.0373
+0.0682
+3.42
+Single Frame Out
+0.0139
+0.0498
+1.93
+0.0422
+0.0748
+2.57
+0.0351
+0.0675
+2.84
+mates within the MonoMSK framework. The results clearly
+demonstrate that the accuracy and physical consistency
+of MonoMSK strongly depend on the quality of the un-
+derlying HMR initialization. Across all datasets, perfor-
+mance improves consistently as the backbone transitions
+from HMR2.0 to TokenHMR, CameraHMR, and finally MQ-
+HMR. The proposed MQ-HMR–based MonoMSK achieves
+the lowest physics-based losses, with MAEλ = 0.0139
+and MAEτ = 0.0498 on the BML-MoVi dataset, outper-
+forming the next-best CameraHMR variant by a notice-
+able margin. Similar improvements are observed on BED-
+LAM (MAEλ = 0.0422, MAEτ = 0.0748) and OpenCap
+(MAEλ = 0.0351, MAEτ = 0.0675), confirming the ro-
+bustness of our approach across both synthetic and real-
+world motion capture data. These results highlight that accu-
+rate mesh-based kinematic initialization directly enhances
+the downstream physics-based optimization in MonoMSK,
+enabling more accurate force–torque prediction.
+Ablation on the Training Losses. We perform an abla-
+tion study to analyze the contribution of each loss component
+in the MonoMSK training objective, as shown in Table 3.
+The kinematic-only baseline (without any physics-based su-
+pervision) exhibits the highest errors (MAEangle = 2.84◦,
+MPBLPE = 25.76 mm), confirming that purely kinematic
+reconstruction fails to capture biomechanical consistency.
+Introducing the external force loss Lλ significantly reduces
+both angular and positional errors by enforcing stable con-
+tact interactions with the environment. Adding the torque
+loss Lτ further improves internal actuation coherence across
+the 24-joint biomechanical skeleton, leading to smoother
+and more physically grounded joint dynamics. Incorporat-
+ing joint rotation consistency loss Lq enhances temporal
+smoothness and consistency between predicted and phys-
+ically integrated motion states, while the joint-space con-
+sistency regularization LJ provides anatomical alignment
+and prevents kinematic drift. When all four objectives are
+jointly optimized, MonoMSK achieves the lowest overall er-
+rors (MAEλ = 0.0139, MAEτ = 0.0498, MAEangle = 1.93◦,
+MPBLPE = 24.36 mm), demonstrating that coupling exter-
+nal (force) and internal (torque) supervision with coordinate-
+and joint-level consistency is critical for biomechanically
+accurate and physically coherent motion estimation.
+Single Frame Out vs. Multiple Frames Out. To ex-
+amine the effect of temporal prediction strategy within the
+transformer-based MonoMSK architecture, we compare two
+configurations: (1) a Single Frame Out model, where the
+transformer predicts one frame at a time and is jointly op-
+timized with the ODE layer in an end-to-end manner, and
+(2) a Multiple Frames Out variant, which predicts several
+future frames simultaneously in a two-stage setup without
+end-to-end physical supervision. As shown in Table 4, the
+Single Frame Out configuration consistently outperforms its
+multi-frame counterpart across all datasets. It achieves lower
+external force and joint-torque losses (MAEλ and MAEτ)
+and yields notably improved joint-angle accuracy. For exam-
+ple, on the BML-MoVi dataset, Single Frame Out reduces
+MAEλ from 0.0156 to 0.0139 and MAEτ from 0.0538 to
+0.0498, while improving MAEangle from 2.45° to 1.93°. A
+similar trend is observed for BEDLAM and OpenCap, where
+consistent reductions in both force–torque and angular errors
+are obtained. These results indicate that step-wise temporal
+prediction allows stronger supervision signals from the ODE
+layer, ensuring smooth physical integration and preserving
+biomechanical consistency. In contrast, multi-frame fore-
+casting introduces temporal drift due to error accumulation,
+confirming that autoregressive single-step prediction is more
+effective for physically grounded human motion modeling.
+5. Conclusion
+We introduce MonoMSK, the first hybrid framework to
+recover full-body, biomechanically-accurate motion dy-
+namics (kinematics and kinetics) from a monocular video.
+MonoMSK integrates learning-based inverse dynamics trans-
+formers with a differentiable, anatomically-accurate muscu-
+loskeletal (MSK) forward simulator. Data-driven inverse
+transformers infer kinetic causes (torques) from observed
+kinematic consequences (motion). Differentiable Forward
+Kinematics and Dynamics (FK and FD) layers act as a
+physics-based verifier, simulating motion from the inferred
+kinetics. This physics-regulated loop embeds domain knowl-
+edge during training and inference, ensuring physically plau-
+sible estimations. We train this architecture with a novel
+forward-inverse consistency loss, ensuring the simulated
+motion faithfully reconstructs the original observation. Ex-
+tensive experiments on BML-MoVi, BEDLAM, and Open-
+Cap datasets demonstrate that MonoMSK not only achieves
+SOTA kinematic accuracy but also delivers the first precise
+monocular kinetics estimation.
+8
+
+References
+[1] Marian Bittner, Wei-Tse Yang, Xucong Zhang, Ajay Seth,
+Jan van Gemert, and Frans CT Van der Helm. Towards single
+camera human 3d-kinematics. Sensors, 23(1):341, 2022. 2, 7
+[2] Michael J Black, Priyanka Patel, Joachim Tesch, and Jin-
+long Yang. Bedlam: A synthetic dataset of bodies exhibit-
+ing detailed lifelike animated motion. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 8726–8737, 2023. 6
+[3] Joao Carreira, Pulkit Agrawal, Katerina Fragkiadaki, and
+Jitendra Malik. Human pose estimation with iterative error
+feedback. In Proceedings of the IEEE conference on computer
+vision and pattern recognition, pages 4733–4742, 2016. 5
+[4] Matthieu Caruel and Lev Truskinovsky. Physics of muscle
+contraction. Reports on Progress in Physics, 81(3):036602,
+2018. 3
+[5] Elena Ceseracciu, Zimi Sawacha, and Claudio Cobelli. Com-
+parison of markerless and marker-based motion capture tech-
+nologies through simultaneous data collection during gait:
+proof of concept. PloS one, 9(3):e87640, 2014. 1
+[6] Scott L Delp, Frank C Anderson, Allison S Arnold, Peter
+Loan, Ayman Habib, Chand T John, Eran Guendelman, and
+Darryl G Thelen. Opensim: open-source software to create
+and analyze dynamic simulations of movement. IEEE trans-
+actions on biomedical engineering, 54(11):1940–1950, 2007.
+3
+[7] Christopher L Dembia, Nicholas A Bianco, Antoine Falisse,
+Jennifer L Hicks, and Scott L Delp. Opensim moco: Muscu-
+loskeletal optimal control. PLOS Computational Biology, 16
+(12):e1008493, 2020. 6
+[8] Sai Kumar Dwivedi, Yu Sun, Priyanka Patel, Yao Feng, and
+Michael J Black. Tokenhmr: Advancing human mesh recov-
+ery with a tokenized pose representation. In Proceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pages 1323–1333, 2024. 1, 2, 7
+[9] Roy Featherstone. Rigid body dynamics algorithms. Springer,
+2008. 3
+[10] Saeed Ghorbani, Kimia Mahdaviani, Anne Thaler, Konrad
+Kording, Douglas James Cook, Gunnar Blohm, and Niko-
+laus F Troje. Movi: A large multi-purpose human motion and
+video dataset. Plos one, 16(6):e0253157, 2021. 6
+[11] Shubham Goel, Georgios Pavlakos, Jathushan Rajasegaran,
+Angjoo Kanazawa, and Jitendra Malik. Humans in 4d: Recon-
+structing and tracking humans with transformers. In Proceed-
+ings of the IEEE/CVF International Conference on Computer
+Vision, pages 14783–14794, 2023. 1, 2, 7
+[12] Kenneth H Hunt and Frank R Erskine Crossley. Coefficient
+of restitution interpreted as damping in vibroimpact. 1975. 4
+[13] Farnoosh Koleini, Muhammad Usama Saleem, Pu Wang,
+Hongfei Xue, Ahmed Helmy, and Abbey Fenwick. Biopose:
+Biomechanically-accurate 3d pose estimation from monocular
+videos. In 2025 IEEE/CVF Winter Conference on Applica-
+tions of Computer Vision (WACV), pages 6330–6339. IEEE,
+2025. 2, 5, 7
+[14] Nikos Kolotouros, Georgios Pavlakos, and Kostas Daniilidis.
+Convolutional mesh regression for single-image human shape
+reconstruction. In Proceedings of the IEEE/CVF conference
+on computer vision and pattern recognition, pages 4501–
+4510, 2019. 2
+[15] Matthew Loper, Naureen Mahmood, Javier Romero, Gerard
+Pons-Moll, and Michael J Black. Smpl: A skinned multi-
+person linear model. In Seminal Graphics Papers: Pushing
+the Boundaries, Volume 2, pages 851–866. 2023. 2, 5
+[16] Richard M Murray, Zexiang Li, and S Shankar Sastry. A
+mathematical introduction to robotic manipulation. CRC
+press, 2017. 3
+[17] Priyanka Patel and Michael J Black. Camerahmr: Aligning
+people with perspective. In 2025 International Conference
+on 3D Vision (3DV), pages 1562–1571. IEEE, 2025. 1, 2, 7
+[18] Apoorva Rajagopal, Christopher L Dembia, Matthew S De-
+Mers, Denny D Delp, Jennifer L Hicks, and Scott L Delp.
+Full-body musculoskeletal model for muscle-driven simula-
+tion of human gait. IEEE transactions on biomedical engi-
+neering, 63(10):2068–2079, 2016. 4
+[19] Ajay Seth, Jennifer L Hicks, Thomas K Uchida, Ayman
+Habib, Christopher L Dembia, James J Dunne, Carmichael F
+Ong, Matthew S DeMers, Apoorva Rajagopal, Matthew Mil-
+lard, et al. Opensim: Simulating musculoskeletal dynamics
+and neuromuscular control to study human and animal move-
+ment. PLoS computational biology, 14(7):e1006223, 2018. 1,
+2, 3, 4, 6
+[20] Scott D Uhlrich, Antoine Falisse, Łukasz Kidzi´nski, Julie
+Muccini, Michael Ko, Akshay S Chaudhari, Jennifer L Hicks,
+and Scott L Delp. Opencap: Human movement dynamics
+from smartphone videos. PLoS computational biology, 19
+(10):e1011462, 2023. 1, 2, 6, 7
+[21] Andreas W¨achter and Lorenz T Biegler. On the implementa-
+tion of an interior-point filter line-search algorithm for large-
+scale nonlinear programming. Mathematical programming,
+106(1):25–57, 2006. 6
+[22] Jacqueline Kory Westlund, Sidney K D’Mello, and Andrew M
+Olney. Motion tracker: Camera-based monitoring of bod-
+ily movements using motion silhouettes. PloS one, 10(6):
+e0130293, 2015. 1
+[23] Yufei Zhang, Jeffrey O Kephart, Zijun Cui, and Qiang Ji.
+Physpt: Physics-aware pretrained transformer for estimating
+human dynamics from monocular videos. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 2305–2317, 2024. 2, 5
+[24] Yufei Zhang, Jeffrey O Kephart, and Qiang Ji. Incorporating
+physics principles for precise human motion prediction. In
+Proceedings of the IEEE/CVF Winter Conference on Applica-
+tions of Computer Vision, pages 6164–6174, 2024. 5
+9

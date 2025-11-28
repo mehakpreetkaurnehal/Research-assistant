@@ -1,0 +1,7935 @@
+1
+PaTAS: A Parallel System for Trust Propagation in Neural Networks
+Using Subjective Logic
+Koffi Ismael Ouattara, Ioannis Krontiris, Theo Dimitrakos, Dennis Eisermann, and Frank Kargl
+Abstract—Trustworthiness has become a key requirement for
+the deployment of artificial intelligence systems in safety-critical
+applications. Conventional evaluation metrics such as accuracy
+and precision fail to capture uncertainty or the reliability of
+model predictions, particularly under adversarial or degraded
+conditions. This paper introduces the Parallel Trust Assessment
+System (PaTAS), a framework for modeling and propagating
+trust in neural networks using Subjective Logic (SL). PaTAS
+operates in parallel with standard neural computation through
+Trust Nodes and Trust Functions that propagate input, parameter,
+and activation trust across the network. The framework defines
+a Parameter Trust Update mechanism to refine parameter reli-
+ability during training and an Inference-Path Trust Assessment
+(IPTA) method to compute instance-specific trust at inference.
+Experiments on real-world and adversarial datasets demonstrate
+that PaTAS produces interpretable, symmetric, and convergent
+trust estimates that complement accuracy and expose reliability
+gaps in poisoned, biased, or uncertain data scenarios. The results
+show that PaTAS effectively distinguishes between benign and
+adversarial inputs and identifies cases where model confidence
+diverges from actual reliability. By enabling transparent and
+quantifiable trust reasoning within neural architectures, PaTAS
+provides a principled foundation for evaluating model reliability
+across the AI lifecycle.
+Index Terms—Trustworthy AI, Subjective Logic, Neural Net-
+works, Uncertainty Quantification, Trust Propagation
+I. INTRODUCTION
+Artificial Intelligence (AI) systems, particularly deep neu-
+ral networks, are increasingly used in critical domains such
+as healthcare, autonomous driving, and cybersecurity. While
+highly performant, they often operate as black boxes that offer
+limited insight into the reliability of their outputs. This opacity
+becomes critical under adversarial, uncertain, or degraded
+input conditions. Conventional metrics such as accuracy or
+precision do not capture uncertainty or trust, leaving decision-
+makers without indicators of when to rely on model outputs.
+Even confidence estimates rarely account for dataset bias, label
+noise, or adversarial corruption. For instance, a diagnostic
+model may report 95% confidence in a classification even
+when trained on mislabeled data. These challenges underscore
+the need for reliability measures that go beyond predictive
+confidence and that consider the quality and provenance of
+inputs, the reliability of training data, and the stability of
+learned parameters.
+As AI systems become integral to real-world applications,
+trustworthiness has emerged as a fundamental requirement
+for ensuring reliability, safety, and alignment with human
+values. According to the High-Level Expert Group on AI [1],
+a trustworthy system must be lawful, ethical, and robust.
+In technical terms, this translates into measurable properties
+such as accuracy, robustness, fairness, and explainability [2].
+Embedding these properties across the AI pipeline, from data
+collection to deployment, is essential for preventing failures
+caused by poor data quality, bias, or unstable training. In this
+work, we adopt a property-based view of trustworthiness that
+focuses on quantifiable technical dimensions which can be
+modeled and propagated within neural networks. Specifically,
+we study how trust in the dataset, the query input, and the
+learned parameters (assessed for the same property) jointly
+determine the reliability of model predictions.
+These issues become even more pronounced in transfer
+learning scenarios, where knowledge is reused across domains
+or tasks. Transfer learning introduces additional challenges
+related to both the transferability and reliability of knowledge.
+Recent studies highlight the need for frameworks that assess
+whether transferred knowledge remains robust, fair, and secure
+across varying data distributions [3]. Such findings reinforce
+the broader need for a unified approach to measuring and
+propagating trust in complex neural architectures.
+Despite this growing awareness, most models still provide
+limited mechanisms for representing confidence. Neural net-
+works are typically trained on clean, unambiguous data and
+thus lack exposure to uncertain or borderline cases. As a result,
+predicted probabilities tend to reflect similarity to seen patterns
+rather than genuine uncertainty, and they often assume clean,
+in-distribution inputs. These assumptions are rarely satisfied
+in real-world or adversarial settings, where data quality, distri-
+butional shifts, and parameter stability all influence prediction
+reliability. Consequently, existing approaches lack mechanisms
+to evaluate how uncertainty and trust in inputs, activations,
+and parameters jointly affect model behavior. This motivates
+the development of tools that can explicitly reason about trust
+across the entire model lifecycle.
+Problem: Existing methods for trust and uncertainty
+estimation in neural networks face several key limitations:
+1) Neglect of data provenance and quality: Most frameworks
+assume the training data are fully reliable.
+2) Limited holistic propagation: Uncertainty quantification
+methods typically assess reliability only at the output
+layer. Even attribution-based methods (e.g., Smooth-
+Grad [4]) fail to capture how input, intermediate, and
+parameter trust jointly influence the output reliability.
+3) Lack of interpretability: Few models yield trust estimates
+that are both faithful to the model’s reasoning and under-
+standable to end users.
+These limitations hinder reliable trust assessments, particularly
+in safety-critical or adversarial contexts.
+Contributions: To address these challenges, we propose
+the Parallel Trust Assessment System (PaTAS), a framework
+for modeling and propagating trust in neural networks using
+arXiv:2511.20586v1  [cs.AI]  25 Nov 2025
+
+2
+Subjective Logic (SL). The main contributions are summarized
+as follows:
+1) Parallel Trust Computation: We introduce Trust Nodes
+and Trust Functions that mirror neural computations,
+enabling principled trust propagation during training and
+inference through SL discounting and fusion.
+2) Parameter Trust Update: We design an algorithm that re-
+fines trust in learned parameters using gradient behavior,
+input trust, and label trust, aligning parameter reliability
+with the learning dynamics.
+3) Inference-Path Trust Assessment (IPTA): We propose a
+context-aware trust function that leverages activation-path
+information to compute per-instance trust scores.
+4) Empirical Validation: We evaluate PaTAS on real-world
+and adversarial datasets, demonstrating that it produces
+interpretable, symmetric, and convergent trust estimates
+that reflect both input quality and internal model behavior.
+Structure of the Paper: The remainder of this paper is
+organized as follows: Section II introduces background on
+Subjective Logic and dataset trust assessment, Section III
+reviews related work, Section IV formalizes trust propagation
+in neural networks, Section V details the PaTAS architecture,
+Section VI presents experiments, Section VII discusses impli-
+cations, and Section VIII concludes the paper.
+II. BACKGROUND
+A. Subjective Logic Fundamentals
+Reasoning about trust in AI systems requires handling
+partial, conflicting, or missing evidence. Classical probabil-
+ity theory models aleatoric uncertainty but cannot represent
+ignorance or contradictory information, which often arises
+from noisy or biased data. Subjective Logic (SL) [5] extends
+Dempster–Shafer theory [6], [7] to capture these conditions
+by representing opinions rather than probabilities. An SL
+opinion expresses belief, disbelief, and uncertainty as separate
+components, thereby distinguishing between uncertainty due
+to lack of knowledge (epistemic uncertainty) and uncertainty
+inherent to the environment itself (aleatoric uncertainty).
+A subjective opinion denoted by ωA
+X expresses the belief
+of an agent A about states of a variable X which takes its
+values from a domain X (i.e., a state space). A special case
+of a subjective opinion is a subjective binomial opinion where
+card(X) = 2. For a binary variable X ∈X = {x, x}, a
+binomial opinion is expressed as a quadruple:
+ωX=x = ωx = (bx, dx, ux, ax)
+satisfying bx + dx + ux = 1, where bx denotes belief in x, dx
+disbelief in x (belief in x), ux the uncertainty mass, and ax the
+base rate (prior probability of x in the absence of evidence).
+Its projected probability is defined as:
+P(x) = bx + axux.
+(1)
+Binomial opinions can be derived from evidence through
+various quantification models. Let rx and sx represent the
+amount of positive and negative evidence. Three common
+quantification approaches are:
+• Baseline-Prior Quantification:
+bx =
+rx
+W + rx + sx
+,
+dx =
+sx
+W + rx + sx
+,
+ux =
+W
+W + rx + sx
+(2)
+where weight W > 0 guarantees residual uncertainty.
+• Evidence-Weighted Quantification [8]:
+bx =
+rx
+wx + rx + sx
+,
+dx =
+sx
+wx + rx + sx
+,
+ux =
+wx
+wx + rx + sx
+(3)
+Where the uncertainty is scaled by wx.
+• Constant-Uncertainty Quantification [8]:
+ux = U,
+γ = 1 −U
+rx + sx
+bx = γ · rx,
+dx = γ · sx
+(4)
+A subjective opinion is meaningful only within a specific con-
+text or property under evaluation (e.g., accuracy, bias, or other
+trust aspects). In this work, trust is represented as a subjective
+binomial opinion (t, d, u), where t denotes trust (belief), d
+distrust (disbelief), and u uncertainty. These fundamentals
+define how trust is represented and interpreted as subjective
+opinions. To make them operational, Subjective Logic provides
+operators for combining, revising, and discounting opinions,
+which we introduce next.
+B. Subjective Logic Operators
+Subjective Logic (SL) provides key reasoning operators for
+combining and propagating opinions, including trust discount-
+ing, fusion, and inferential operators [5], [9], [10].
+Definition 1 (Fusion [9]). Let A be an agent forming an
+opinion about a proposition X = x based on two information
+sources, P and Q. The fused opinion is defined as:
+ωA
+X=x = ωP &Q
+X=x = ωP
+X=x ⊙ωQ
+X=x.
+(5)
+The specific fusion operator depends on the relationship
+between the sources. SL defines several variants—such as
+consensus, averaging, weighting, and cumulative fusion—each
+representing a distinct way of aggregating evidence.
+Example.
+Suppose
+two
+temperature
+sensors
+estimate
+whether the room temperature exceeds 25◦C. If both sensors
+are of the same type and environment, their evidence is
+correlated and averaging or weighted fusion is appropriate. If
+they are of different designs (e.g., infrared and contact-based)
+and thus independent, cumulative fusion is more suitable.
+Definition 2 (Trust Discounting [10]). Let A have a referral
+trust ωA
+B in another agent B, who holds an opinion ωB
+X on
+variable X. The trust-discounted opinion of A derived from
+B is:
+ω[A;B]
+X=x = ωA
+B ⊗ωB
+X=x.
+Referral trust is domain-specific and expresses how much A
+relies on B regarding X.
+
+3
+Example. Continuing the sensor case, assume one sensor
+occasionally drifts. Agent A assigns a referral trust to that
+sensor B, discounting its opinion to reduce belief mass and
+increase uncertainty. This ensures fusion incorporates both
+evidence and source reliability.
+Definition 3 (Inferential Operators [11]). Inferential operators
+generalize Bayesian reasoning by enabling opinion propaga-
+tion through conditional relationships. If A reasons about a
+relation X ⇒Y with conditional opinion ωA
+Y |X, belief (b),
+disbelief (d), and uncertainty (u) describe how X supports Y .
+The main operators are:
+• Deduction: derive ωA
+Y from ωA
+X using ωA
+Y |X.
+• Abduction: derive ωA
+X from ωA
+Y using ωA
+Y |X.
+Example. For the relation “if it rains (X), Bob carries an
+umbrella (Y ),” agent A holds a conditional opinion ωA
+Y |X =
+(b, d, u). Given an opinion on rain, deductive inference yields
+an opinion about umbrella use; conversely, abduction infers
+the likelihood of rain from umbrella observations.
+A summary of all operators and symbols used in this work
+appears in Appendix A.
+Subjective Trust Networks: A Subjective Trust Network
+(STN) [12], [13] models trust relationships as subjective opin-
+ions propagated through referral chains using trust discounting
+and fusion. Such extensions of SL have been applied to trust
+propagation, opinion dynamics, and source reliability analy-
+sis [14]–[16]. In practical domains such as automotive systems,
+SL has been used to combine evidence from multiple mis-
+behavior detection mechanisms in vehicle-to-vehicle (V2V)
+and vehicle-to-infrastructure (V2I) communication, improving
+resilience against insider attacks [17], [18].
+C. Trustworthiness in the dataset
+The quality and structure of the training dataset are essential
+for determining the performance, robustness, and fairness of
+machine learning models. Common issues such as sampling
+biases, mislabeled instances, or a lack of diversity in the data
+can degrade learned representations and hinder generalization,
+thereby reducing the reliability of the model’s outputs [19].
+Recent studies further show that even small corrections in
+large-scale datasets can significantly alter model performance.
+For example, on CIFAR-10 with corrected labels, VGG11
+outperforms VGG19 once the prevalence of mislabeled test
+examples increases by just 5%, illustrating how pervasive label
+errors can destabilize benchmark conclusions and affect model
+selection [19]. Thus, evaluating the trustworthiness of training
+data is a critical step in assessing the trustworthiness of an AI
+system.
+Subjective Logic has been applied effectively to model
+dataset trustworthiness [8], treating the dataset as a collection
+of samples. Each sample consists of an input vector and
+its corresponding label. Thus, dataset trustworthiness can be
+assessed at various granularities depending on the sub-property
+of interest:
+• Dataset level: Captures global properties such as class
+imbalance or sampling bias. These factors affect the
+overall distribution and may harm generalization.
+• Instance level: Addresses local anomalies like mislabeled
+or corrupted data points. Individual instances may be
+unreliable due to noise, annotation errors, or improper
+data collection.
+• Input feature level: Trust assessments at this level capture
+fine-grained variations within the input vector. For in-
+stance, in a data poisoning scenario, an adversarial patch
+affecting only one specific pixel may render part of an
+image untrustworthy [20]. Similarly, when input feature
+values are sourced from heterogeneous systems, some
+features may be inherently more reliable than others,
+leading to variable trust across features.
+III. RELATED WORK
+Quantifying trust and uncertainty in neural networks has
+become a central research topic, particularly in safety-critical
+domains. Incorrect yet confident predictions can have severe
+consequences. For instance, in data poisoning, if a model is
+trained and evaluated on corrupted or mislabeled samples, it
+may still report high accuracy, precision, or recall, creating
+an illusion of reliability. Standard metrics therefore fail to
+capture subtleties of model trustworthiness. As a result, diverse
+frameworks have been proposed to model and propagate
+uncertainty and trust, yet significant limitations remain.
+A. Uncertainty Quantification in Neural Networks
+Uncertainty quantification (UQ) aims to estimate predictive
+reliability by modeling uncertainty at different levels, typically
+epistemic (model-based) and aleatoric (data-based). Founda-
+tional methods include Bayesian neural networks [21]–[23],
+Monte Carlo dropout [24], and ensembles [25]. Dropout pro-
+vides an efficient Bayesian approximation [24], while Bayes
+by Backprop [22] learns weight distributions that enhance
+generalization and exploration in reinforcement learning. Ex-
+tensions with latent variables explicitly decompose predictive
+uncertainty into epistemic and aleatoric components [23], im-
+proving decision-making in active and reinforcement learning
+through risk-sensitive criteria.
+Despite these advances, estimating and calibrating both
+forms of uncertainty in complex models remains challeng-
+ing [26]. Studies report frequent over- or under-confidence,
+with uncertainty estimates often degrading under real-world
+conditions [27]–[29]. In medical AI, uncalibrated confidence
+has been linked to critical misjudgments [27]. Even well-
+performing models can produce unreliable confidence scores
+under dataset shifts [29]. Consequently, researchers have ex-
+plored post-hoc calibration, such as temperature scaling [30],
+which adjusts output probabilities to better align predicted and
+observed frequencies. However, these approaches operate only
+at the output layer and assume clean data, which can still
+yield misleading confidence when inputs or training data are
+corrupted.
+B. Subjective Logic Approaches to Trust
+Subjective Logic (SL) provides a probabilistic framework
+for modeling belief, disbelief, and uncertainty, offering a struc-
+tured approach to trust reasoning. Evidential deep learning [31]
+
+4
+applies SL principles by representing class predictions as
+subjective opinions parameterized through a Dirichlet distri-
+bution. The model jointly predicts outcomes and quantifies
+confidence, distinguishing between low-confidence predictions
+and high-uncertainty regions such as out-of-distribution inputs.
+Although effective, this method assumes clean data and lacks
+input-level trust assessment, while PaTAS directly models such
+factors.
+Other SL-based methods focus on interpretable trust quan-
+tification. A calibration-based approach [32] clusters model
+outputs into subjective opinions to derive per-prediction trust
+scores without accessing internal parameters. While simple
+and model-agnostic, it again assumes trustworthy datasets and
+neglects input evidence. The DeepTrust framework by Cheng
+et al. [33] instead adopts a white-box perspective, integrating
+dataset evidence during training to assess global model trust-
+worthiness. Although holistic, DeepTrust’s use of SL fusion
+and multiplication operators lacks algebraic consistency, and
+its formulation of trust backpropagation is specified only at a
+single-layer level, making its theoretical extension to deeper
+architectures unclear despite empirical evaluations on complex
+networks. PaTAS addresses these limitations by introducing a
+coherent, layer-wise propagation mechanism compatible with
+deep architectures.
+C. Trust and Uncertainty Propagation
+Recent work on uncertainty propagation seeks to improve
+both accuracy and computational efficiency. Mae et al. [34]
+proposed a sampling-free conversion of dropout-trained net-
+works into Bayesian models using variance propagation. Mon-
+chot et al. [35] employed Gaussian Mixture Models and a
+Split-and-Merge algorithm with a Wasserstein criterion to
+propagate input uncertainty without assuming Gaussianity,
+achieving convergence guarantees at low cost. Astudillo and
+Net [36] extended these ideas to multi-layer perceptrons for
+speech recognition, showing that observation uncertainty en-
+hances robustness even in hybrid MLP-HMM systems.
+Beyond neural architectures, Ziegler and Lausen [37] pro-
+posed the Appleseed model for trust propagation in social
+networks using dynamic spreading activation. Though not
+originally intended for neural systems, it demonstrates the
+value of viewing trust as a structural, context-dependent quan-
+tity, an idea further developed in PaTAS.
+Existing approaches demonstrate growing interest in uncer-
+tainty and trust modeling, yet they often neglect the joint in-
+fluence of input quality, data reliability, and model parameters
+on prediction trust. The trustworthiness of an output cannot
+be viewed as a fixed property of the model alone but must
+depend on the corresponding input and its propagation through
+the network. PaTAS addresses these gaps by modeling trust as
+a dynamic property distributed across inputs, parameters, and
+activations, enabling consistent and interpretable trust propa-
+gation that reflects both data quality and network structure.
+IV. PROPOSED METHOD
+In our framework, trust reasoning begins at the feature
+level, where each individual input component is assigned a
+trust opinion. This design choice provides greater flexibility
+and fine-grained control, enabling the system to reflect nu-
+anced variations in input reliability across different operational
+contexts. These initial trust opinions are then injected into
+the PaTAS, which propagates them through its network. This
+propagation mechanism ensures that variations in input trust
+are explicitly carried through to the model’s outputs, enhancing
+the interpretability and transparency of AI decisions.
+A. Foundations of Trust-Aware Neural Inference
+This section formalizes the structure and behavior of a
+trust propagation system that mirrors standard neural network
+computations.
+Given a neural network represented by
+Θ = (W, b, f (·))
+where:
+• The parameter W = {W(l)} is a list of weight matrices
+W(l) ∈Rnl×nl−1 for each layer l, with nl the number
+of neurons in layer l.
+• b = {b(l)} where b(l) ∈Rnl is the bias vector for layer
+l.
+• f(·) = {f l(·)} where f l(·) is the activation function for
+layer l which may vary across each neurons of the layer.
+The network output y′ for an input x is computed from the
+standard feedforward equation:
+y′ = fΘ(x)
+(6)
+y′ = fL
+ W(L)  fL−1
+ . . . f2
+ W(2)f1
+ W(1)x + b(1)
++ b(2)
+. . .
+
++ b(L)
+Given a training dataset D = {(xi, yi)}N
+i=1, used to train
+the neural network, and a trust assessment function T(x)
+evaluating the trustworthiness of each features and labels data
+(xi and yi), our objective is to compute a corresponding trust
+opinion on the network output y′ = fΘ(x). To formalize this,
+we introduce the notion of a parallel trust function.
+Definition 4 (Parallel Trust Function). The parallel trust
+function of a neural network with parameters Θ, denoted
+PfΘ, is a function that mirrors the structure of the network’s
+feedforward computation fΘ to propagate trust assessments
+from input to output. Given a trust evaluation T(x) over an
+input x, PfΘ(T(x)) returns a trust opinion corresponding to
+the network’s output y′ = fΘ(x). This opinion reflects how
+trust in the input influences the trust assigned to the prediction,
+taking into account the architecture and how the parameters
+of fΘ were learned.
+To effectively construct PfΘ, we must first understand how
+the underlying neural network is built.
+The standard training objective is defined by the following
+optimization:
+W, b = arg min
+W,b
+N
+X
+i=1
+L (y′i, yi)
+(7)
+where:
+• y′i = fθ(xi) is the model output,
+• yi is the true label,
+
+5
+Fig. 1: STN used to assess the output y′ = f(x) of a
+perceptron Θ
+• L is a loss function, such as mean squared error or cross-
+entropy,
+• N is the total number of samples in the dataset D.
+This optimization seeks to find the set of weights and biases
+that minimize the loss function across the entire training set D,
+effectively improving the network’s ability to make accurate
+predictions.
+While the training process optimizes model accuracy, it does
+not account for how trust in the input data influences trust in
+the output predictions. Therefore, accuracy alone is not enough
+to assess trustworthiness of a model. We therefore turn to
+Subjective Logic as a framework for modeling and propagating
+trust through neural networks. As a first step, we consider a
+simple perceptron model to analyze how input trust opinions
+can be propagated to the output through the network’s structure
+and parameters. This forms the basis for progressively building
+the complete formulation of the parallel trust function PfΘ.
+B. Perceptron Case: SL Formulation
+Assume that an analyst A wants to form a trust opinion ωA
+y′
+on the output y′ of a perceptron. Since A does not directly
+observe or interact with y′, their opinion must be inferred
+indirectly through the output neuron (or output neurons of the
+network in the general case), denoted NO. Specifically, the
+analyst relies on the trust opinion ωNO
+y′
+formed by the output
+neuron, and holds a referral trust ωA
+NO, which expresses how
+much A trusts NO (or the process used by NO) for providing
+good trust opinion on y′. Fig. 1 illustrates the corresponding
+STN.
+The goal now is to compute ωNO
+y′ . For that end, we state
+that trust in the output is impacted by trust in the input, and
+the trust in the perceptron itself. The trust in the perceptron
+is, in turn, influenced by the perceptron design and the trust
+in the training dataset.
+Let fΘ be the perceptron inference function, and let x
+be an input with an associated trust opinion Tx. Given the
+output y′ = fΘ(x), our goal is to construct PfΘ(Tx), the
+corresponding trust opinion on y′.
+To explore this construction, we consider a simple percep-
+tron model that estimates the cost of renting an apartment:
+y′ = 10 × s + 100 × nr (eventually plus a bias)
+(8)
+where y′ is the size of the apartment and nr is the number of
+rooms.
+Based on this model, we introduce two initial sub-problems
+to illustrate how trust propagates through the computation:
+• Problem 1: How does trust in nr and s propagate to the
+output y′.
+(a) Perceptron for Eq. (8)
+(b) Parallel Function for Eq. (8)
+Fig. 2: Solution for Problem 1
+• Problem 2: Assume that we have trust Tθ1 in θ1 = 10
+and Tθ2 in θ2 = 100. Here, trust again depends on the
+property of interest. For example in a bias context, it
+reflects the extent to which the weights were trained to
+capture the true influence of apartment size and number of
+rooms on the final price, without introducing systematic
+bias. The central question, then, is how such parameter-
+trust assessments refine the solution of Problem 1. In
+other words, how does trust in the parameters influence
+the propagation of input trust to the output y′?
+The question of how to calculate trust in the parameters is
+addressed in Section V.
+1) Solution to Problem 1 - Trust Propagation from Input to
+Output:
+Objective: Determine how trust in the individual input
+features (s and nr) propagates through a simple perceptron
+to produce a trust assessment on the output variable y′,
+representing the predicted apartment cost.
+Assumptions: The model parameters θ1 = 10 and θ2 =
+100 are fully trusted and input feature trust opinions (Ts and
+Tnr) are available.
+The model specified in Eq. (8) is equivalent to the neural
+network depicted in Fig. 2a. This network employs a linear
+transformation without an activation function. The input vector
+is:
+x =
+ s
+nr
+
+Let ωs
+x be the trust opinion on x based on s as evidence
+and ωnr
+x
+the trust opinion on x based on nr as evidence.
+Since the output neuron N3 computes Eq. (8), we associate
+this computation with two agents: 10N1 from the context of
+computing 10 · s and 100N2 from the context of computing
+100 · nr. The trust opinion of the output neuron N3 on x is
+then:
+ωN3
+x
+= fusion(ω10N1
+x
+, ω100N2
+x
+)
+The choice of the fusion operator (that we will later denote by
+⊕) depends on the semantics of s and nr (see Definition 1).
+In this example, since s and p are not dependent evidence, the
+fusion operator to use is cumulative fusion.
+
+6
+Fig. 3: Solution for Problem 2
+Assuming full trust in the parameters θ1 = 10 and θ2 = 100,
+we have:
+ω10N1
+x
+= ωN1
+x
+= ωs
+x = Ts (Trust in the feature s of x)
+(9)
+ω100N2
+x
+= ωN2
+x
+= ωnr
+x
+= Tnr (Trust in the feature nr of x)
+(10)
+To complete the solution, we need to go from ωN3
+x
+to ωN3
+y′ (y′
+is the output of the neural network).
+One can observe that:
+y′ = f(x)
+is a deterministic relation between y′ and x. Hence :
+ωN3
+y′ = ωN3
+x
+= ω10N1
+x
+⊕ω100N2
+x
+= ωs
+x ⊕ωnr
+x
+= Ts ⊕Tnr
+(11)
+In summary, if we define Tx =
+ Ts
+Tnr
+
+, then:
+PfΘ(Tx) = PfΘ(
+ Ts
+Tnr
+
+) = Ts ⊕Tnr
+2) Solution for Problem 2 - Impact of Parameter Input Trust
+on Output Trust:
+Objective: Analyze how trust in the model parameters
+θ1 = 10 and θ2 = 100 affects the resulting trust assessment
+on the output y′, given trust in the inputs.
+Assumption: Trust Opinions Tθ1 and Tθ2 are assigned to
+the parameters.
+In problem 2, the model is expressed as:
+y′ = θ1 × s + θ2 × nr
+(12)
+and we assume trust parameters Tθ1 and Tθ2 respectively in
+θ1 and θ2 (we’ll see in details in Section V how to calculate
+these trust parameters). Unlike the previous problem, where
+we fully trusted θ1 and θ2, here we do not fully trust these
+parameters, and we must account for their trust assessments.
+For the network to incorporate the trust in θ1 and θ2, we
+adjust the trust opinions on the features accordingly. The trust
+opinions are now refined. As depicted in Fig. 3, we model this
+as a small subjective network. therefore:
+ωθ1N1
+x
+= Tθ1 ⊗ωN1
+x
+and ωθ1N2
+x
+= Tθ2 ⊗ωN2
+x
+(13)
+where ⊗is a trust discount operator. This results is consistent
+with the solution for problem 1 as for fully trusted Tθ =
+(1, 0, 0), we have ωθN
+x
+= Tθ ⊗ωN
+x = ωN
+x (for any neuron N).
+Finally, the resulting output trust ωN3
+y′
+is calculated by the
+fusion of these adjusted trust opinions:
+PfΘ(Tx) = PfΘ(
+ Ts
+Tnr
+
+) = (Tθ1 ⊗Ts) ⊕(Tθ2 ⊗Tnr)
+(14)
+Thus, we adjust the trust in the network output based on the
+trust in both the parameters and the features, ensuring that the
+trust propagation takes into account the trust in the parameters.
+(a) Structure of a Perceptron (b) Mirrored Trust Structure
+(c) Neuron Operation
+(d) Trust Function Opera-
+tion
+Fig. 4: Illustration of the trust node structure and computation
+C. Trust Nodes and Trust Functions
+In order to formalize the construction of PfΘ, we introduce
+two fundamental concepts: the Trust Node (Fig. 4b) and the
+Trust Function (Fig. 4d). These components provide the basic
+mechanisms for propagating trust through the structure of a
+neural network.
+Definition 5 (Trust Node). A Trust Node is an abstract
+computational unit associated with a neuron in a neural
+network. It receives trust opinions on the neuron’s inputs and
+produces a trust opinion on the neuron’s output. The structure
+of a trust node mirrors that of its corresponding neuron, but
+its computation is defined over trust opinions using operators
+such as discounting and fusion.
+Definition 6 (Trust Function). A Trust Function models the
+transformation of trust through a trust node. It defines how
+trust opinions on the inputs of a neuron are combined to
+produce a trust opinion on the output. For a neuron that
+computes
+z(l) =
+X
+θ(l)
+i
+· x(l)
+i ,
+x(l+1) = f (l)(z(l)),
+the corresponding trust computation is given by:
+Tz(l) =
+d_
+i=1
+Tx(l)
+i
+⊗Tθ(l)
+i ,
+Tx(l+1) = T (l)
+f (Tz(l)),
+where:
+• ⊗is a trust discounting operator,
+• W and ⊕is a trust fusion operator,
+• T (l)
+f
+is the trust-equivalent of the activation function.
+Usually set to identity function.
+Collectively, trust nodes form a Trust Nodes Network
+(TNN), which mirrors the neural network’s architecture. We
+formalize this in the following Definition.
+Definition 7 (Trust Nodes Network). The Trust Nodes Net-
+work is a structured composition of trust nodes, where each
+trust node corresponds to a neuron in the underlying neural
+network. This network mirrors the architecture of the neural
+model and is responsible for propagating trust values across
+layers. The Trust Nodes Network computes trust assessments
+at each stage of inference by applying trust-specific reasoning
+operations aligned with the neural computation flow.
+
+7
+Motivated by the structure of trust propagation in earlier
+sub-problems (Eq. (14)), the discount operator ⊗models how
+trust in an input is modulated by trust in the associated
+parameter, while the fusion operator W combines these trust
+contributions across inputs. The fusion operators should be
+associative or generalizable [38] to support multiple inputs.
+With these definitions in place, we integrated trust nodes and
+trust functions into a parallel trust reasoning framework that
+mirrors neural network computation. Although this was first
+illustrated in the perceptron case, two critical challenges re-
+main: how to quantify the trustworthiness of model parameters
+learned from datasets of variable quality, and how to generalize
+trust propagation to deeper, more complex neural architectures.
+These challenges motivate the design of the Parallel Trust
+Assessment System (PaTAS), a scalable architecture for trust
+propagation in neural networks. The following section presents
+its design, components, and theoretical foundations.
+V. PATAS FOR NEURAL NETWORKS
+When neural network parameters such as θ1 and θ2 are
+learned (e.g., by backpropagation), their trustworthiness de-
+pends on the data used for training. If the dataset contains
+mislabeled or biased samples, parameter trust will be compro-
+mised. Yet this is only part of the problem. As discussed in
+Section II-A, Subjective Logic represents trust as a subjective
+binomial opinion with the three components trust, distrust,
+and uncertainty. This decomposition allows us to distinguish
+between different causes of unreliability: distrust may arise
+from systematic issues such as mislabeled or poisoned data,
+while uncertainty reflects variability or noise in the data. A
+central challenge, therefore, is how to exploit this advantage
+of subjective logic in order to make this distinction in practice.
+To address the above challenges, we introduce the Parallel
+Trust Assessment System (PaTAS), a framework designed to
+systematically propagate trust assessments through a neural
+network. PaTAS operates in parallel with the standard neu-
+ral architecture and maintains a corresponding structure that
+mirrors the network’s topology. It enables the computation of
+trust in the output by integrating two key sources:
+1) the trust in the input features at inference time, and
+2) the trust in the parameters, derived from the training
+dataset using a trust assessment function. This includes
+both the trust in the input features of the training samples
+and the trust in the corresponding labels.
+A. PaTAS Overview
+The PaTAS is designed to continuously evaluate the trust-
+worthiness and preservation of properties, such as accuracy,
+during the inference of a neural network. For example, an
+input x might be accurate, unbiased and trustworthy (i.e.,
+high trust score value Tx), while the corresponding output
+y′ may still be unreliable due to biased or poorly calibrated
+parameters θ (i.e., low trust score value Ty′). Rather than
+altering the neural network itself, PaTAS operates alongside it
+to evaluate the trustworthiness of computations (see Fig. 5).
+It mirrors the computations through a parallel set of trust
+nodes, each aligned with a corresponding neuron. These trust
+Fig. 5: Overview of PaTAS Usage
+nodes use subjective logic reasoning operations to propagate
+trust values in a way that reflects the neural computations.
+The detailed operational flow of PaTAS across feedforward,
+backpropagation, and inference is illustrated in Fig. 6.
+PaTAS is composed of four main modules: Trust Feed-
+forward, Output-Trust Aggregation, GenIPTA, and Parameter-
+Trust Update. Among these, the Parameter-Trust Update re-
+quires a more detailed treatment, since its design parallels
+the role of backpropagation in neural network training and
+involves an elaborate reasoning operations. We therefore ded-
+icate a separate subsection to it.
+1) Trust Feedforward: The Trust Feedforward function
+propagates trust values through the Trust Nodes Network in
+alignment with the neural network’s inference flow. It mirrors
+the layer-wise computations of the original model, but operates
+entirely on trust values. At each layer, trust in the inputs and
+parameters is combined using the trust operations defined in
+the Trust Function (including discounting and fusion), cap-
+turing how evidence flows through the network. This process
+produces a trust opinion for each output of the neural network
+while also storing intermediate trust scores, which are later
+used by the Parameter-Trust Update.
+2) Output-Trust Aggregation: The Trust Feedforward pro-
+cess produces a vector of trust values, one for each output
+neuron. The goal of Output-Trust Aggregation is to combine
+these individual opinions into a single, consolidated trust
+score representing the overall trust in the network’s output.
+This combination is done by means of a fusion operator.
+Alternatively, instead of aggregating across all outputs, one
+may directly consider the trust assigned to the final decision.
+For instance, in digit classification, if the model outputs a
+probability 0.9 for class ‘1’, the trust in the decision can be
+taken as the trust score associated with the output neuron for
+class ‘1’.
+3) GenIPTA: The purpose of the GenIPTA function is to
+dynamically construct a function tailored to a specific infer-
+ence. This function, called Inference-Path Trust Assessment
+(IPTA), reflects how trustworthy the exact computational path
+taken during inference is. When an inference is performed,
+contextual information is recorded, such as the list of neurons
+activated along the path. In this case, the activation trace is
+used to instantiate a temporary subnetwork of Trust Nodes
+containing only the trust nodes corresponding to those acti-
+vations, thereby mirroring the precise inference path of the
+neural network.
+Contextual information is not limited to activation traces.
+Typically, all neurons are activated to some degree, but only a
+subset of these activations is strongly relevant to the decision.
+
+8
+Fig. 6: Functional flow of the PaTAS framework integrated with a neural network, illustrating how trust is propagated and
+revised during feedforward, backpropagation, and inference.
+Feedforward (Training Phase): The NN interface extracts trust scores from input features for all data being processed. These
+scores (F.1) are passed to the Trust Feedforward module, which propagates them through the Trust Nodes Network in parallel
+with the neural computations. During training, Trust Feedforward also stores the trust scores of all intermediate computations
+in the NN, to be reused in backpropagation.
+Backpropagation (Training Phase): Once the NN computes gradients, the trust scores of the labels (B.1) and the gradients
+are provided to the Parameter-Trust Update (B.2). Gradients indicate how dataset labels affect parameter updates, while label
+trust determines whether these updates should be considered reliable. The stored intermediate trust values are also incorporated
+in this process. Finally, the Parameter-Trust Update module refines the trust values of the Trust Nodes Network parameters
+(B.3) , aligning them with the evolving learning dynamics.
+Inference Phase: During operation, contextual information such as the set of activated neurons is retrieved. This information
+is passed to GenIPTA (I.1), which constructs an Inference Path Trust Assessment (IPTA) corresponding to the specific inference
+path (I.2). The IPTA takes input trust scores (I.3), propagates them along the path, and produces trust scores for each NN
+output. These can then be passed to the Output-Trust Aggregation (I.4) which will combine them into a single consolidated
+trust score representing the reliability of the prediction (I.5).
+GenIPTA can therefore operate on truncated activation sets
+that retain only the most relevant neurons, which allows for
+more focused and interpretable trust assessments of the actual
+decision-making process. GenIPTA can also be more complex
+and take into account the specific activation values while
+keeping all neurons, performing a weighted trust assessment
+where stronger activations contribute more heavily to the
+inference.
+B. Parameter-Trust Revision
+The design of Parameter-Trust Update is motivated by the
+standard backpropagation algorithm used in neural network
+training. In backpropagation, the gradient of the loss function
+with respect to the network parameters indicates how much
+each parameter contributes to the output error. Thus, for a
+parameter θ, the update is given by
+θ ←θ −lr
+∂L
+∂θ ,
+(15)
+where lr is the learning rate, L is the loss function and ∂L
+∂θ
+is the gradient. The gradients are obtained recursively through
+the chain rule:
+∂L
+∂θ(l)
+i,j
+= δ(l)
+i
+x(l−1)
+j
+,
+(16)
+where θ(l)
+i,j denotes the weight connecting neuron j in layer
+(l −1) to neuron i in layer l, δ(l)
+i
+is the error term of neuron
+i in layer l, and x(l−1)
+j
+is the activation of neuron j in the
+previous layer.
+The Parameter-Trust Update mechanism integrates training
+signals, specifically the gradients g computed during back
+propagation, together with trust in the labels in the training
+batch and the trust scores of intermediate computations stored
+during feedforward. The Parameter-Trust Update ensures that
+parameter trust reflects both observed model behavior and trust
+in the training data.
+The Parameter-Trust Update process is formally described
+in Alg. 1. For each layer in the network, the system revises
+the trust parameters of every trust node based on the evidence
+available from the training batch, the input processed during
+feedforward, and the gradients. It then updates these trust val-
+ues to reflect the reliability of the newly updated parameters,
+using evidence from the learning rate and the intermediate
+trust scores.
+The algorithm runs once per batch and begins by computing
+a combined trust opinion over all labels in the current batch:
+Tybatch =
+^
+y∈ybatch
+Ty
+This combined opinion serves as a foundation for conditioning
+the trust in each parameter.
+For each neuron n(l)
+i
+at index i in layer l, the system
+computes:
+• Tn(l)
+i
+|ybatch, the trust conditioned on the current batch
+labels. This is inferred by checking each incoming weight
+gradient g(l)
+i,j: if |g(l)
+i,j| < ϵ it is counted as positive
+evidence r, otherwise as negative evidence s. These
+counts are then mapped into a binomial opinion using
+the Baseline-Prior Quantification model.
+
+9
+Algorithm 1 Parameter-Trust Update Algorithm
+1: Function ParameterTrustUpdate(g, Ty, ϵ)
+2:
+Summary: Revises and updates the trust parameters
+of the Trust Nodes Network by combining gradient evi-
+dence, label trust, and neuron input trust, under mini-batch
+training.
+3:
+Step 1: Compute the aggregated trust in the labels
+4:
+Tybatch ←−V
+y∈ybatch Ty
+5:
+for each layer l do
+6:
+for each neuron n(l)
+i
+do
+7:
+Step 2: Gather gradient evidence for neuron
+n(l)
+i
+8:
+g(l)
+i
+←−{ g(l)
+i,j | j ∈N(i) }
+9:
+Step 3: Compute trust for neuron n(l)
+i
+10:
+Tni|Ybatch ←−NodeTrust(g(l)
+i , Tybatch, ϵ)
+11:
+Step 4: Deduce overall trust in neuron n(l)
+i
+12:
+Tni∥Ybatch
+←−
+De-
+duceTrust(Tni|ybatch, Tni|ybatch, Tybatch)
+13:
+for each incoming edge j to n(l)
+i
+do
+14:
+Step 5: Revise parameter trust with node
+trust
+15:
+Tθ(l)
+i,j ←−Revise(Tθ(l)
+i,j, Tni∥Ybatch)
+16:
+Step 6: Update parameter trust with auxil-
+iary factors
+17:
+Tθ(l)
+i,j ←−Update(Tθ(l)
+i,j, Tlr, Tx(l−1)
+j
+, Tybatch)
+18:
+end for
+19:
+end for
+20:
+end for
+21: end Function
+22: Function NodeTrust(g(l)
+i , Tybatch, ϵ)
+23:
+Count r: #edges with |g(l)
+i,j| < ϵ
+24:
+Count s: #edges with |g(l)
+i,j| ≥ϵ
+25:
+Map (r, s) into a binomial opinion using Baseline-
+Prior Quantification
+26:
+return Tni|ybatch
+27: end Function
+28: Function DeduceTrust(Tni|ybatch, Tni|ybatch, Tybatch)
+29:
+Tni|ybatch ←−(0, 0, 1)
+30:
+return Tni∥Ybatch = Tybatch ⊚(Tni|ybatch, Tni|ybatch)
+31: end Function
+32: Function Revise(Tθ(l)
+i,j, Tni∥Ybatch)
+33:
+return Tθ(l)
+i,j ⊖Tni∥Ybatch
+34: end Function
+• Tn(l)
+i
+|ybatch, the trust when the true batch labels are not
+ybatch. Since no concrete evidence is available for this
+case, it is initialized to a vacuous opinion: (0, 0, 1).
+• A deduced trust Tn(l)
+i
+∥Ybatch using the inferential deduction
+operator ⊚, combining the two conditional opinions with
+Tybatch.
+Then for each incoming edge j of neuron i, the parameter
+trust Tθ(l)
+i,j is updated in two stages:
+1) Revision with deduced trust using fusion:
+Tθ(l)
+i,j ←Tθ(l)
+i,j ⊖Tn(l)
+i
+∥Ybatch
+2) Adjustment with auxiliary factors: During training, the
+update of parameter θ(l)
+i,j depends not only on its current
+value but also on auxiliary factors such as the learning
+rate lr, the input feature x(l−1)
+j
+, and the label ybatch (see
+Eqs. (15) and (16)). To reflect this, we adjust parameter
+trust using:
+Tθ(l)
+i,j ←−Tθ(l)
+i,j ⊙(Tx(l)
+j
+⊘Tybatch).
+Here, ⊙is the binomial multiplication operator and ⊘is
+defined as:
+(b, d, u) = (b1, d1, u1) ⊘(b2, d2, u2),
+(17)
+b = min(b1, b2),
+d = max(d1, d2),
+u = 1 −(b + d).
+This formulation reflects the fact that both unreliable
+features and mislabeled data can strongly bias parameter
+updates. Although it might introduce some redundancy,
+it ensures that trust in both input features and labels is
+explicitly propagated into the parameter trust.
+This process refines the trust in each parameter by incorpo-
+rating both gradient-based behavioral evidence and auxiliary
+trust factors, allowing the PaTAS to align parameter trust with
+the training dynamics of the neural network.
+C. Theoretical Properties of PaTAS
+1) Convergence of PaTAS: The convergence of the PaTAS
+is governed by the stability of its inputs and the structure of
+its recursive Parameter-Trust Update process. During training,
+PaTAS updates the internal trust opinions associated with
+network parameters using trust signals from the inputs, la-
+bels, hyperparameters, and gradient information. This update
+mechanism is outlined in Alg. 1. As proved in Theorem 3, the
+PaTAS converges under specific situation. This convergence
+lies on some specific characteristic of the operators used to
+feedforward and revise the trust in the parameters θ.
+Before delving into the specifics of PaTAS convergence, we
+first present a key theorem that will serve as a foundational
+tool in establishing the convergence properties of PaTAS.
+Theorem 1 (Convergence of Subjective Logic Arithmetic
+Sequence). Let (Ω, ⊖) a group. Ωis set of opinions which
+can be seen as [0, 1]4 Let ωn = (bn, dn, un, an) ∈Ωbe a
+sequence defined recursively by the operator ⊖as follows:
+ωn+1 = ωn ⊖q,
+where q ∈Ωand the operator ⊖is a fusion operator.
+Then the sequence (ωn) converges in [0, 1]4 to a limit:
+Proof. See Appendix C
+Theorem 2 (Convergence of Subjective Logic Geometric
+Sequence). Let (Ω, ⊙) a group. Ωis set of opinions which
+can be seen as [0, 1]4 Let ωn = (bn, dn, un, an) ∈Ωbe a
+sequence defined recursively by the operator ⊙as follows:
+ωn+1 = ωn ⊙q,
+
+10
+where q ∈Ωand the operator ⊙is the binomial multiplication
+defined by:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+bx⊙y = bxby + (1 −ax)aybxuy + ax(1 −ay)uxby
+1 −axay
+,
+dx⊙y = dx + dy −dxdy,
+ux⊙y = uxuy + (1 −ay)bxuy + (1 −ax)uxby
+1 −axay
+,
+ax⊙y = axay.
+Then the sequence (ωn) converges in [0, 1]4 if aq < 1. In
+particular:
+• an = a0an
+q →0 as n →∞,
+• dn →1 if dq > 0, and dn = d0 if dq = 0,
+• bn →0 if pq = bq + aquq < 1, and bn = b0 if pq = 1.
+Proof. See Appendix C
+Theorem 3 (Convergence of PaTAS Creation). Let a neural
+network be trained until convergence, and let its associated
+PaTAS operate with:
+• a stable input trust assessment Tx,
+• a stable label trust assessment Ty,
+• a stable hyperparameter trust Tlr,
+Let T (n)
+θ
+denote the trust opinion at iteration n for param-
+eter θ. If the revision of the trust in the weights is performed
+as specified in Alg. 1, then the PaTAS parameter will also
+converges.
+Proof. Assume that the neural network training process con-
+verges, implying that weight updates become increasingly
+small, and the back propagation gradients g stabilize. This
+stability in g reflects the fact that the model has reached a
+minimum or stable loss value.
+Moreover, the convergence of Tx, Ty, and Tlr implies that
+trust inputs to the update mechanism are stable. Consequently,
+each new trust update for Tθ is computed using consistent and
+bounded evidence, which over time results in the stabilization
+of the subjective opinions assigned to Tθ.
+In detail:
+• Tx converging implies (Ty′ converging assuming the same
+Tθ) implies convergence of Tybatch.
+• g converges so Tθ|ybatch will remain the same.
+• since Tθ||Ybatch is a deterministic calculation from con-
+verges Tθ|ybatch and Tybatch therefore Tθ||Ybatch also con-
+verges
+• Finally Tθ ←−Tθ ⊖Tθ||Ybatch converges if ⊖is set to any
+fusion operator or the binomial multiplication operator
+(see Theorem 1 and 2).
+• The function fupd in our implementation is based Tθ, Tlr
+and Tx which all converge.
+Therefore, assuming convergence of Tx, Ty, Tlr, and g,
+the trust values for all PaTAS parameters stabilize as training
+progresses, proving convergence of PaTAS creation.
+2) Symmetry and Invariance Properties of PaTAS:
+Theorem 4 (PaTAS Inference on Vacuous Input Yields Vacu-
+ous Output). Let ω∅= (0, 0, 1, a) denote a vacuous binomial
+opinion over any variable, with arbitrary base rate a ∈[0, 1].
+Then the following two properties hold:
+1) Discounting a Vacuous Opinion Yields a Vacuous Opin-
+ion.
+For any trust value binomial opinion ωA
+B, the discounted
+opinion
+ω[A;B]
+X
+= ωA
+B ⊗(0, 0, 1, a) = (0, 0, 1, a)
+2) PaTAS Feedforward on Vacuous Input Yields Vacuous
+Output.
+Let Tx = (0, 0, 1, a) be the trust assessment of an input
+to PaTAS. Then for any parameter trust configuration Tθ,
+the output trust assessment satisfies:
+Ty = IPTA(Tx) = (0, 0, 1, a).
+Proof. See Appendix C
+Definition 8 (Symmetric Binomial Opinions). Let x
+=
+(b, d, u) be a binomial opinion with belief b, disbelief d, and
+uncertainty u, where b + d + u = 1. The opinion ¯x = (d, b, u)
+is called the symmetric of x. Two binomial opinions x and
+¯x are symmetric if they share the same uncertainty and have
+inverted belief and disbelief, i.e.,
+x = (b, d, u),
+¯x = (d, b, u)
+with b + d + u = 1.
+Theorem 5 (Symmetric Inference under PaTAS). Let Tθ be
+a fixed PaTAS inference operator based on subjective logic,
+and let x = (b, d, u) be any binomial opinion with symmetric
+counterpart ¯x = (d, b, u). Then the outputs y = Tθ(x) and
+¯y = Tθ(¯x) are also symmetric, i.e.,
+y = (b′, d′, u′),
+¯y = (d′, b′, u′).
+In particular, the uncertainty is preserved:
+uy = u¯y,
+and the belief in one output equals the disbelief in the other:
+by = d¯y,
+dy = b¯y.
+Moreover, for the fully trusted input x = (1, 0, 0), the output
+satisfies dy = 0, and for the fully distrusted input ¯x = (0, 1, 0),
+the output satisfies b¯y = 0.
+Proof. See Appendix C
+VI. EVALUATION AND RESULTS
+The goal of our evaluation is to validate the Parallel
+Trust Assessment System (PaTAS) both theoretically and
+empirically. Specifically, we aim to demonstrate that PaTAS
+produces interpretable trust estimates that (i) converge during
+training under specific conditions, (ii) respect symmetry and
+invariance properties, and (iii) are able to provide interpretable
+assessments under realistic conditions such as noisy features,
+corrupted labels, or adversarial perturbations.
+Our evaluation approach combines controlled synthetic
+degradations with real-world datasets. We systematically vary
+the trustworthiness of inputs ranging from fully trusted, fully
+uncertain to fully distrusted and observe how created PaTAS
+propagates these trust assessments through the network. For
+
+11
+each scenario, we track three complementary metrics: trust
+mass, uncertainty mass, and distrust mass. We also compare
+these values against standard model accuracy to understand
+how input trust affects output reliability.
+We conduct three experiments of increasing complexity:
+1) Breast Cancer Classification, to assess behavior on a
+small, tabular medical dataset.
+2) MNIST Digit Classification, to evaluate PaTAS across
+multiple neural architectures under controlled uncertainty.
+3) Poisoned MNIST, to evaluate PaTAS and IPTA in the
+presence of adversarial corruption and data poisoning.
+A. Experimental Setup
+1) Experiment 1 - Breast Cancer Classification: We use the
+Breast Cancer Wisconsin (Diagnostic) Dataset [39], containing
+569 samples with 30 numeric features (e.g., radius, area,
+symmetry) derived from breast mass fine needle aspirates. The
+neural network classifies the tumors into benign or malignant
+categories. The neural network architecture consists of 30
+input neurons, 16 hidden neurons, and 2 output neurons, with
+ReLU activation in the hidden layer and Softmax in the output.
+The model is trained for 15 epochs with a batch size of 64
+and a learning rate of 0.2, achieving 98% accuracy when the
+data are not modified.
+Training Data trust is assessed with three trust profiles for
+input features and label: fully trusted (1, 0, 0), fully distrusted
+(0, 1, 0), and fully uncertain (0, 0, 1). These are combined (for
+inputs and label assessment) to form nine combinations. Data
+features and labels trust degradation may arise in practice from
+poor-quality imaging, human annotation errors, or flaws in the
+preprocessing pipeline. In all experiments, degradations are
+simulated using controlled perturbation functions. For fully
+uncertain opinions, we introduce additive uniform noise
+x′ = x + ϵ,
+ϵ ∼U(−a, a),
+where
+a = 0.3 × max(feature).
+Each
+feature
+is
+perturbed
+with
+probability
+0.3.
+Af-
+ter
+noise
+addition,
+if
+x′
+lies
+outside
+the
+valid
+range
+[min(feature), max(feature)], it is clipped to the corresponding
+boundary:
+x′ =
+
+
+
+
+
+min(feature),
+x′ < min(feature),
+max(feature),
+x′ > max(feature),
+x′,
+otherwise.
+To model distrust, we instead corrupt input features entirely.
+Similarly, label degradation is simulated by randomly re-
+placing labels (or replacing all labels for distrust). In addition
+to these extreme cases, we also consider two intermediate
+scenarios:
+i. a mild degradation, where features are perturbed with
+probability 0.15 and the trust assessment is set to
+(0.25, 0, 0.75), and
+ii. the same scenario for fully uncertain input features and
+fully uncertain labels, but where the assessment is set
+to (0.25, 0.25, 0.5), reflecting partial distrust and trust,
+instead of fully uncertain opinion (0,0,1).
+2) Experiment 2 - MNIST: In this experiment, we evaluate
+the PaTAS framework on the MNIST dataset [40], which
+consists of 60,000 training images and 10,000 test images,
+each representing a digit from 0 to 9. Each image has 784
+features (28x28 pixels). The neural network classifies these
+images into one of the 10 digit classes.
+We test three neural network architectures:
+• Architecture 1: 784 input neurons, 5 hidden neurons, 10
+output neurons (784-5-10).
+• Architecture 2: 784 input neurons, 10 hidden neurons, 10
+output neurons (784-10-10).
+• Architecture 3: 784 input neurons, 20 hidden neurons, 10
+output neurons (784-20-10).
+Although these architectures are not state-of-the-art for
+MNIST, they are sufficient to evaluate the behavior of PaTAS
+across different model sizes and to demonstrate how trust
+propagates through the network. Each model uses the ReLU
+activation function for the hidden layer and Softmax for the
+output. Models are trained for 10 epochs with a batch size
+of 18 and a learning rate of 0.001, achieving test accuracies
+of 89%. We evaluate using fully uncertain Training data trust
+assessment functions for both input features and labels.
+3) Experiment 3 - Poisoned MNIST: In this experiment,
+we evaluate the PaTAS framework on a poisoned version of
+the MNIST dataset, where one third of the training images
+are corrupted: labels of digits 6 and 9 are flipped, and at the
+same time a visible patch of fixed size is added at the top-left
+corner of the corresponding images. This combination follows
+common practices in data poisoning and backdoor attack
+scenarios [41]. The remaining two thirds of the data remain
+clean. This setup allows us to examine how PaTAS responds to
+the simultaneous presence of corrupted labels and adversarial
+triggers that can undermine both model performance and trust.
+We use Architecture 3 from the previous experiment, con-
+sisting of an input layer with 784 neurons, one hidden layer
+with 20 neurons, and an output layer with 10 neurons (784-
+20-10).
+For the poisoned dataset, trust is assigned as follows:
+• Pixels corresponding to the patch are considered dis-
+trusted, while all other pixels are trusted.
+• Labels for patched images of digits 6 and 9 are distrusted,
+while others are trusted.
+This setup helps the PaTAS framework focus on potentially
+corrupted areas, while trusting the unaffected parts of the data.
+Implementation Details: During inference, multiplication
+operations in the feedforward phase are implemented using
+SL trust discounting, while addition operations employ a
+generalized SL averaging fusion operator to support sum-
+mations over multiple inputs. Trust revision uses the same
+averaging fusion. The PaTAS framework and primary neural
+network were implemented in Python 3.9 using NumPy. Two
+main modules were developed: PrimaryNN, which handles
+network structure, training, and inference, and PaTAS, which
+implements trust assessment and propagation functions defined
+in the operational flow (Fig. 6). These modules interact to
+dynamically evaluate and update trust during feedforward
+and backpropagation. The full implementation, including all
+
+12
+modules, dependencies, and experiment scripts, is available
+as supplementary materials, with detailed instructions for
+reproducing all experiments.
+B. Results and Analysis
+The evaluation of the Parallel Trust Assessment System
+(PaTAS) is conducted during the training phase of the neural
+network. After each iteration of training (i.e., a complete
+feedforward and backpropagation cycle), we assume that an
+inference is performed, and we assess the trustworthiness of
+the corresponding output. This assessment is carried out under
+three input trust profiles:
+• Fully Trusted Input: where the trust in the data is con-
+sidered trusted (row 1 in each figure).
+• Fully Uncertain Input: where the trust in the data is
+considered uncertain (row 2 in each figure).
+• Fully Distrusted Input: where the data is assumed to be
+unreliable (row 3 in each figure).
+For each of these three input types, we track and plot the
+evolution of three key metrics over the course of training:
+• Trust Mass: representing the level of confidence in the
+output.
+• Uncertainty Mass: representing the uncertainty associated
+with the assessment.
+• Distrust Mass: representing the level of disbelief in the
+output.
+As a result, for each evaluation, 9 distinct plots are gener-
+ated, corresponding to the 3 input types (fully trusted, fully
+uncertain, and fully distrusted) and each of the three key
+metrics (trust, uncertainty, and distrust).
+All results are depicted in Figs. 9 and 11 to 19 (Appendix D)
+and summarized in Tables I to IV. They confirm several
+theoretical properties of PaTAS proven in Section V-C:
+• Convergence of Trust Assessment: when accuracy con-
+verges, trust assessment converges as expected.
+• Inference on fully uncertain input yields fully uncertain
+output: a fully uncertain input always produces a fully
+uncertain output.
+• Symmetric Inference: when input trust assessments are
+symmetric, the inference results remain symmetric.
+For detailed results, we primarily focus on the three plots
+corresponding to fully trusted input. Processing uncertain
+inputs naturally yields uncertain outputs, while symmetry
+implies that trusted and distrusted cases mirror each other. We
+also note that when processing fully trusted inputs, the distrust
+mass generally remains close to zero. Since trust, uncertainty,
+and distrust sum to 1, analyzing only the trust mass is sufficient
+in such cases.
+Experiment 1 – Breast Cancer Classification: When both
+features and labels are clean, the model steadily improves
+and achieves high accuracy. Clean features with corrupted
+labels cause accuracy to collapse, while noisy labels yield
+only moderate and unstable learning. With corrupted fea-
+tures, accuracy remains low in all cases, even with clean
+labels. Noisy features with clean labels still permit relatively
+strong learning, but performance breaks down when labels
+are corrupted or noisy. Importantly, corrupted labels mislead
+the model: training accuracy appears high while test accuracy
+remains poor, showing that the model learns, but learns the
+wrong mapping. In contrast, noisy labels prevent learning
+altogether, regardless of whether features are clean or noisy.
+Corrupted features eliminate the ability to learn in any setting.
+We evaluated the system for two values of ϵ (0.1 and 0.01).
+we recall that ϵ is the threshold used by the NodeTrust function
+in Alg. 1.
+• For ϵ = 0.01: fully uncertain X stabilizes trust mass
+around 0.28 for uncertain Y and 0.30 for trusted Y . Fully
+trusted X yields rapid increases, stabilizing at ∼0.27 for
+uncertain Y and 0.79 for trusted Y .
+• For ϵ = 0.1: the system becomes less sensitive to
+gradients. When X is uncertain, trust mass stabilizes
+around 0.31 for uncertain Y , and 0.34 for trusted Y . Fully
+trusted X gives 0.33 for uncertain Y , and 0.90 for trusted
+Y . No matter ϵ value, when X or Y are distrusted the
+trust mass rapidly falls to 0.
+Overall, there is a strong positive correlation between trust
+mass and test accuracy. When ϵ is smaller, the trust level
+of Y (trusted, uncertain) has a weaker influence on the final
+trust mass. Notably, setting X as fully uncertain while keeping
+Y trusted yields a higher trust mass (0.30) than the opposite
+case, where X is trusted but Y uncertain (0.27). Furthermore,
+replacing a fully uncertain opinion (0, 0, 1) assessment for X
+and Y with a mixed assessment (0.25, 0.25, 0.5) reduces the
+trust mass from 0.31 to 0.17, showing that distrust degrades
+performance more strongly than trust enhances it.
+Experiment 2 – MNIST Dataset: As shown in Table II,
+when features and labels are noised, accuracy improves as
+model size increases. However, training accuracy remains
+consistently lower than test accuracy, with the gap widening
+for larger networks. This indicates that the models learn useful
+representations but cannot fully fit noisy training data, while
+still generalizing well on clean test samples. Test accuracy
+greater than training accuracy across all architectures, suggest-
+ing training noise makes the model underestimate its learning
+progress. Larger architectures yield more stable trust assess-
+ments, likely due to smaller average gradient magnitudes.
+Experiment 3 – Poisoned MNIST Dataset: In this experi-
+ment, PaTAS successfully distinguishes clean from poisoned
+labels even when corruption is moderate. Trust mass grows
+rapidly for clean and poisoned labels. However, poisoned
+labels remain relatively low, demonstrating effective detection
+of untrustworthy labels (Table III). Patch size strongly affects
+this separation:
+• 1 × 1: minimal effect, where the trust mass of poisoned
+labels remains low, with only a small difference compared
+to clean labels.
+• 4 × 4 and 20 × 20: clear separation between clean and
+poisoned trust scores.
+• 27 × 27: collapse of trust assessment, reflecting domina-
+tion by the trigger.
+In order to evaluate the IPTA, we also trained a binary neural
+network on the poisoned dataset with a patch size of 4 × 4,
+achieving train/test accuracy of approximately 93%. Table IV
+
+13
+Trust Assessment
+ϵ = 0.01
+ϵ = 0.1
+Train (%)
+Test (%)
+X fully distrusted, Y distrusted
+0
+0
+63
+38
+X fully distrusted, Y fully uncertain
+0
+0
+53
+62
+X fully distrusted, Y fully trusted
+0
+0
+63
+63
+X fully uncertain, Y distrusted
+0
+0
+96
+3
+X fully uncertain, Y fully uncertain
+0.28
+0.31
+53
+46
+X fully uncertain, Y fully trusted
+0.30
+0.34
+97
+96.49
+X fully trusted, Y distrusted
+0
+0
+98
+0.88
+X fully trusted, Y fully uncertain
+0.27
+0.33
+52
+89
+X fully trusted, Y fully trusted
+0.79
+0.90
+98
+99
+(0.25, 0, 0.75)
+-
+0.38
+71
+90
+(0.25, 0.25, 0.5)
+-
+0.17
+53
+46
+TABLE I: Summary of final trust mass and corresponding train/test
+accuracies (in %) for the Breast Cancer Classification Experiment.
+Hidden Neurons
+Trust mass t
+Train (%)
+Test (%)
+5
+0.28
+31
+58
+10
+0.30
+37
+71
+20
+0.32
+39
+76
+TABLE II: Summary of final trust mass for the
+MNIST Classification Experiment.
+reports both accuracy and the corresponding trust opinions
+for clean digits (3 and 6) and poisoned digit 6 datasets.
+Clean samples maintain high accuracy with balanced trust
+and uncertainty masses, with slightly better trust–uncertainty
+balance for digit 3. In contrast, poisoned samples show a
+drastic accuracy drop, lower trust, and higher uncertainty,
+alarming for untrustworthy predictions. Furthermore, when we
+explicitly distrust the patch pixels while trusting the remaining
+inputs, the resulting trust opinion becomes (0.35, 0.1, 0.55).
+These results show that PaTAS provides interpretable warnings
+about poisoned outputs.
+VII. DISCUSSION
+A. Discussion of PaTAS Findings
+PaTAS provides a principled mechanism for evaluating the
+runtime trustworthiness of neural network outputs. Beyond
+dynamic inference assessment, it can also estimate a static
+trust opinion of the network itself. The core principle is that a
+trustworthy model should preserve trust: a fully trusted input
+producing a highly trusted output indicates that the model
+does not erode trust during inference. Accordingly, the overall
+model trustworthiness can be defined as the trust score of
+the PaTAS feedforward function (PaTASF F ) under a fully
+trusted input:
+T(NN) = PaTASF F ((1, 0, 0)),
+which quantifies how well trust is maintained throughout the
+network. Using this definition, we compared the Inference Path
+Trust Assessment (IPTA) for benign and adversarial inputs in
+Experiment VI-A3, where the adversarial case used a 4 × 4
+patch injection. Results show a clear degradation in trust for
+adversarial samples: benign inputs achieved t = 0.484, d =
+0, u = 0.516, while patched inputs dropped to t = 0.449, d =
+0, u = 0.551. This demonstrates the sensitivity of PaTAS to
+local perturbations, offering a quantitative indicator of reduced
+reliability.
+Although trust mass and accuracy are often correlated, our
+results reveal meaningful divergences. In the breast cancer task
+(Table I), assigning a mixed trust profile (0.25, 0, 0.75) to all
+features and labels yields a final trust mass of 0.38, higher than
+the fully uncertain-features case, yet the latter achieves better
+test accuracy (96.49% vs. 90%). Thus, higher trust mass does
+not always imply superior predictive performance. A similar
+effect appears in the poisoned MNIST experiments (Table IV):
+the clean digit “6” attains slightly higher accuracy than “3”
+(93.52% vs. 93.14%), but IPTA assigns higher trust to “3”
+(t = 0.484) than to “6” (t = 0.482). These differences show
+that PaTAS captures aspects of reliability beyond accuracy,
+reflecting the stability and interpretability of inference paths.
+Interpretation of trust values, like accuracy, depends on the
+application. In high-stakes settings, a trust score of (0.4, 0, 0.6)
+may be inadequate, whereas in less critical domains it may
+suffice. PaTAS enables such contextual interpretation by pro-
+viding a unified, interpretable metric that can be tracked over
+time, compared across models, or evaluated under varying
+conditions. Overall, PaTAS complements traditional metrics
+by signaling fragility even when accuracy appears high and by
+identifying stability where accuracy slightly decreases. This
+duality underscores its relevance in safety-critical contexts
+where accuracy alone can be misleading.
+In practice, precise dataset trustworthiness estimates may
+be unavailable. PaTAS can still operate by initializing dataset
+trust to a fully uncertain (vacuous) opinion. While this limits
+the use of prior trust evidence, it preserves the capacity to
+propagate input-level trust through the model during inference,
+supporting meaningful trust evaluation even without explicit
+dataset provenance.
+A key technical factor affecting PaTAS behavior is the
+parameter ϵ, which controls the threshold used to classify
+gradients as positive or negative evidence during training. As
+shown in Table I, if ϵ is too small, PaTAS may misinterpret
+gradients as large even when the model performs well. Conse-
+quently, trusted labels may reduce parameter trust, resembling
+the case g →+∞in Table V. Proper calibration of ϵ is
+therefore crucial, and can be tuned per layer or gradually
+reduced as training converges to increase sensitivity to smaller
+gradients.
+Finally, trust quantification for Tθi|ybatch in the Trust Update
+Algorithm 1 relies on a simple gradient-counting procedure.
+Although computationally efficient, it fixes the uncertainty
+component of the resulting binomial opinion based on the
+number of input neurons to i. This fixed-uncertainty formu-
+lation may not be optimal in all cases, suggesting the need
+for adaptive quantification schemes. Similarly, Tθi|ybatch is set
+to a fully vacuous opinion (0, 0, 1), which, while consistent
+with the absence of evidence, may not fully leverage prior
+knowledge when available.
+
+14
+Patch size
+Trust mass for 3
+Trust mass for 6
+Train (%)
+Test (%)
+Clean 3
+Clean 6
+Poisoned 3
+Poisoned 6
+(1 × 1)
+0.92
+0.89
+78
+81
+82
+35
+76
+39
+(4 × 4)
+0.90
+0.83
+76
+75
+88
+17
+49
+21
+(20 × 20)
+0.375
+0.3
+78
+75
+87
+41
+0
+37
+(27 × 27)
+0.05
+0.03
+80
+80
+88
+68
+0
+0
+TABLE III: Summary of result for the Poisoned MNIST Classification Experiment.
+Accuracy (%)
+Trust
+Distrust
+Uncertainty
+Clean 3
+93.14
+0.484
+0.0
+0.516
+Clean 6
+93.52
+0.482
+0.0
+0.518
+Poisoned 6
+6.19
+0.449
+0.0
+0.551
+Poisoned 6
+–
+0.350
+0.100
+0.550
+(patch distrusted)
+TABLE IV: IPTA results for a binary neural network trained
+on poisoned datasets with patch size 4×4. Results are obtained
+by feedforwarding a fully trusted opinion, except for the last
+row where patch pixels are explicitly distrusted.
+g →
+Tθi|ybatch →
+Tybatch →
+Tθi||Ybatch →
+0
+Trusted
+Trusted
+Trusted
+Uncertain
+Uncertain
+DisTrusted
+Uncertain
++∞
+DisTrusted
+Trusted
+DisTrusted
+Uncertain
+(0,0.5,0.5)
+DisTrusted
+Uncertain
+TABLE V: Asymptotic behavior of Tθi||Ybatch
+B. Trust Assessment and AI Security Threats
+AI systems are exposed to diverse attacks targeting different
+stages of the lifecycle. Fig. 7 outlines six key phases: data
+collection, cleaning and labeling, dataset assembly, network
+design, model training, and deployment for inference.
+A major threat is the data poisoning attack [41], where
+adversaries insert malicious or mislabeled samples into the
+training data to induce targeted misclassifications. PaTAS
+mitigates this threat by performing trust assessments at the
+feature or instance level during training. By computing dataset
+trustworthiness and propagating input trust through training,
+PaTAS can flag unreliable predictions during deployment.
+Another vector is model stealing, in which adversaries issue
+numerous queries to reconstruct or approximate a deployed
+model, threatening intellectual property and enabling down-
+stream attacks. By monitoring the trust of queries and cor-
+responding predictions, PaTAS can detect anomalous or low-
+trust query sequences indicative of model extraction attempts.
+A third class, membership inference attacks, aims to infer
+whether a specific data point was part of the training dataset,
+posing privacy risks. PaTAS supports mitigation by assessing
+Fig. 7: Attack surface in the AI lifecycle pipeline, from data
+collection to model deployment.
+output trust: consistently high confidence and low uncertainty
+may signal overfitting or memorization, while balanced trust
+indicates healthy generalization. Thus, output trust scores can
+help reveal potential information leakage.
+These examples show that trust vulnerabilities can emerge
+throughout the AI pipeline. The effectiveness of PaTAS de-
+pends on the granularity of its assessments, but by enabling
+trust evaluation across multiple stages, it provides a flex-
+ible, context-aware defense mechanism that strengthens AI
+resilience against diverse adversarial threats.
+VIII. CONCLUSION
+This paper presented the Parallel Trust Assessment System
+(PaTAS), a framework that models and propagates trust in
+neural networks through Subjective Logic. PaTAS introduces
+a parallel computational structure based on Trust Nodes and
+Trust Functions, enabling principled trust propagation along-
+side standard feedforward and backpropagation processes. The
+proposed Parameter Trust Update and Inference-Path Trust
+Assessment (IPTA) mechanisms jointly quantify how input
+quality, learned parameters, and activation paths contribute to
+the overall trustworthiness of model predictions.
+Experimental evaluations across real-world and adversarial
+datasets demonstrate that PaTAS can identify trust degradation
+under data poisoning and adversarial patching while main-
+taining interpretability and stability. Results further show that
+trust scores derived from PaTAS capture reliability aspects not
+reflected by accuracy alone, offering a complementary view of
+model performance and robustness.
+Beyond accuracy estimation, PaTAS provides a unified
+probabilistic foundation for quantifying model reliability
+across the AI pipeline, from dataset trust to inference-level
+decision confidence. Future work will extend PaTAS to large-
+scale and multimodal architectures, explore adaptive trust
+quantification schemes, and incorporate the role of parameter
+magnitudes in trust reasoning. In particular, we plan to investi-
+gate how weight values can inform the generation of the Trust
+Node network for individual inferences, allowing trust propa-
+gation to reflect not only network topology but also parameter
+influence. Overall, PaTAS establishes a systematic path toward
+trustworthy, transparent, and reliable neural learning systems.
+REFERENCES
+[1] H.-L. E. G. on Artificial Intelligence, “Ethics guidelines for trustworthy
+ai,” European Commission, Brussels, Tech. Report, Apr. 2019, published
+8 April 2019. [Online]. Available: https://digital-strategy.ec.europa.eu/
+en/library/ethics-guidelines-trustworthy-ai
+[2] D. Kowald, S. Scher, V. Pammer-Schindler, P. M¨ullner, K. Waxnegger,
+L.
+Demelius,
+A.
+Fessl,
+M.
+Toller,
+I.
+G.
+Mendoza
+Estrada,
+I. ˇSimi´c, V. Sabol, A. Tr¨ugler, E. Veas, R. Kern, T. Nad, and
+S. Kopeinik, “Establishing and evaluating trustworthy ai: overview and
+research challenges,” Frontiers in Big Data, vol. Volume 7 - 2024,
+2024. [Online]. Available: https://www.frontiersin.org/journals/big-data/
+articles/10.3389/fdata.2024.1467222
+
+15
+[3] J. Wu and J. He, “Trustworthy transfer learning: A survey,” 2024.
+[Online]. Available: https://arxiv.org/abs/2412.14116
+[4] D. Smilkov, N. Thorat, B. Kim, F. Vi´egas, and M. Wattenberg,
+“Smoothgrad: removing noise by adding noise,” 2017. [Online].
+Available: https://arxiv.org/abs/1706.03825
+[5] A. Jø sang, Subjective Logic: A Formalism for Reasoning Under
+Uncertainty, ser. Artificial Intelligence: Foundations, Theory, and
+Algorithms.
+Cham:
+Springer,
+2016.
+[Online].
+Available:
+https:
+//doi.org/10.1007/978-3-319-42337-1
+[6] A. P. Dempster, “Upper and lower probabilities induced by a multivalued
+mapping,” The Annals of Mathematical Statistics, vol. 38, no. 2, pp.
+325–339, 1967.
+[7] G. Shafer, A Mathematical Theory of Evidence.
+Princeton, NJ:
+Princeton University Press, 1976.
+[8] K. I. Ouattara, I. Krontiris, T. Dimitrakos, and F. Kargl, “Assessing
+trustworthiness of ai training dataset using subjective logic – a use case
+on bias,” 2025. [Online]. Available: https://arxiv.org/abs/2508.13813
+[9] A. Jøsang, D. Wang, and J. Zhang, “Multi-source fusion in subjective
+logic,” in 2017 20th International Conference on Information Fusion
+(Fusion), 2017, pp. 1–8.
+[10] K. I. Ouattara, A. Petrovska, A. Hermann, N. Trkulja, T. Dimitrakos,
+and F. Kargl, “On subjective logic trust discount for referral paths,” in
+2024 27th International Conference on Information Fusion (FUSION),
+2024, pp. 1–8.
+[11] A. Jøsang, R. Hayward, and S. Pope, “Trust network analysis with
+subjective logic,” in Proceedings of the 29th Australasian Computer
+Science Conference.
+Australian Computer Society, 2006, pp. 85–94.
+[12] A. Jøsang, R. Hayward, and S. Pope, “Trust network analysis with
+subjective logic,” in Proceedings of the 29th Australasian Computer
+Science Conference - Volume 48, ser. ACSC ’06.
+AUS: Australian
+Computer Society, Inc., 2006, p. 85–94.
+[13] A. Jøsang and T. Bhuiyan, “Optimal trust network analysis with sub-
+jective logic,” in 2008 Second International Conference on Emerging
+Security Information, Systems and Technologies, 2008, pp. 179–184.
+[14] R. Guha, R. Kumar, P. Raghavan, and A. Tomkins, “Propagation of trust
+and distrust,” in Proceedings of the 13th International Conference on
+World Wide Web, ser. WWW ’04.
+New York, NY, USA: Association
+for Computing Machinery, 2004, p. 403–412. [Online]. Available:
+https://doi.org/10.1145/988672.988727
+[15] R. Ure˜na, G. Kou, Y. Dong, F. Chiclana, and E. Herrera-Viedma,
+“A review on trust propagation and opinion dynamics in social
+networks
+and
+group
+decision
+making
+frameworks,”
+Information
+Sciences, vol. 478, pp. 461–475, 2019. [Online]. Available: https:
+//www.sciencedirect.com/science/article/pii/S0020025518309253
+[16] A. Koster, A. L. C. Bazzan, and M. de Souza, “Liar liar, pants
+on fire; or how to use subjective logic and argumentation to
+evaluate information from untrustworthy sources,” Artificial Intelligence
+Review, vol. 48, no. 2, pp. 219–235, Aug 2017. [Online]. Available:
+https://doi.org/10.1007/s10462-016-9499-1
+[17] S. Dietzel, R. van der Heijden, H. Decke, and F. Kargl, “A flexible,
+subjective logic-based framework for misbehavior detection in v2v
+networks,” in Proceeding of IEEE International Symposium on a World
+of Wireless, Mobile and Multimedia Networks 2014, 2014, pp. 1–6.
+[18] N. Fotos, K. I. Ouattara, D. S. Karas, I. Krontiris, W. Meng, and T. Gi-
+annetsos, “Actions speak louder than words: Evidence-based trust level
+evaluation in multi-agent systems,” in Information and Communications
+Security, J. Han, Y. Xiang, G. Cheng, W. Susilo, and L. Chen, Eds.
+Singapore: Springer Nature Singapore, 2026, pp. 255–273.
+[19] D.
+Arp,
+E.
+Quiring,
+F.
+Pendlebury,
+A.
+Warnecke,
+F.
+Pierazzi,
+C. Wressnegger, L. Cavallaro, and K. Rieck, “Dos and don’ts of
+machine learning in computer security,” 2021. [Online]. Available:
+https://arxiv.org/abs/2010.09470
+[20] D.
+V.
+Vargas,
+One-Pixel
+Attack:
+Understanding
+and
+Improving
+Deep Neural Networks with Evolutionary Computation.
+Singapore:
+Springer Singapore, 2020, pp. 401–430. [Online]. Available: https:
+//doi.org/10.1007/978-981-15-3685-4 15
+[21] R. M. Neal, Bayesian Learning for Neural Networks, 1st ed., ser.
+Lecture Notes in Statistics.
+New York, NY: Springer, 1996, vol. 118,
+springer Book Archive; eBook ISBN: 978-1-4612-0745-0. [Online].
+Available: https://doi.org/10.1007/978-1-4612-0745-0
+[22] C.
+Blundell,
+J.
+Cornebise,
+K.
+Kavukcuoglu,
+and
+D.
+Wierstra,
+“Weight uncertainty in neural networks,” 2015. [Online]. Available:
+https://arxiv.org/abs/1505.05424
+[23] S. Depeweg, J.-M. Hernandez-Lobato, F. Doshi-Velez, and S. Udluft,
+“Decomposition
+of
+uncertainty
+in
+Bayesian
+deep
+learning
+for
+efficient and risk-sensitive learning,” in Proceedings of the 35th
+International Conference on Machine Learning, ser. Proceedings
+of
+Machine
+Learning
+Research,
+J.
+Dy
+and
+A.
+Krause,
+Eds.,
+vol. 80.
+PMLR, 10–15 Jul 2018, pp. 1184–1193. [Online]. Available:
+https://proceedings.mlr.press/v80/depeweg18a.html
+[24] Y. Gal and Z. Ghahramani, “Dropout as a bayesian approximation:
+Representing model uncertainty in deep learning,” 2016. [Online].
+Available: https://arxiv.org/abs/1506.02142
+[25] B. Lakshminarayanan, A. Pritzel, and C. Blundell, “Simple and
+scalable predictive uncertainty estimation using deep ensembles,” 2017.
+[Online]. Available: https://arxiv.org/abs/1612.01474
+[26] J.
+Gawlikowski,
+C.
+R.
+N.
+Tassi,
+M.
+Ali,
+J.
+Lee,
+M.
+Humt,
+J. Feng, A. Kruspe, R. Triebel, P. Jung, R. Roscher, M. Shahzad,
+W. Yang, R. Bamler, and X. X. Zhu, “A survey of uncertainty
+in deep neural networks,” Artificial Intelligence Review, vol. 56,
+no.
+1,
+pp.
+1513–1589,
+Oct
+2023.
+[Online].
+Available:
+https:
+//doi.org/10.1007/s10462-023-10562-9
+[27] E. Begoli, T. Bhattacharya, and D. Kusnezov, “The need for uncertainty
+quantification in machine-assisted medical decision making,” Nature
+Machine Intelligence, vol. 1, no. 1, pp. 20–23, Jan 2019. [Online].
+Available: https://doi.org/10.1038/s42256-018-0004-1
+[28] S. Devic, T. Srinivasan, J. Thomason, W. Neiswanger, and V. Sharan,
+“From calibration to collaboration: Llm uncertainty quantification
+should be more human-centered,” 2025. [Online]. Available: https:
+//arxiv.org/abs/2506.07461
+[29] Y. Ovadia, E. Fertig, J. Ren, Z. Nado, D. Sculley, S. Nowozin, J. V.
+Dillon, B. Lakshminarayanan, and J. Snoek, “Can you trust your
+model’s uncertainty? evaluating predictive uncertainty under dataset
+shift,” 2019. [Online]. Available: https://arxiv.org/abs/1906.02530
+[30] C. Guo, G. Pleiss, Y. Sun, and K. Q. Weinberger, “On calibration
+of modern neural networks,” in Proceedings of the 34th International
+Conference on Machine Learning.
+PMLR, 2017, pp. 1321–1330.
+[31] M. Sensoy, L. Kaplan, and M. Kandemir, “Evidential deep learning
+to
+quantify
+classification
+uncertainty,”
+2018.
+[Online].
+Available:
+https://arxiv.org/abs/1806.01768
+[32] K. I. Ouattara, I. Krontiris, T. Dimitrakos, and F. Kargl, “Quantifying
+calibration error in neural networks through evidence-based theory,” in
+2025 28th International Conference on Information Fusion (FUSION),
+2025, pp. 1–8.
+[33] M. Cheng, S. Nazarian, and P. Bogdan, “There is hope after
+all: Quantifying opinion and trustwortheiness in neural networks,”
+Frontiers in Artificial Intelligence, vol. 3, 2020. [Online]. Avail-
+able: https://www.frontiersin.org/journals/artificial-intelligence/articles/
+10.3389/frai.2020.00054
+[34] Y. Mae, W. Kumagai, and T. Kanamori, “Uncertainty propagation for
+dropout-based bayesian neural networks,” Neural Networks, vol. 144,
+pp. 394–406, 2021. [Online]. Available: https://www.sciencedirect.com/
+science/article/pii/S0893608021003555
+[35] P. Monchot, L. Coquelin, S. J. Petit, S. Marmin, E. Le Pennec,
+and N. Fischer, “Input uncertainty propagation through trained neural
+networks,” in Proceedings of the 40th International Conference on
+Machine Learning, ser. Proceedings of Machine Learning Research,
+A.
+Krause,
+E.
+Brunskill,
+K.
+Cho,
+B.
+Engelhardt,
+S.
+Sabato,
+and J. Scarlett, Eds., vol. 202.
+PMLR, 23–29 Jul 2023, pp.
+25 140–25 173. [Online]. Available: https://proceedings.mlr.press/v202/
+monchot23a.html
+[36] R. Astudillo and J. Neto, “Propagation of uncertainty through multilayer
+perceptrons for robust automatic speech recognition.” 08 2011, pp. 461–
+464.
+[37] C.-N. Ziegler and G. Lausen, “Spreading activation models for trust
+propagation,” in IEEE International Conference on e-Technology, e-
+Commerce and e-Service, 2004. EEE ’04. 2004, 2004, pp. 83–97.
+[38] R. W. van der Heijden, H. Kopp, and F. Kargl, “Multi-source
+fusion operations in subjective logic,” 2018. [Online]. Available:
+https://arxiv.org/abs/1805.01388
+[39] W. H. Wolberg, O. L. Mangasarian, and W. N. Street, “Breast cancer
+wisconsin (diagnostic) data set,” https://archive.ics.uci.edu/ml/datasets/
+breast+cancer+wisconsin+(diagnostic), 1995, uCI Machine Learning
+Repository.
+[40] Y. LeCun, L. Bottou, Y. Bengio, and P. Haffner, “Gradient-based learning
+applied to document recognition,” Proceedings of the IEEE, vol. 86,
+no. 11, pp. 2278–2324, 1998.
+[41] X. Chen, C. Liu, B. Li, K. Lu, and D. Song, “Targeted backdoor
+attacks on deep learning systems using data poisoning,” 2017. [Online].
+Available: https://arxiv.org/abs/1712.05526
+[42] A. Jøsang and L. Kaplan, “Principles of subjective networks,” in 2016
+19th International Conference on Information Fusion (FUSION), 2016,
+pp. 1292–1299.
+
+16
+APPENDIX A
+SUBJECTIVE LOGIC OPERATORS AND SYMBOLS
+TABLE VI: Summary of Subjective Logic Operators Used in This Work
+Symbol
+Name
+Definition / Equation
+⊙
+Binomial multiplication
+[5]
+⊗
+Trust discounting
+ω[A;B]
+X
+= ωA
+B ⊗ωB
+X
+(b, d, u) ⊗(b′, d′, u′) = (Pb′, Pd′, 1 −P(b′ + d)
+P = b + au
+⊕
+Averaging fusion
+[9]
+⊖
+Fusion-based revision
+Tθ ←Tθ ⊖Tn∥Y
+(as defined in Sec. V.B)
+⊘
+Conservative combination
+(b, d, u) = (b1, d1, u1) ⊘(b2, d2, u2)
+b = min(b1, b2),
+d = max(d1, d2),
+u = 1 −(b + d)
+⊚
+Deduction
+[5], [42]
+APPENDIX B
+PATAS OPERATIONS
+(a) Trust Aggregation Process
+(b) Example of Trust Aggregation Process
+Fig. 8: Output-Trust Aggregation
+Fig. 8a illustrates this process. Each Trust Node in the output layer generates a trust score Ty1, Ty2, . . . , Tyk, corresponding
+to the network’s output components. These values are then passed to an aggregation mechanism that produces a unified output
+trust value Ty, formally defined as:
+Ty = Agg
+ (Tyj)j∈[1,k]
+
+where Agg is an aggregation function based on the reasoning operations defined in the PaTAS.
+Fig. 8b presents a conceptual example in which a virtual observer A receives individual trust from each output neuron.
+Observer A integrates these trust scores using the aggregation function to arrive at a single opinion on the network’s overall
+prediction trustworthiness.
+The aggregation mechanism can be adapted to different application requirements, such as majority fusion, weighted fusion,
+or uncertainty-sensitive operators, depending on how the output trust should reflect the underlying trust semantics.
+APPENDIX C
+THEOREMS PROOFS
+A. Proof for Theorem 1
+Proof. Let us define a distance d on the space Ω⊆[0, 1]4, based on the Euclidean norm (2-norm).
+Assume that the recursive update is expressed as:
+ωn+1 = ωn ⊖q, q ∈Ω
+
+17
+where ⊖denotes a fusion operator (e.g., cumulative or averaging fusion) that combines opinions ωn and q. By the properties
+of subjective logic fusion, the result of this operation satisfies one of the following:
+1) d(ωn+1, q) < d(ωn, q), i.e., the new opinion is strictly closer to q, or
+2) d(ωn+1, q) = d(ωn, q) and ωn+1 = ωn, meaning the sequence has reached a fixed point.
+This behavior reflects the nature of fusion operators, which are designed to generate an opinion that represents a consistent
+aggregation of the two inputs.
+In case 1, the distance to q strictly decreases at each step. Since the 2-norm is bounded in [0, 1]4, the sequence (ωn) is
+contained in a compact space and forms a Cauchy sequence. Therefore, it converges to the unique fixed point q.
+In case 2, where ωn+1 = ωn, the sequence remains constant and equal to ω0. This occurs, for instance, when q = (0, 0, 1, a0),
+representing full uncertainty. In that case, most of the fusion operators (almost all except averaging fusion) has no effect, and
+the sequence stays fixed.
+Thus, in both cases, the sequence (ωn) converges.
+B. Proof for Theorem 2
+Proof. We analyze each component of ωn separately.
+1. Convergence of an: By definition, an+1 = anaq. Since aq ∈[0, 1[, this is a geometric sequence:
+an = a0an
+q →0
+as n →∞.
+2. Convergence of dn: The recurrence relation is:
+dn+1 = dn + dq −dndq = dn(1 −dq) + dq.
+This is a first-order linear recurrence. If dq > 0, the sequence is increasing and bounded above by 1. Therefore:
+lim
+n→∞dn = 1 (the fixed point)
+If dq = 0, then dn+1 = dn = d0 for all n.
+3. Behavior of bn: The update equation for bn+1 is rational function involving an, bn, and un. As an →0, the update
+expressions simplify:
+bn+1 ≈bnbq + aqbnuq = bn(bq + aquq) = bnpq
+this converges since the projected probability pq ∈[0, 1]
+To conclude with un, since we have un = 1 −(bn + dn) it will also converge
+C. Proof for Theorem 4
+Let ω∅= (0, 0, 1, a) denote a vacuous binomial opinion over any variable, with arbitrary base rate a ∈[0, 1]. Then the
+following two properties hold:
+1) Discounting a Vacuous Opinion Yields a Vacuous Opinion.
+For any trust value binomial opinion ωA
+B, the discounted opinion
+ω[A;B]
+X
+= ωA
+B ⊗(0, 0, 1, a) = (0, 0, 1, a)
+Proof. Using the trust discounting operator from Subjective Logic, we set P to the projected probability of ωA
+B:
+ω[A;B]
+X
+=
+
+
+
+
+
+
+
+
+
+
+
+b[A;B]
+X
+= P · 0 = 0,
+d[A;B]
+X
+= P · 0 = 0,
+u[A;B]
+X
+= 1 −b[A;B]
+X
+−d[A;B]
+X
+= 1,
+a[A;B]
+X
+= a.
+Hence, ω[A;B] = (0, 0, 1, a).
+2) PaTAS Feedforward on Vacuous Input Yields Vacuous Output.
+Let Tx = (0, 0, 1, a) be the trust assessment of an input to PaTAS. Then for any parameter trust configuration Tθ, the
+output trust assessment satisfies:
+Ty = IPTA(Tx) = (0, 0, 1, a).
+Proof. The PaTAS feedforward mechanism computes for each neuron:
+Tz =
+_
+i
+(Txi ⊗Tθi) .
+
+18
+Since each Txi = (0, 0, 1, a), and using the result from part (1), we get:
+Txi ⊗Tθi = (0, 0, 1, a),
+∀i.
+Then, by fusion of vacuous opinions:
+Tz =
+_
+i
+(0, 0, 1, a) = (0, 0, 1, a).
+This holds recursively through all layers of PaTAS, including the output layer, hence:
+Ty = (0, 0, 1, a).
+D. Proof for Theorem 5
+Proof. We prove the theorem in two steps.
+(1) Symmetry of the Discount Operator:
+Let ωθ = (bθ, dθ, uθ) be a binomial opinion representing the trust weight associated with a connection in the PaTAS. Let P
+denote the projected probability of ωθ, defined as:
+P = bθ + auθ,
+where a is the base rate (typically a = 0.5 for binary domains).
+Let x = (b, d, u) be any binomial opinion and ¯x = (d, b, u) its symmetric counterpart. Then the trust discounting operation
+yields:
+ωθ ⊗x = (P · b, P · d, 1 −P · (b + d)),
+ωθ ⊗¯x = (P · d, P · b, 1 −P · (b + d)).
+Since b+d = 1−u, both discounted opinions have identical uncertainty and symmetric belief/disbelief masses. Hence, ωθ ⊗x
+and ωθ ⊗¯x are symmetric.
+(2) Symmetry Preservation under Fusion:
+Let X = {x1, . . . , xn} be a set of discounted opinions resulting from symmetric inputs, and let ¯
+X = {¯x1, . . . , ¯xn} be their
+symmetric counterparts. Consider any symmetric fusion operator L (such as averaging, cumulative fusion, or consensus fusion
+in Subjective Logic) applied to X and ¯
+X.
+Since each pair (xi, ¯xi) is symmetric and the operator treats belief and disbelief symmetrically, we have:
+n
+M
+i=1
+xi = (b′, d′, u′)
+⇒
+n
+M
+i=1
+¯xi = (d′, b′, u′).
+Thus, the output of the PaTAS feedforward inference remains symmetric when symmetric inputs are provided.
+(3) Invariance under Fusion:
+A fundamental property of Subjective Logic fusion operators is that if all input opinions assign the same value to a specific
+mass (e.g., belief or disbelief), the result will preserve that value. In particular, if all input opinions have belief mass equal to
+zero, the fused result will also have belief mass zero. The same applies to disbelief mass.
+Therefore, if the discounting step yields discounted opinions with zero belief (or zero disbelief) across all components, then
+the fusion stage will preserve that zero mass in the final output.
+(4) Fully Trusted and Distrusted Cases:
+For x = (1, 0, 0) (fully trusted), we have:
+ωθ ⊗x = (P, 0, 1 −P),
+so the discounted opinion assigns zero disbelief. As noted above, the fusion of such discounted opinions will also assign zero
+disbelief.
+For ¯x = (0, 1, 0) (fully distrusted), we have:
+ωθ ⊗¯x = (0, P, 1 −P),
+so the discounted opinion assigns zero belief. Therefore, the belief from a fully distrusted input is always zero in the PaTAS
+output.
+APPENDIX D
+DETAILED RESULTS
+All the results are depicted in Figs. 9 and 11 to 19.
+
+19
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.21
+0.22
+0.23
+0.24
+0.25
+0.26
+0.27
+0.28
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.72
+0.73
+0.74
+0.75
+0.76
+0.77
+0.78
+0.79
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.72
+0.73
+0.74
+0.75
+0.76
+0.77
+0.78
+0.79
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.21
+0.22
+0.23
+0.24
+0.25
+0.26
+0.27
+0.28
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(a) 5 Hidden neurons
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.23
+0.24
+0.25
+0.26
+0.27
+0.28
+0.29
+0.30
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.70
+0.71
+0.72
+0.73
+0.74
+0.75
+0.76
+0.77
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.70
+0.71
+0.72
+0.73
+0.74
+0.75
+0.76
+0.77
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.23
+0.24
+0.25
+0.26
+0.27
+0.28
+0.29
+0.30
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(b) 10 Hidden neurons
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.24
+0.26
+0.28
+0.30
+0.32
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.24
+0.26
+0.28
+0.30
+0.32
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(c) 20 Hidden neurons
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(d) 20 Hidden neurons with Fully Trusted Assessment
+Fig. 9: MNIST with Vacuous Trust Assessment
+0
+5000
+10000
+15000
+20000
+25000
+30000
+35000
+Iteration (batches across epochs)
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+Accuracy
+Accuracy Evolution
+Train
+Test
+(a) 5 Hidden neurons
+0
+5000
+10000
+15000
+20000
+25000
+30000
+35000
+Iteration (batches across epochs)
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Accuracy
+Accuracy Evolution
+Train
+Test
+(b) 10 Hidden neurons
+0
+5000
+10000
+15000
+20000
+25000
+30000
+35000
+Iteration (batches across epochs)
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Accuracy
+Accuracy Evolution
+Train
+Test
+(c) 20 Hidden neurons
+0
+5000
+10000
+15000
+20000
+25000
+30000
+35000
+Iteration (batches across epochs)
+0.2
+0.4
+0.6
+0.8
+Accuracy
+Accuracy Evolution
+Train
+Test
+(d) 20 Hidden neurons with Fully Trusted Assessment
+Fig. 10: MNIST with Vacuous Trust Assessment
+
+20
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(a) xdistrust+ydistrust
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(b) xdistrust+yvacuous
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(c) xdistrust+ytrust
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(d) xvacuous+ydistrust
+0
+20
+40
+60
+80
+100
+120
+0.23
+0.24
+0.25
+0.26
+0.27
+0.28
+0.29
+0.30
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.70
+0.71
+0.72
+0.73
+0.74
+0.75
+0.76
+0.77
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.70
+0.71
+0.72
+0.73
+0.74
+0.75
+0.76
+0.77
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.23
+0.24
+0.25
+0.26
+0.27
+0.28
+0.29
+0.30
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(e) xvacuous+yvacuous
+0
+20
+40
+60
+80
+100
+120
+0.16
+0.18
+0.20
+0.22
+0.24
+0.26
+0.28
+0.30
+0.32
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.68
+0.70
+0.72
+0.74
+0.76
+0.78
+0.80
+0.82
+0.84
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.68
+0.70
+0.72
+0.74
+0.76
+0.78
+0.80
+0.82
+0.84
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.16
+0.18
+0.20
+0.22
+0.24
+0.26
+0.28
+0.30
+0.32
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(f) xvacuous+ytrust
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(g) xtrust+ydistrust
+0
+20
+40
+60
+80
+100
+120
+0.24
+0.26
+0.28
+0.30
+0.32
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.24
+0.26
+0.28
+0.30
+0.32
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(h) xtrust+yvacuous
+0
+20
+40
+60
+80
+100
+120
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(i) xtrust+ytrust
+Fig. 11: Cancer Model with epsilon = 0.01
+
+21
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(a) xdistrust+ydistrust
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(b) xdistrust+yvacuous
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(c) xdistrust+ytrust
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(d) xvacuous+ydistrust
+0
+20
+40
+60
+80
+100
+120
+0.23
+0.24
+0.25
+0.26
+0.27
+0.28
+0.29
+0.30
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.70
+0.71
+0.72
+0.73
+0.74
+0.75
+0.76
+0.77
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.70
+0.71
+0.72
+0.73
+0.74
+0.75
+0.76
+0.77
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.23
+0.24
+0.25
+0.26
+0.27
+0.28
+0.29
+0.30
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(e) xvacuous+yvacuous
+0
+20
+40
+60
+80
+100
+120
+0.24
+0.26
+0.28
+0.30
+0.32
+0.34
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.66
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.66
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.24
+0.26
+0.28
+0.30
+0.32
+0.34
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(f) xvacuous+ytrust
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(g) xtrust+ydistrust
+0
+20
+40
+60
+80
+100
+120
+0.24
+0.26
+0.28
+0.30
+0.32
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.24
+0.26
+0.28
+0.30
+0.32
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(h) xtrust+yvacuous
+0
+20
+40
+60
+80
+100
+120
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(i) xtrust+ytrust
+Fig. 12: Cancer Model with epsilon = 0.1
+
+22
+0
+20
+40
+60
+80
+100
+120
+0.24
+0.26
+0.28
+0.30
+0.32
+0.34
+0.36
+0.38
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.62
+0.64
+0.66
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.62
+0.64
+0.66
+0.68
+0.70
+0.72
+0.74
+0.76
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.24
+0.26
+0.28
+0.30
+0.32
+0.34
+0.36
+0.38
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(a) (0.25, 0, 0.75)
+0
+20
+40
+60
+80
+100
+120
+0.12
+0.14
+0.16
+0.18
+0.20
+0.22
+Evolution of trust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.78
+0.80
+0.82
+0.84
+0.86
+0.88
+Evolution of uncertainty mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+20
+40
+60
+80
+100
+120
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.78
+0.80
+0.82
+0.84
+0.86
+0.88
+Evolution of uncertainty mass for fully distrusted input
+0
+20
+40
+60
+80
+100
+120
+0.12
+0.14
+0.16
+0.18
+0.20
+0.22
+Evolution of distrust mass for fully distrusted input
+label = 0
+label = 1
+(b) (0.25, 0.25, 0.5)
+Fig. 13: Degradation
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.65
+0.70
+0.75
+0.80
+0.85
+0.90
+0.95
+1.00
+Accuracy
+Accuracy Evolution
+Train
+Test
+(a) Clean Features and Labels
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Accuracy
+Accuracy Evolution
+Train
+Test
+(b) Clean Features and Corrupted Labels
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Accuracy
+Accuracy Evolution
+Train
+Test
+(c) Clean Features and Noisy Labels
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.65
+0.70
+0.75
+0.80
+0.85
+0.90
+0.95
+Accuracy
+Accuracy Evolution
+Train
+Test
+(d) Noisy Features and Clean Labels
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Accuracy
+Accuracy Evolution
+Train
+Test
+(e) Noisy Features and Corrupted Labels
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.2
+0.3
+0.4
+0.5
+0.6
+Accuracy
+Accuracy Evolution
+Train
+Test
+(f) Noisy Features and Noisy Labels
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.623
+0.624
+0.625
+0.626
+0.627
+0.628
+Accuracy
+Accuracy Evolution
+Train
+Test
+(g) Corrupted Features and Clean Labels
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.40
+0.45
+0.50
+0.55
+0.60
+Accuracy
+Accuracy Evolution
+Train
+Test
+(h) Corrupted Features and Corrupted Labels
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.54
+0.56
+0.58
+0.60
+0.62
+Accuracy
+Accuracy Evolution
+Train
+Test
+(i) Corrupted Features and Noisy Labels
+Fig. 14: Accuracy evolution of the Cancer model under different combinations of clean, corrupted, and noisy features and
+labels.
+0
+20
+40
+60
+80
+100
+120
+Iteration (batches across epochs)
+0.55
+0.60
+0.65
+0.70
+0.75
+0.80
+0.85
+0.90
+0.95
+Accuracy
+Accuracy Evolution
+Train
+Test
+Fig. 15: Accuracy evolution of the Cancer model when reducing the noise for noised features and labels.
+
+23
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of distrust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of trust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Evolution of uncertainty mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00000
+0.00005
+0.00010
+0.00015
+0.00020
+0.00025
+0.00030
+Evolution of distrust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.99970
+0.99975
+0.99980
+0.99985
+0.99990
+0.99995
+1.00000
+Evolution of uncertainty mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00000
+0.00005
+0.00010
+0.00015
+0.00020
+0.00025
+0.00030
+Evolution of distrust mass for patch vacuous input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(a) 1 pixel
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of distrust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of trust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Evolution of uncertainty mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.000
+0.001
+0.002
+0.003
+0.004
+0.005
+Evolution of distrust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.995
+0.996
+0.997
+0.998
+0.999
+1.000
+Evolution of uncertainty mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.000
+0.001
+0.002
+0.003
+0.004
+0.005
+Evolution of distrust mass for patch vacuous input
+(b) 4×4 pixels
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.175
+0.200
+0.225
+0.250
+0.275
+0.300
+0.325
+0.350
+0.375
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.625
+0.650
+0.675
+0.700
+0.725
+0.750
+0.775
+0.800
+0.825
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.625
+0.650
+0.675
+0.700
+0.725
+0.750
+0.775
+0.800
+0.825
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.175
+0.200
+0.225
+0.250
+0.275
+0.300
+0.325
+0.350
+0.375
+Evolution of distrust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.15
+0.20
+0.25
+0.30
+0.35
+Evolution of trust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.625
+0.650
+0.675
+0.700
+0.725
+0.750
+0.775
+0.800
+0.825
+Evolution of uncertainty mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+Evolution of distrust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.88
+0.90
+0.92
+0.94
+0.96
+0.98
+1.00
+Evolution of uncertainty mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+Evolution of distrust mass for patch vacuous input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(c) 20×20 pixels
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.80
+0.85
+0.90
+0.95
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.80
+0.85
+0.90
+0.95
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.015
+0.020
+0.025
+0.030
+0.035
+0.040
+0.045
+Evolution of trust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.80
+0.85
+0.90
+0.95
+Evolution of uncertainty mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for patch vacuous input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(d) 27×27 pixels
+Fig. 16: MNIST poisoned 20 hidden neurons
+
+24
+0
+5000
+10000
+15000
+20000
+25000
+30000
+35000
+Iteration (batches across epochs)
+0.0
+0.2
+0.4
+0.6
+0.8
+Accuracy
+Accuracy Evolution
+Train
+Test
+Poisoned Images 6
+Clean Images 6
+Poisoned Images 3
+Clean Images 3
+(a) 1 pixel
+0
+5000
+10000
+15000
+20000
+25000
+30000
+35000
+Iteration (batches across epochs)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Accuracy
+Accuracy Evolution
+Train
+Test
+Poisoned Images 6
+Clean Images 6
+Poisoned Images 3
+Clean Images 3
+(b) 4×4 pixels
+0
+5000
+10000
+15000
+20000
+25000
+30000
+35000
+Iteration (batches across epochs)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Accuracy
+Accuracy Evolution
+Train
+Test
+Poisoned Images 6
+Clean Images 6
+Poisoned Images 3
+Clean Images 3
+(c) 20×20 pixels
+0
+5000
+10000
+15000
+20000
+25000
+30000
+35000
+Iteration (batches across epochs)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Accuracy
+Accuracy Evolution
+Train
+Test
+Poisoned Images 6
+Clean Images 6
+Poisoned Images 3
+Clean Images 3
+(d) 27×27 pixels
+Fig. 17: Accuracy for poisoned MNIST model with 20 hidden neurons
+
+25
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of distrust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+Evolution of trust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00000
+0.00005
+0.00010
+0.00015
+0.00020
+0.00025
+0.00030
+Evolution of distrust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.99970
+0.99975
+0.99980
+0.99985
+0.99990
+0.99995
+1.00000
+Evolution of uncertainty mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00000
+0.00005
+0.00010
+0.00015
+0.00020
+0.00025
+0.00030
+Evolution of distrust mass for patch vacuous input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(a) 1 pixel
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of distrust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of trust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+Evolution of uncertainty mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.000
+0.001
+0.002
+0.003
+0.004
+Evolution of distrust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.996
+0.997
+0.998
+0.999
+1.000
+Evolution of uncertainty mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.000
+0.001
+0.002
+0.003
+0.004
+Evolution of distrust mass for patch vacuous input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(b) 4×4 pixels
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.175
+0.200
+0.225
+0.250
+0.275
+0.300
+0.325
+0.350
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.650
+0.675
+0.700
+0.725
+0.750
+0.775
+0.800
+0.825
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.650
+0.675
+0.700
+0.725
+0.750
+0.775
+0.800
+0.825
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.175
+0.200
+0.225
+0.250
+0.275
+0.300
+0.325
+0.350
+Evolution of distrust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.10
+0.15
+0.20
+0.25
+0.30
+0.35
+Evolution of trust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.650
+0.675
+0.700
+0.725
+0.750
+0.775
+0.800
+0.825
+Evolution of uncertainty mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+Evolution of distrust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.88
+0.90
+0.92
+0.94
+0.96
+0.98
+1.00
+Evolution of uncertainty mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00
+0.02
+0.04
+0.06
+0.08
+0.10
+0.12
+Evolution of distrust mass for patch vacuous input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(c) 20×20 pixels
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.05
+0.10
+0.15
+0.20
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.80
+0.85
+0.90
+0.95
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.80
+0.85
+0.90
+0.95
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.015
+0.020
+0.025
+0.030
+0.035
+0.040
+Evolution of trust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.80
+0.85
+0.90
+0.95
+Evolution of uncertainty mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for patch trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.80
+0.85
+0.90
+0.95
+1.00
+Evolution of uncertainty mass for patch vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.00
+0.05
+0.10
+0.15
+0.20
+Evolution of distrust mass for patch vacuous input
+label = 0
+label = 1
+label = 2
+label = 3
+label = 4
+label = 5
+label = 6
+label = 7
+label = 8
+label = 9
+(d) 27×27 pixels
+Fig. 18: MNIST poisoned 10 hidden neurons
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.12
+0.14
+0.16
+0.18
+0.20
+0.22
+0.24
+Evolution of trust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.76
+0.78
+0.80
+0.82
+0.84
+0.86
+0.88
+Evolution of uncertainty mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for fully trusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.96
+0.98
+1.00
+1.02
+1.04
+Evolution of uncertainty mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of distrust mass for vacuous input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.04
+0.02
+0.00
+0.02
+0.04
+Evolution of trust mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.76
+0.78
+0.80
+0.82
+0.84
+0.86
+0.88
+Evolution of uncertainty mass for fully distrusted input
+0
+5
+10
+15
+20
+25
+30
+35
+40
+0.12
+0.14
+0.16
+0.18
+0.20
+0.22
+0.24
+Evolution of distrust mass for fully distrusted input
+Fig. 19: MNIST randomized trust

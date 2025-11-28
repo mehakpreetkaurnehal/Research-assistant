@@ -1,0 +1,363 @@
+Efficiency vs. Fidelity: A Comparative Analysis of
+Diffusion Probabilistic Models and Flow Matching
+on Low-Resource Hardware
+Srishti Gupta
+Roll No: 23b2520
+Yashasvee Taiwade
+Roll No: 23b2232
+Abstract—Denoising Diffusion Probabilistic Models (DDPMs)
+have established a new state-of-the-art in generative image
+synthesis, yet their deployment is hindered by significant com-
+putational overhead during inference, often requiring up to
+1,000 iterative steps. This study presents a rigorous comparative
+analysis of DDPMs against the emerging Flow Matching (Rec-
+tified Flow) paradigm, specifically isolating their geometric and
+efficiency properties on low-resource hardware. By implementing
+both frameworks on a shared Time-Conditioned U-Net backbone
+using the MNIST dataset, we demonstrate that Flow Matching
+significantly outperforms Diffusion in efficiency. Our geometric
+analysis reveals that Flow Matching learns a highly rectified
+transport path (Curvature C ≈1.02), which is near-optimal,
+whereas Diffusion trajectories remain stochastic and tortuous
+(C ≈3.45). Furthermore, we establish an “efficiency frontier” at
+N = 10 function evaluations, where Flow Matching retains high
+fidelity while Diffusion collapses. Finally, we show via numerical
+sensitivity analysis that the learned vector field is sufficiently
+linear to render high-order ODE solvers (Runge-Kutta 4) unnec-
+essary, validating the use of lightweight Euler solvers for edge
+deployment. This work concludes that Flow Matching is the
+superior algorithmic choice for real-time, resource-constrained
+generative tasks.
+Index Terms—Generative Models, Flow Matching, Diffusion
+Models, Optimal Transport, Edge AI.
+I. INTRODUCTION
+The field of generative artificial intelligence has recently
+witnessed a paradigm shift from Generative Adversarial Net-
+works (GANs) to likelihood-based models. Denoising Diffu-
+sion Probabilistic Models (DDPMs) [1] have demonstrated
+unprecedented capabilities in synthesizing high-fidelity images
+by reversing a gradual noise-addition process. However, this
+high fidelity comes at a substantial computational cost: gen-
+erating a single sample typically requires solving a Stochas-
+tic Differential Equation (SDE) over hundreds of discrete
+timesteps. This “sampling bottleneck” restricts the deployment
+of diffusion models in real-time applications and on edge
+devices where compute budgets are strictly limited.
+Recently, Flow Matching (FM) [2] and Rectified Flows [3]
+have emerged as a compelling alternative. Unlike diffusion
+models, which rely on stochastic random walks, Flow Match-
+ing learns a Continuous Normalizing Flow (CNF) that maps
+a standard Gaussian distribution to the data distribution via
+an Ordinary Differential Equation (ODE). Theoretically, this
+allows for “straight” trajectories between noise and data,
+potentially reducing the number of integration steps required
+for high-quality sampling.
+This work moves beyond simple fidelity metrics to establish
+a definitive algorithmic design guide for resource-constrained
+generative AI. We isolate the geometric properties of both
+paradigms to prove that Flow Matching is fundamentally more
+efficient due to the topological nature of its learned transport
+path. We quantify this geometric efficiency and validate its
+direct impact on real-time latency and energy consumption
+for edge deployment.
+Our contributions are threefold:
+1) We
+quantify
+the
+Trajectory
+Curvature
+of
+both
+paradigms, providing statistical evidence that Flow
+Matching learns near-optimal transport paths.
+2) We perform a Step-Count Ablation Study, identifying
+the “Efficiency Frontier” where diffusion models fail but
+rectified flows survive.
+3) We conduct a Numerical Solver Sensitivity Analysis,
+proving that 1st-order Euler solvers are sufficient for
+Flow Matching due to extreme path rectification.
+II. RELATED WORK
+A. Diffusion Probabilistic Models
+Ho et al. [1] introduced the seminal DDPM framework,
+which trains a model to predict the noise ϵ added to an
+image x0 at timestep t. The generation process is modeled
+as a Markov chain that iteratively denoises the latent vari-
+able. While improvements like DDIM (Denoising Diffusion
+Implicit Models) have accelerated sampling, the underlying
+process remains fundamentally stochastic and computationally
+expensive.
+B. Flow Matching, Rectified Flows, and Optimal Transport
+Continuous Normalizing Flows (CNFs) model generation
+as a time-continuous ODE. Lipman et al. [2] introduced
+Flow Matching, a “simulation-free” training objective that
+regresses a target velocity field directly. Concurrently, Liu et
+al. [3] proposed Rectified Flow, emphasizing that the optimal
+transport path between two distributions is a straight line.
+This objective encourages the model to learn the straight-line
+arXiv:2511.19379v1  [cs.LG]  24 Nov 2025
+
+Monge Map of Optimal Transport, minimizing the kinetic
+energy
+E =
+Z 1
+0
+∥vt∥2 dt
+(1)
+C. Acceleration in Generative Models
+Numerous methods attempt to mitigate the cost of Diffusion
+models, such as DDIMs, Consistency Models, and Progres-
+sive Distillation. While effective, these techniques often rely
+on complex, multi-stage training regimes or specific param-
+eterizations. In contrast, Flow Matching achieves superior
+efficiency simply by leveraging the fundamental geometric
+structure of the optimal straight-line transport path.
+III. METHODOLOGY
+A. Shared Architecture
+To ensure a strictly fair comparison, we employ an identical
+neural network architecture for both the Diffusion and Flow
+Matching experiments. We utilize a time-conditioned U-Net
+with sinusoidal positional embeddings. The network fθ(xt, t)
+takes the noisy image state xt and continuous time t ∈[0, 1]
+as input and outputs a tensor of the same spatial resolution
+(32 × 32).
+The specific architectural details are summarized in Table I
+for replicability.
+TABLE I
+SHARED U-NET ARCHITECTURE DETAILS
+Component
+Description
+Input
+32 × 32 × 1 image, Time t
+Backbone
+Time-conditioned U-Net
+Encoder/Decoder Blocks
+3 Downsampling / 3 Upsampling blocks
+Channel Multipliers
+[64, 128, 256]
+Attention
+Self-Attention at 16 × 16 resolution (128 channels)
+Time Embedding
+Sinusoidal Positional Encoding in ResNet blocks
+Total Parameters
+≈4.5 Million
+B. Training Objectives
+1) Diffusion Model (DDPM): The forward diffusion pro-
+cess is defined as a fixed Markov chain that gradually adds
+Gaussian noise to the data x0 ∼q(x0) according to a variance
+schedule β1, . . . , βT .
+q(xt|xt−1) = N(xt;
+p
+1 −βtxt−1, βtI)
+(2)
+Using the notation αt = 1 −βt and ¯αt = Qt
+s=1 αs, we can
+sample xt at any arbitrary timestep t in closed form [1]:
+xt = √¯αtx0 +
+√
+1 −¯αtϵ,
+ϵ ∼N(0, I)
+(3)
+The reverse process pθ(xt−1|xt) is parameterized by a neural
+network that approximates the intractable posterior. We utilize
+the simplified objective proposed by Ho et al., which effec-
+tively trains the network ϵθ to predict the noise component:
+Ldiff = Et,x0,ϵ
+
+∥ϵ −ϵθ(xt, t)∥2
+(4)
+Sampling requires simulating the reverse Stochastic Differen-
+tial Equation (SDE), specifically the variance-preserving SDE,
+which necessitates small step sizes to minimize discretization
+error [4].
+2) Flow Matching (Rectified Flow): We adopt the Rectified
+Flow framework, which seeks to minimize the transport cost
+between the standard Gaussian distribution π0 = N(0, I) and
+the data distribution π1. We define a probability path pt as the
+push-forward of π0 by a time-dependent vector field vt. The
+Rectified Flow objective induces a linear interpolation path:
+xt = t · x1 + (1 −t) · x0
+(5)
+This path corresponds to the unique constant velocity vec-
+tor field that connects x0 and x1 in a straight line. The
+training objective minimizes the expected mean squared error
+between the model output vθ(xt, t) and the target velocity field
+ut(x|x1) = x1 −x0:
+LFM = Et,x0,x1
+
+∥(x1 −x0) −vθ(xt, t)∥2
+(6)
+Geometrically, this objective encourages the model to learn the
+straight-line Monge map of Optimal Transport, minimizing the
+kinetic energy E =
+R 1
+0 ∥vt∥2 dt [2], [3].
+C. Evaluation Metrics
+In addition to visual metrics, we compute the Fr´echet
+Inception Distance (FID) and the Straightness Ratio (C). The
+ratio of the integrated path length (Lpath) to the Euclidean
+distance between start and end points is:
+C =
+Lpath
+∥x(1) −x(0)∥≈
+PN
+i=1 ∥xi −xi−1∥
+∥xN −x0∥
+(7)
+A perfect straight line yields C = 1.0.
+IV. GEOMETRIC ANALYSIS
+To understand the efficiency gap, we analyzed the geometry
+of the generative trajectories in the high-dimensional latent
+space.
+A. Manifold Topology Learning
+We verified whether the models learned the semantic topol-
+ogy of the data manifold by performing linear interpolation
+between random noise vectors. As shown in Fig. 3(a), Flow
+Matching produces smooth semantic transitions (e.g., a ‘9’
+morphing into a ‘6’ by detaching the upper loop). This
+indicates the model has learned a continuous data manifold
+rather than simply memorizing discrete modes.
+B. Trajectory Curvature Statistics
+We define the Straightness Ratio (C) of a generative path
+as the ratio of the integrated path length to the Euclidean
+distance between start and end points. A perfect straight line
+yields C = 1.0. We computed C for N = 100 random
+samples (Fig. 1). Flow Matching trajectories concentrated
+tightly around µ = 1.02, confirming near-perfect rectification.
+In contrast, Diffusion trajectories exhibited high curvature
+(µ = 3.45) even when sampled deterministically, necessitating
+more steps to navigate the tortuous path.
+
+Fig. 1.
+Distribution of Transport Efficiency. Flow Matching (Blue)
+concentrates around C ≈1.02 (Straight), while Diffusion (Red) is highly
+curved (C ≈1.06 – 3.45), confirming the theoretical efficiency advantage of
+ODE-based transport.
+C. Vector Field Visualization and Solver Sufficiency
+We projected the learned 1024-dimensional velocity field
+onto a 2D plane spanning the noise-data trajectory (Fig. 2).
+The quiver plot reveals a highly laminar, convergent flow
+structure. The vector field acts as a “global attractor,” pulling
+probability mass in a straight line toward the data manifold.
+This linearity implies the second derivative of the trajectory is
+near zero ( d2x
+dt2 ≈0). This is why the first-order Euler solver
+is sufficient, as the curvature-correction of RK4 is redundant.
+Fig. 2. Projected Velocity Field. The learned field vθ exhibits laminar flow,
+directing noise (x0, red) directly to data (x1, green) with minimal divergence.
+V. EXPERIMENTS AND RESULTS
+A. Generation Dynamics
+Fig. 3(b–c) compares the temporal dynamics of generation.
+Flow Matching exhibits a “fade-in” behavior, establishing
+global structure early (Step 10) and refining details linearly.
+Diffusion remains dominated by high-frequency noise until the
+final timesteps, highlighting the inefficiency of the stochastic
+reverse process.
+Fig. 3.
+Geometric Analysis of Generation. (a) Latent Manifold In-
+terpolation: Linear interpolation between random noise vectors reveals a
+smooth topological transition from a ‘9’ to a ‘6’. The gradual detachment
+of the upper loop confirms the model has learned a continuous data manifold
+rather than memorizing discrete modes. (b) Flow Dynamics: Exhibits a
+deterministic “fade-in” behavior, establishing global structure early (N = 10).
+(c) Diffusion Dynamics: The stochastic reverse process remains dominated
+by high-frequency noise until the final timesteps, highlighting the efficiency
+gap.
+B. Ablation Study: The Efficiency Frontier
+To quantify the limits of “Low-Resource” inference, we
+reduced the number of integration steps N (Fig. 4).
+• Flow Matching: Produced identifiable digits at N = 10
+and sharp digits at N = 20.
+• Diffusion: Produced pure noise at N = 10 and faint
+artifacts at N = 20.
+This establishes an “Efficiency Frontier” at approximately
+10–20 steps, below which Diffusion is unusable, but Flow
+Matching remains viable.
+
+Fig. 4. Step Count Ablation. Flow Matching (a) is robust at 10 steps, while
+Diffusion (b) fails to produce structure.
+C. Numerical Solver Sensitivity
+Finally, we investigated whether higher-order solvers im-
+prove fidelity. We compared Euler (1st Order) against Runge-
+Kutta 4 (4th Order) in Fig. 5. Surprisingly, RK4 offered
+no perceptual improvement over Euler, and in some cases
+introduced artifacts. This confirms our Geometric Analysis:
+the learned path is so linear that
+d2x
+dt2
+≈0, rendering the
+curvature-correction of RK4 redundant. Thus, the computa-
+tionally cheapest solver (Euler) is optimal.
+Fig. 5.
+Solver Sensitivity. RK4 (N = 5) provides no benefit over Euler
+(N = 10), confirming that the learned flow is linear and simple solvers are
+sufficient.
+VI. HARDWARE BENCHMARKING AND REAL-TIME
+FEASIBILITY
+The geometric proof of rectification (Section IV) translates
+directly to critical performance gains for resource-constrained
+deployment.
+A. Latency Measurement (ms)
+We measured the wall-clock time (latency) required to
+generate a single 32 × 32 image using the simple Euler solver
+on the constrained NVIDIA T4.
+TABLE II
+INFERENCE LATENCY BENCHMARKING (T4 GPU)
+Model
+Steps (N)
+Latency (ms/Sample)
+Fidelity Outcome
+Flow Matching
+10
+≈1.8 ms
+High Fidelity, Identifiable Digit
+Diffusion
+10
+≈1.8 ms
+Pure Noise/Collapse
+Flow Matching
+50
+≈9.0 ms
+Near-Reference Fidelity
+Diffusion
+1000
+≈180 ms
+Standard Baseline
+Flow Matching achieves high fidelity at the ≈1.8 ms
+latency point (N = 10), while Diffusion fails, confirming real-
+time feasibility.
+B. Energy Efficiency
+As the core U-Net compute is identical, the reduction in
+steps (N) is a direct proxy for energy savings. Flow Matching
+requires up to 10× fewer function evaluations than a typical
+Diffusion baseline (N
+≈100) for coherent output. This
+10× algorithmic efficiency, combined with the sufficiency of
+the lightweight Euler solver, positions Flow Matching as the
+energy-optimal choice for battery-powered edge devices.
+VII. CONCLUSION
+This study provides a comprehensive benchmark of SDE
+versus ODE generative paradigms under strict compute con-
+straints. Through geometric analysis, we demonstrated that
+Flow Matching learns a highly rectified transport path (C ≈
+1.0), enabling the use of simple Euler solvers with as few as
+10 steps. In contrast, Diffusion models suffer from stochastic
+inefficiency, requiring > 50 steps to produce coherent samples.
+For low-resource hardware deployment where every function
+evaluation counts, Flow Matching represents the superior algo-
+rithmic choice. Future work will extend this analysis to higher-
+dimensional manifolds such as CIFAR-10 to determine the
+complexity threshold where trajectory curvature necessitates
+higher-order solvers.
+REFERENCES
+[1] J. Ho, A. Jain, and P. Abbeel, “Denoising Diffusion Probabilistic Mod-
+els,” in Advances in Neural Information Processing Systems (NeurIPS),
+vol. 33, pp. 6840–6851, 2020.
+[2] Y. Lipman, R. T. Q. Chen, H. Ben-Hamu, M. Nickel, and M. Le, “Flow
+Matching for Generative Modeling,” in International Conference on
+Learning Representations (ICLR), 2023.
+[3] X. Liu, C. Gong, and Q. Liu, “Flow Straight and Fast: Learning
+to Generate and Transfer Data with Rectified Flow,” in International
+Conference on Learning Representations (ICLR), 2023.
+[4] Y. Song et al., “Score-Based Generative Modeling through Stochastic
+Differential Equations,” in International Conference on Learning Rep-
+resentations (ICLR), 2021.

@@ -1,0 +1,2119 @@
+Flow Map Distillation Without Data
+Shangyuan Tong*
+MIT
+sytong@csail.mit.edu
+Nanye Ma*
+NYU
+nm3607@nyu.edu
+Saining Xie†
+NYU
+saining.xie@nyu.edu
+Tommi Jaakkola†
+MIT
+tommi@csail.mit.edu
+Abstract
+State-of-the-art flow models achieve remarkable quality but
+require slow, iterative sampling. To accelerate this, flow
+maps can be distilled from pre-trained teachers, a proce-
+dure that conventionally requires sampling from an external
+dataset. We argue that this data-dependency introduces a
+fundamental risk of Teacher-Data Mismatch, as a static
+dataset may provide an incomplete or even misaligned rep-
+resentation of the teacher’s full generative capabilities. This
+leads us to question whether this reliance on data is truly
+necessary for successful flow map distillation. In this work,
+we explore a data-free alternative that samples only from
+the prior distribution—a distribution the teacher is guaran-
+teed to follow by construction, thereby circumventing the
+mismatch risk entirely. To demonstrate the practical viability
+of this philosophy, we introduce a principled framework that
+learns to predict the teacher’s sampling path while actively
+correcting for its own compounding errors to ensure high
+fidelity. Our approach surpasses all data-based counter-
+parts and establishes a new state-of-the-art by a significant
+margin. Specifically, distilling from SiT-XL/2+REPA, our
+method reaches an impressive FID of 1.45 on ImageNet
+256×256, and 1.49 on ImageNet 512×512, both with only 1
+sampling step. We hope our work establishes a more robust
+paradigm for accelerating generative models and motivates
+the broader adoption of flow map distillation without data.
+ Project page: data-free-flow-distill.github.io
+1. Introduction
+Diffusion models [22, 28, 73, 78] and flow models [1, 18,
+40, 43, 56, 91, 92] have revolutionized high-fidelity syn-
+thesis [23, 60, 62, 86], yet their reliance on numerically
+integrating an Ordinary Differential Equation (ODE) cre-
+ates a significant computational bottleneck. To resolve this
+latency, flow maps [5], which learn the solution operator
+of the ODE directly, offer a principled path to accelera-
+tion, bypassing iterative solving by taking large “jumps”
+*Equal contribution, †Equal advising
+Data ˜p
+add noise
+add noise
+sample
+sample
+Teacher ˆp
+˜pt →= ˆpt
+˜p1 = ˆp1 = 𝜔
+Ez→𝜔,𝜀
+)︃)︃)︃)︃
+d
+d𝜔𝜔F𝜗(z, 𝜔) →u(f𝜗(z, 𝜔), 1→𝜔)
+)︃)︃)︃)︃
+2
+Et,s,xt→˜pt
+)︃)︃)︃)︃
+d
+dt(t →s)F𝜔(xt, t, s) →u(xt, t)
+)︃)︃)︃)︃
+2
+Figure 1. Teacher-Data Mismatch and the data-free alternative.
+(Top) Conventional data-based distillation relies on intermediate
+distributions (˜pt) derived from a static dataset, which could be
+misaligned with the teacher’s true generative distributions (ˆpt).
+(Bottom) The data-free paradigm, in contrast, samples only from
+the prior (π), the single distribution with guaranteed alignment,
+thereby circumventing the mismatch risk by construction.
+along the generative trajectory. While flow maps can be
+trained from scratch [4, 12, 14, 79], a more flexible alter-
+native is to distill them from powerful, pre-trained teacher
+models [3, 32, 64, 65, 79]. This modular strategy allows
+for the compression of state-of-the-art models, which are
+often the product of advanced training [38, 100, 102] and
+post-training [39, 41, 84, 90, 101] techniques.
+We observe that the dominant and most successful flow
+map distillation approaches are data-based, relying on sam-
+ples from an external dataset to train the student. We argue
+1
+arXiv:2511.19428v1  [cs.LG]  24 Nov 2025
+
+that this tacitly accepted dependency introduces a funda-
+mental risk of Teacher-Data Mismatch. As illustrated
+in Fig. 1, a static dataset may provide an incomplete or
+misaligned representation of the teacher’s true generative
+capabilities.
+This discrepancy arises frequently in prac-
+tice: when a teacher generalizes beyond its original training
+set [26, 27, 54, 58, 70, 75, 96, 99]; when post-hoc fine-
+tuning [39, 41, 84, 90, 101] shifts the teacher’s distribution
+away from the original data; or when the teacher’s propri-
+etary training data is simply unavailable [6, 35, 62, 71, 87].
+In these scenarios, forcing a student to match the teacher on
+a misaligned dataset fundamentally constrains its potential.
+Fortunately, this mismatch is not inevitable. We observe
+that while the teacher’s generative paths may diverge from
+the dataset, they are, by definition, anchored to the prior
+distribution. As shown in Fig. 1, the prior serves as the
+single point of guaranteed alignment: it is the shared origin
+for the teacher’s generation and the termination point for any
+noising process. This insight leads us to question whether
+the common reliance on data is truly necessary. We posit
+that we can instead build a robust, data-free alternative by
+sampling only from the prior, thereby circumventing the
+mismatch risk entirely by construction.
+To operationalize this philosophy, we introduce a prin-
+cipled framework designed to track the teacher’s dynamics
+purely from the prior. Our method takes a sample from the
+prior and a scalar integration interval, predicting where the
+flow should jump. We show that optimality is achieved when
+the model’s generating velocity, the rate at which it traverses
+its own path, aligns with the teacher’s instantaneous velocity.
+Nevertheless, like any autonomous numerical solver, this
+prediction process is susceptible to compounding errors. To
+mitigate this, we propose a correction mechanism that further
+aligns the model’s noising velocity, the marginal velocity of
+the noising flow implied by the student’s predicted distribu-
+tion, back to the teacher. We name our proposal FreeFlow,
+emphasizing its defining characteristic as a completely data-
+free distillation framework for flow maps.
+We validate our approach through extensive experiments
+on ImageNet [63]. Distilling from a SiT-XL/2+REPA [100]
+teacher, FreeFlow establishes a new state-of-the-art, reaching
+an impressive FID of 1.45 on 256×256 and 1.49 on 512×512
+with 1 function evaluation (1-NFE), significantly surpass-
+ing all data-based baselines. Furthermore, by leveraging
+its nature as a fast, consistent proxy, FreeFlow enables effi-
+cient inference-time scaling [51, 72], allowing for the search
+of optimal noise samples in a single step. Ultimately, our
+findings confirm that an external dataset is not an essential re-
+quirement for high-fidelity flow map distillation, and the risk
+of Teacher-Data Mismatch can be avoided entirely without
+compromising performance. We believe this work provides
+a more robust foundation for generative model acceleration
+and motivates a shift toward the data-free paradigm.
+2. Preliminaries
+Diffusion and flow. Diffusion models [22, 28, 73, 78] and
+flow models [1, 18, 40, 43, 56, 91, 92] are trained to reverse
+a reference noising process that transports the data distribu-
+tion p ≡p0 to a easy-to-sample prior distribution π ≡p1
+like N(0, I). We denote the interpolating distributions in be-
+tween as pt and their samples xt, indexed by time t ∈[0, 1].
+For the linear interpolation scheme [40, 43, 50] that we uti-
+lize throughout the paper, given a pair of terminal samples
+x ∼p and z ∼π, we construct the noising process from its
+interpolants, xt = It(x, z) := (1 −t)x + tz, which in turn
+defines a conditional velocity, pointing in the direction from
+prior to data, u(xt, t | x, z) := −∂tIt(x, z) = x −z. Tak-
+ing the expectation over p and π, we arrive at the marginal
+instantaneous velocity, u : Rd × [0, 1] →Rd, a vector field
+that dictates how the samples evolve, which governs the
+noising process with the following ODE:
+dx(t) = −u(x(t), t)dt,
+(1)
+where x(t) ∈Rd denotes the state of the system. In practice,
+the typically unknown u can be well approximated by a
+model gψ with parameters ψ, trained with denoising score
+matching [77, 83] or conditional flow matching [40, 56]:
+Ex,z,t ∥gψ(It(x, z), t) −u(It(x, z), t | x, z) ∥2 .
+(2)
+For sampling, we need to solve Eq. (1) by integrating the
+flow backward in time:
+ϕu(xt, t, s) = xt +
+Z s
+t
+−u(x(τ), τ)dτ,
+(3)
+where ϕu : Dflow →Rd, Dflow = {(y, ζ, ξ) | y ∈Rd, ζ ∈
+[0, 1], ξ ∈[0, ζ]}, denotes the generating flow equipped with
+underlying velocity field u, and t −s is the integration
+time interval. The standard sampling procedure of flow
+models corresponds to calculating ϕu(z, 1, 0), z ∼π. In
+practice, we resort to some numerical solver, like Euler [74,
+78] and Heun methods [28]. Since the underlying trajectories
+typically exhibit complicated structure and curvature [88,
+93], such numerical integration procedures often require
+dozens or even hundreds of NFEs for a single generation.
+Flow maps. Instead of approximating the instantaneous
+velocity u, a flow map model [3, 5, 12, 14, 32, 64, 65, 79],
+fθ parameterized by θ, is trained to directly approximate
+ϕu. Existing works dissect and utilize key properties of
+ϕu to construct their training objective, typically via the
+local dynamics described by u. For example, in Mean-
+Flow [14], the network Fθ : Dflow →Rd represents the
+average velocity f travels over its path: fθ(xt, t, s) =
+xt+(t−s)Fθ(xt, t, s). At optimality, we know from Eq. (3)
+2
+
+Number of classes￼↓
+Resolution￼↓
+Figure 2. Impact of Teacher-Data Mismatch. With a fixed teacher
+model, increasing augmentation induces a more severe mismatch
+between teacher and data, degrading student performance.
+that (t −s)Fθ∗(xt, t, s) =
+R s
+t −u (x(τ), τ) dτ. Differenti-
+ating both sides w.r.t. t leads to
+Fθ∗(xt, t, s) + (t −s) d
+dtFθ∗(xt, t, s) = u(xt, t),
+(4)
+where d
+dtF is the total derivative that can be further expanded
+into ∇xtF dxt
+dt + ∂tF . This identity then motivates the
+following practical training objective:
+Et,s,xt ∥Fθ(xt, t, s) −sg (uMF) ∥2 ,
+(5)
+where sg(·) denotes the stop-gradient operation, and uMF =
+u(xt, t) −(t −s) d
+dtFθ(xt, t, s). The decision to drop the
+remaining gradients is mostly empirical and common in
+prior literature [12, 14, 45, 76], as it results in faster, less
+resource-demanding, and often more stable training. Here, u
+is either co-trained from scratch [14] together with Eq. (2), or
+a pre-trained flow model [57, 64, 79] in a procedure known
+as flow map distillation. In this paper, we focus on the
+second case, since this modular approach allows for easier
+incorporation of advanced training [38, 100, 102] and post-
+training [39, 41, 84, 90, 101] techniques.
+3. With or Without Data?
+The goal of flow map distillation is to create a student fθ that
+faithfully reproduces the full generative process of the given
+ϕu, just with fewer NFEs. Intuitively, existing methods
+learn the teacher sampling dynamics at a series of intermedi-
+ate states xt (note the expectation over xt in Eq. (5)). Our
+discussion begins from this very point, with a closer inspec-
+tion of a foundational, yet largely unexamined, element: the
+underlying distribution from which these states xt are drawn.
+3.1. The Risk of Teacher-Data Mismatch
+The distribution of xt is conventionally formed by sampling
+from a data-noising distribution, which we denote as ˜pt. This
+is the set of all interpolants It(˜x, z) generated by taking a
+data point ˜x ∼˜p1 and a prior sample z ∼π. Although
+tacitly accepted, this practice implicitly assumes that ˜pt is a
+suitable representation of the states the teacher model follows
+over its sampling trajectory.
+We note that the teacher defines a distinct set of interme-
+diate states via Eq. (3). The set of all xt along these solution
+paths constitutes the true teacher-generating distribution,
+which we denote as ˆpt. For the student to perfectly repro-
+duce the teacher, it should be trained to match the teacher’s
+dynamics over ˆpt. The central problem that we identify in
+this paper, which we term the Teacher-Data Mismatch, is
+that these two distributions are not equivalent: ˜pt ̸= ˆpt.
+By training on ˜pt, the student is compelled to learn the
+teacher’s dynamics only on trajectories that are anchored
+to the static dataset ˜p.
+Any generative behavior of the
+teacher that starts from π and evolves through states not
+well-represented by ˜pt will be systematically ignored during
+training. Consequently, even a perfectly converged student
+is not guaranteed to reproduce the teacher’s outputs, as it has
+fundamentally been trained to distill the wrong process.
+To examine and validate the impact of the discussed mis-
+match, we design a controlled experiment on ImageNet,
+where we introduce deliberately misaligned ˜pt distributions
+by applying data augmentations during the training of con-
+ventional flow map distillation. As shown in Fig. 2, the qual-
+ity of the learned flow map is highly sensitive to the fidelity
+and representativeness of the distillation dataset: stronger
+augmentation leads to a larger discrepancy between ˆpt and
+˜pt, and, in turn, results in a more significant degradation in
+student performance.
+This mismatch is not merely a theoretical curiosity; it
+manifests in several common and critical scenarios. First,
+when a powerful teacher model has generalized beyond its
+training set [26, 27, 54, 58, 70, 75, 96, 99], or even when
+it simply employs the widely adopted Classifier-Free Guid-
+ance (CFG) [21], its generative distribution ˆp0 will contain
+novel, extrapolated samples not present in p, causing its
+trajectories ˆpt to necessarily diverge from the data-noising
+paths pt. Second, if the teacher has been altered by post-
+hoc fine-tuning [39, 41, 84, 90, 101], its generating flow is
+deliberately modified, again forcing ˆpt to diverge from the
+original data-noising distribution. Third, a teacher model
+may be released publicly while its massive, proprietary train-
+ing data is not [6, 35, 62, 71, 87]. In this case, p is simply
+unavailable, and any proxy dataset used will almost certainly
+create a severe mismatch.
+1We use ˜p to denote the dataset available at distillation time. As we will
+discuss, it may differ from p.
+3
+
+Figure 3. Selected samples from FreeFlow-XL/2 model at 512×512 resolution with 1-NFE. More uncurated results are in App. D.
+3.2. Towards a Data-Free Alternative
+A straightforward remedy to the Teacher-Data Mismatch
+is to directly sample from ˆpt during training. This would
+involve sampling z ∼π, integrating the teacher model from
+t = 1 to a random time t to get xt = ϕu(z, 1, t), and then
+using this xt in the distillation loss. Just like the case of
+knowledge distillation [20, 43, 47, 104], where the model
+is trained to learn the fully integrated outcomes at t = 0,
+obtaining reference trajectories on-the-fly is prohibitively
+costly, whereas pre-computing them offline scales poorly.
+In short, for high-dimensional or complex conditional tasks,
+generating enough samples to adequately represent the un-
+derlying distribution simply becomes intractable.
+This apparent impasse leads us to re-examine the prop-
+erties of these two distributions. While ˆpt and ˜pt diverge
+for t ∈[0, 1), they are, by construction, identical at t = 1.
+The data-noising process terminates at the prior distribution
+(i.e., ˜p1 ≡π), and the teacher’s generative process begins at
+the same prior (i.e., ˆp1 ≡π). This observation provides a
+crucial foothold. The prior π is the one distribution we can
+sample from that is guaranteed to be on-distribution for the
+teacher’s generative process, completely circumventing the
+risk of Teacher-Data Mismatch.
+This insight motivates our central question: Is the com-
+monly followed data-dependency truly necessary for flow
+map distillation? We argue that it is not. In the following,
+we explore a data-free alternative, building a new flow map
+distillation objective governed only by the prior distribution.
+4. Flow Map Distillation Without Data
+Our exploration now moves from motivation to mechanism.
+A flow map model can be generally understood as directly
+modeling a segment of a full generative trajectory, and the
+core principle for training such a model is to enforce consis-
+tency with u at some point along this segment, ensuring the
+learned dynamics are locally correct. The segment’s two key
+points provide natural candidates: a sampled start-point, xt,
+and a predicted end-point, xs = fθ(xt, t, s).
+This perspective provides a clear lens through which to
+view the distillation process. In the conventional, data-based
+setting, the start-point xt is drawn from a series of data-
+noising distributions ˜pt. It is thus natural to constrain the
+model by perturbing this start-point, which corresponds to
+differentiating the optimal condition, (t −s)Fθ∗(xt, t, s) =
+R s
+t −u (x(τ), τ) dτ, with respect to t. This operation leads
+to the MeanFlow identity [14] in Eq. (4), which effectively
+enforces consistency at the start of the segment.
+In our data-free investigation, however, we only sample
+our start-point from the prior π, which fixes xt = z at
+t = 1. Consequently, perturbing the start-time t, and in
+turn the start-point, is no longer a meaningful operation.
+Thus, we consider the symmetrical alternative: if we cannot
+enforce consistency by perturbing the sampled start-point,
+we can instead do so by perturbing the predicted end-point.
+This provides a different path to ensuring the student’s local
+dynamics are correct, and it corresponds to differentiating
+the optimal condition with respect to the end time s.
+To formalize this, we first simplify our notation to reflect
+this prior-anchored (t = 1) view. That is: (1) We define the
+integration duration as δ = t −s = 1 −s, where δ ∈[0, 1];
+(2) The flow map fθ(z, δ) : Rd × [0, 1] →Rd approxi-
+mates the true flow ϕu(z, 1, 1−δ); (3) The average velocity
+Fθ(z, δ) : Rd × [0, 1] →Rd is linked by the parameteri-
+zation fθ(z, δ) = z + δFθ(z, δ). The optimal condition,
+anchored at t = 1, thus reduced to:
+δFθ∗(z, δ) =
+Z 1−δ
+1
+−u (x(τ), τ) dτ.
+(6)
+Following our exposition, we differentiate both sides of
+Eq. (6) w.r.t. δ (equivalent to differentiating w.r.t. −s):
+Fθ∗(z, δ) + δ∂δFθ∗(z, δ) = u (fθ∗(z, δ), 1 −δ) .
+(7)
+Eq. (7) differs from Eq. (4) in subtle ways: (1) The time
+derivative of Fθ is just a partial derivative, as z does not
+depend on δ; (2) u is evaluated at a state predicted by fθ.
+The identity defined in Eq. (7) provides a sufficient con-
+dition for optimality, which motivates the following loss:
+Ez,δ ∥Fθ(z, δ) −sg(utarget) ∥2 ,
+(8)
+where utarget = u (fθ(z, δ), 1 −δ) −δ∂δFθ(z, δ). Remark-
+ably, we verify that Eq. (8) is formulated by only sampling
+4
+
+from the prior π, without any reliance on an external dataset
+˜p and thus free from the risks of Teacher-Data Mismatch.
+Hence, it achieves the goal of our exploration.
+4.1. Predict With Generating Flows
+We now analyze our proposed objective in Eq. (8). Note
+that ∂δfθ(z, δ), the model prediction’s rate of change with
+respect to the integration time, is the velocity with which
+the model travels along its generating flow. Thus, the opti-
+mality of the student is equivalent to the alignment between
+the model’s generating velocity and the underlying veloc-
+ity. Indeed, it is easy to see that the loss value of Eq. (8) is
+the same as Ez,δ∥∂δfθ(z, δ) −u(fθ(z, δ), 1 −δ)∥2, which
+evaluates to 0 if and only if ∂δf = u. Intuitively, the stu-
+dent is analogous to an autonomous ODE solver, which uses
+its current estimated state to query the derivative function
+and compute the next state. The student learns to “ride” the
+teacher’s vector field, starting from π and extending outward,
+step by step, based entirely on its own evolving predictions.
+In practice, ∂δFθ can be calculated easily and efficiently
+via Jacobian-vector product (JVP) with forward-mode auto-
+matic differentiation, barring some advanced computation
+kernels, which currently require customized solutions [45].
+Still, it is desirable to work with a more flexible loss func-
+tion with no such limitations, which is why we derive a
+discrete-time alternative (detail in App. A.1) that numeri-
+cally approximates ∂δFθ with finite differences.
+Consequently, we abstract away the computation detail,
+and use the general notation vG(fθ(z, δ), 1−δ) to denote the
+student’s generating velocity ∂δfθ(z, δ). The understanding
+that Eq. (8) aligns vG and u can also be observed from its
+optimization gradients:
+∇θ Ez,δ
+
+Fθ(z, δ)⊤sg
+
+∆vG,u(fθ(z, δ), 1 −δ)
+
+,
+(9)
+where ∆vG,u(fθ(z, δ), 1 −δ) is the difference between
+vG(fθ(z, δ), 1 −δ) and u(fθ(z, δ), 1 −δ). Explicitly writ-
+ing out the gradients makes it easier to adopt techniques like
+gradient weighting/normalization explored in Sec. 5.1. Note
+that, if Fθ is further parameterized, we should replace the
+first term in Eq. (9) with the actual network output to ensure
+effective gradient control by only modifying ∆vG,u.
+Lastly, we note that advanced sampling techniques can
+be easily incorporated in u, e.g., for classifier-free guidance
+(CFG) [21], we could simply replace u(xt, t | c)2 with
+uγ(xt, t | c) = γ · u(xt, t | c) + (1 −γ) · u(xt, t | c = ∅),
+where c is condition with ∅referring to a null input, and
+γ is the guidance strength. Furthermore, the model can be
+trained on a range of γ values, which enables the ability to
+effortlessly change the guidance strength at inference time.
+The Challenge of Error Accumulation. In practice, the
+student model fθ is only a learned approximation, not a
+2We omit c everywhere else in the paper for simplicity.
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Timestep
+0.0
+0.1
+0.2
+0.3
+0.4
+Relative Error
+u
+F𝜔
+9
++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</latexit>vN
+<latexit sha1_base64="B4kFPw7lUFTSjgkx0LcAIJWlKFc=">ArsHichZrZctzGFYZpZ3OUTU4uc4OKpLJj0QypSjm+tLgvw32nRlZhMGcwELEJ3QOSQs0
+T5GlymzxJ3ianG8D8p8GRQ1Zx0N/faCz9nz5nQAzyOFJ6efm/n3+s5/4pe/+uLXT37z29/9/g9Pv/zjhcomRUDnQRZnxdXAVxRHKZ3rSMd0lRfkJ4OYLge3a0a/LKlQUZae6Yec3iZ+mEajKPA1o3dPX/TtG+2z/Z7b6u1ZfM79fqa7nXlD4demkWKpu+ePlteWrY/3uONlWbj2ULzc/Tuy29Uf5gFk4RSHcS
++Um9WlnP9tvILHQUxTZ/0J4pyP7j1Q3oz0aPv31ZRmk80pcHUe+GdZIOJ0t752ea3tqkudZoeUuVZD4uem4k+RFVpLyjtY3PUV+EYz9QRH+uFvQZY/fJv7SpNzsLOVt9UoS9sjHU40H9YzRHlR6p2teKxkwygNGRbegLSmwg5v7olzEn6iEl+PF/lTPSQD82nHWRwkzgVWSRQUmbn7zim/50uczYTnp0N7BC/2H7KJeyDgyxV
+3zEO0dD3r2o75Hdxw+i5X3NS2FS4v2xPmu8bQHRZRr9Vf3qkPk0yTMqNtck8+He7qGVifSuIXt8q9AL5Mn
+fERzD4b93zhsprLt/pmEYBjQo/aMc2Z+0Hmu+sMahnJHMIZ/Q3qgxTPyH1trq3Zpw+4Z/+kEb9gKL42UrVj82G92zF6xdma1qrozjLCivbrVq3m0HlgZJtTLlZkp3fC4J3+Wqrws/SqdV35x9
+4MfVerdD6cfRUHZ4V28XSVL0dDktLzd7CK6V+fEuWqszfKM5SQ5+w23mILPFKv4h8jltV9yxI+1VlIzHNioRHfd5n9Nwe23boyD6UgasMoASuEkAZusoQCrkKQRm5yghK6CohlLGrjKFErhJBe8q76HcusotlNhVYqO8IrEi9i6Ma+RwfP95oZXLTR6A2z9CvtGTNyPD54RWdivKQZO3XHTnHUzFUyKLmr5FA+uMoHKIWrF
+CUqygo2lU0lImrTKCUrlJCuXOVOyj3rnIP5cFVHqB8dJWPNi4QABTorGjtXzZBUtWhNBiJsJmdtx7XUdL2sG2hC03iAbCIjTIAFoFRDoFVJQELEKiHAGLeChDYBEM5RhYREI5ARZhUL4HFjFQ3gKLAChj4FjgBDgRWNxoeYczYGH
+mMgcWTi4/AsblwWw8HCpgJWcVGA9/5I65bAwrflHbAwbXkPLBxbPgALu
+5YfgVuvbsRkihrlZaPZ+iB9S7Xp5q7LVDtv7spMtf3mrs1Ue3Du6ky1Eeuz1S7ce4KTbUl567RVPty7irN2ifXaodOnelptqmc9dqr3aXa1bLXG1RGqfXImptu7ctZhq/85djak28dz1mGonz12Rqbz3DWZak/PXZWpNvbcdZlqd89dmam2+Ny1mWqfz12dqTb73PWZasd/eoXmWCi4wmuX6OQ14uM1wiZBV4VeA14TeB14HW
+BN4A3BN4E3hR4C3hL4G3gbYF3gHcE3gXeFXgPeE/gHnBP4H3gfYEPgA8EPgQ+FPgI+EjgY+BjgU+ATwQ+BT4V+Az4TOBz4HOBL4AvBL4EvhT4CvhK4Gvga4FvgG8+vby6pqPadcKjr4V/rfWEtiq1NVdbk9q6q61LbcPVNqS26WqbUtytS2pbvatR2XG1Harutiu1PVfbk1rP1XpS23e1fakduNqB1A5d7V
+BqR652JLVjVzuW2omrnUjt1NVOp
+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</latexit>add noise
+Figure 4. Approximation errors
+accumulate as the prediction
+proceeds from noise to data.
+Figure 5. Correction objective
+in Eq. (11) aligns the student’s
+noising velocity vN with u.
+mathematically perfect one. At any δ, its prediction fθ(z, δ)
+may contain a small approximation error, placing it slightly
+off the true teacher trajectory ϕu(z, 1, 1 −δ). Because the
+objective is self-referential, this small deviation influences
+the target used for subsequent steps. The student queries
+the teacher at its current and potentially slightly erroneous
+state, and the resulting velocity target, while correct for
+that state3, may not guide the student back toward the true
+path. Such errors can compound as the integration proceeds
+from δ = 0 to δ = 1. In Fig. 4, we measure the relative
+differences between the student’s predicted trajectory and the
+teacher’s true sampling path, which empirically quantifies
+and confirms such a phenomenon as the student progressively
+diverges from the teacher when δ increases.
+4.2. Correct With Noising Flows
+The problem identified above is that the student is trained to
+predict the next state based on its current one, but it has no
+means to correct its own deviations and pull the trajectory
+back towards the teacher’s true path. Drawing inspiration
+from Song et al. [78], we seek to correct the marginal dis-
+tributions of the student solutions, analogous to a predictor-
+corrector method for solving ODEs [2]. Additionally, the
+correction objective cannot reintroduce the data-dependency
+we have worked to remove, meaning that we do not consider
+objectives like GANs [15] that rely on an external dataset.
+Variational Score Distillation [85] was originally pro-
+posed as a training procedure to distill distributions from
+pre-trained diffusion models by minimizing the Integral KL
+divergence [48]. We slightly adapt it to our setting, where
+we use q ≡q0 to denote the marginal distribution of clean
+samples generated by the model,
+R
+fθ(z, 1)dπ. Specifically,
+it has been shown that q = p if and only if their IKL diver-
+gence is 0, which is defined as
+DIKL(q ∥p) :=
+Z 1
+0
+Exr∼qr
+
+log qr(xr)
+pr(xr)
+
+dr,
+(10)
+where qr and pr are the marginal interpolating distributions,
+following the same noising process constructed by I.
+The optimization gradient of Eq. (10) w.r.t. θ is
+Er,xr
+h
+(∇θxr)⊤(∇xr log qr(xr) −∇xr log pr(xr))
+i
+. As
+3This assumes the teacher is perfect, which is not true in practice.
+5
+
+the score functions are interchangeable with the marginal
+velocities [50], we can optimize with the following gradient
+instead for correcting the student’s prediction:
+∇θ Ez,n,r
+
+Fθ(z, 1)⊤sg
+
+∆vN,u(Ir(fθ(z, 1), n), r)
+
+,
+(11)
+where n is sampled from the prior π like z. We verify that
+Eq. (11) is also formulated by only sampling from π, free
+from the risks of Teacher-Data Mismatch. Here, vN denotes
+the marginal velocity of the noising flow constructed from
+the generated distribution q with the interpolating function I,
+and ∆vN,u is the difference between vN and u. We illustrate
+the high-level understanding of this mechanism in Fig. 5.
+Since vN is unknown, we approximate it with another on-
+line network gψ4, full-parameter [48, 95, 97, 98, 107, 108]
+or LoRA [24, 53, 85], with loss in Eq. (2). More specifically,
+for a pair of samples fθ(z, 1) and n, the conditional nois-
+ing velocity is −∂rIr(fθ(z, 1), n), and we arrive at vN by
+taking the expectation over z ∼π and n ∼π:
+Ez,n,r ∥gψ(Ir(fθ(z, 1), n), r) + ∂rIr(fθ(z, 1), n) ∥2 .
+(12)
+We highlight the similarity of the gradient forms between
+Eq. (9) and Eq. (11). Consequently, we identify that the
+optimality of the student is also equivalent to the alignment
+between the model’s noising velocity and the underlying
+velocity. That is, Eq. (10) evaluates to 0 if and only if
+∆vN,u = 0. Such a velocity alignment perspective offers a
+series of new understandings, which provide the essential
+reasoning behind the practical design choices discussed later
+in Sec. 5.1. We further note that a comprehensive correc-
+tion procedure should correct the full predicted trajectory of
+the student, rather than only the end sample considered in
+Eq. (10). However, we do not find such a design helpful in
+the experiment settings we considered in Sec. 5.
+5. Experiments
+We empirically validate our proposed method on Ima-
+geNet [63] at 256×256 and 512×512 resolutions using FID-
+50K [19], with implementation details provided in App. B.
+5.1. Design Decisions
+We analyze each design choice through targeted qualitative
+and quantitative studies, presenting key findings in the main
+text and deferring full analyses to the App. A. Unless speci-
+fied otherwise, we adopt the DiT-B/2 architecture [55], use
+the pre-trained SiT-B/2 [50] as u and student initialization,
+train the model for 400K iterations (roughly equivalent to 80
+epochs with a batch size of 256) with uniformly sampling
+4Further parameterizations on gψ are permissible.
+r sampling; Eq. (11)
+FID ↓
+LogitNormal(-0.4, 1.6)
+6.24
+LogitNormal(0.0, 1.6)
+5.95
+LogitNormal(0.4, 1.6)
+5.78
+LogitNormal(0.8, 1.6)
+5.63
+LogitNormal(1.2, 1.6)
+5.78
+(a) r sampling. More emphasis on
+higher noise levels leads to better
+results when aligning vN and u.
+r range; Eq. (11)
+FID ↓
+[0, 0.6]
+91.82
+[0, 0.7]
+24.62
+[0, 0.8]
+9.00
+[0, 0.9]
+6.64
+[0, 1.0]
+6.02
+(b) r range. With a uniform distri-
+bution over r, dropping higher noise
+levels leads to worse results.
+interval; Eq. (11)
+FID ↓
+[0, 0.5]
+7.09
+[0, 0.6]
+5.72
+[0, 0.7]
+5.63
+[0, 0.8]
+6.44
+[0, 0.9]
+7.41
+[0, 1.0]
+8.65
+(c) Guidance interval. Compared
+to teacher sampling, a more aggres-
+sive guidance interval is better.
+objective
+k
+FID ↓
+Eq. (9)
+0.0
+11.91
+0.5
+11.71
+1.0
+12.40
+Eqs. (9) and (11)
+0.0
+43.53
+0.5
+10.58
+1.0
+5.58
+(d) Gradient weighting.
+With
+both objectives, stronger decay on
+∆vG,u leads to better training.
+Table 1. Empirical investigations of various design decisions.
+γ ∈[1, 2], and evaluate with the best γ = 2. We begin with
+designs specific to training with one of Eqs. (9) and (11),
+followed by studies on how to properly combine the two.
+Sampling of r in Eq. (11). Traditionally, within the dif-
+fusion framework and from the divergence minimization
+perspective, the sampling of r in Eq. (11) often follows a
+uniform distribution over the discretized steps designed for
+generation [59, 85, 98]. Here, we provide a new perspective
+on the Eq. (11), which drives our proposal on the sampling
+distribution of r. Recall that the optimality of our correction
+objective is ∆vN,u = 0, the alignment between the nois-
+ing velocity of the model’s generated distribution and the
+underlying velocity. The velocity fields induce a pair of
+continuity equations ∂tpt(x) = −∇x · (pt(x)u(x, t)) and
+∂tqt(x) = −∇x · (qt(x)vN(x, t)), which dictate the evolu-
+tion of p and q. We note that p1 = q1 = π by construction,
+and the gap between p0 and q0 can be understood as the
+time-integrated accumulation of the differences in their cor-
+responding probability fluxes. This understanding suggests
+we place a greater emphasis on higher noise levels, and we
+empirically validate this intuition in Tabs. 1a and 1b.
+Handling guidance in Eq. (11). The usual treatment for
+including guidance in Eq. (11) is the same as in Eq. (9):
+replacing it with the guided velocity uγ. However, we high-
+light that there is a subtle but major difference between vG
+and vN. In a traditional flow model training with Eq. (2),
+we essentially train the model to learn a dataset’s noising
+velocity, and use it as the generating velocity during sam-
+pling, i.e., the two velocities are identical as they describe
+the same process. However, this equivalence no longer holds
+in the presence of techniques like CFG [29, 103], and the
+distinction is especially prominent at high noise levels. We
+resort to dropping the guidance application at high noise
+levels, in a similar fashion to the guidance interval [34] used
+6
+
+200K
+400K
+600K
+800K
+Training step
+5.4
+5.6
+5.8
+6.0
+6.2
+6.4
+6.6
+6.8
+FID-50K
+= 3
+= 1.5
+= 0.6
+= 0.3
+Eq.11
+Figure 6. Performance is robust across α.
+200K
+400K
+600K
+800K
+Training step
+2
+4
+6
+8
+10
+FID-50K
+Eq.9
+Eq.11
+Eq.9 + Eq.11
+Figure 7. Synergy between Eqs. (9) and (11).
+SiT-XL/2: 2.15
+Figure 8. Inference-time scaling.
+for flow sampling. Furthermore, as demonstrated in Tab. 1c,
+we stress that their empirical behaviors are different, and
+one typically needs to limit the interval significantly more
+aggressively (the pre-trained SiT-B/2 does not benefit from
+guidance interval with γ = 2) in our correction objective.
+Adaptive gradient balancing between Eqs. (9) and (11).
+We now discuss how to fuse the training signals from Eqs. (9)
+and (11). First, in a similar manner to prior works [12, 14],
+we decide to split the training batch between the predic-
+tion and correction objectives (75% and 25%, respectively),
+since correction is slightly more expensive compute-wise.
+Then, we adopt an adaptive gradient balancing strategy [10],
+where the correction gradients are scaled by some dynamic
+weight λ before concatenating with the prediction gradients.
+With the form similarity between Eq. (9) and Eq. (11), and
+the observation that both optimizations lack aleatoric un-
+certainty [31]5, we design λ = α
+E∥∆vG,u∥
+E∥∆vN,u∥+ϵ, where the
+expectation is taken over the mini-batch and ϵ = 10−6 is
+used for numerical stability. We show that the model perfor-
+mance is robust across a wide range of α in Fig. 6.
+Gradient norm manipulations in Eq. (9). We note that we
+can change the magnitude of ∆vG,u freely without changing
+the optimal solution, which can also be understood as chang-
+ing the loss metrics [13]. Concretely, we can scale ∆vG,u
+with per-sample positive weights. Prior works [13, 14, 76]
+mostly explored scaling with 1/(∥∆vG,u∥2 + ε)k, where
+ε = 10−4 is used for numerical stability and we vary the
+power term k. Since the actual weighting applied depends on
+the original norm of ∆vG,u, which changes with the dimen-
+sion of data d, we first divide it by
+√
+d so that it is dimension
+invariant before calculating the weight. We note that such
+a weighting design corresponds to applying a power-law
+decay on ∆vG,u, and a larger k indicates a stronger decay,
+effectively dampening the gradient contributions. In Tab. 1d,
+we find that the model prefers weightings with a stronger
+decay when training with both Eqs. (9) and (11). We hypoth-
+esize that this is because their signals may not always agree
+with each other in practice, and by applying a dampener on
+∆vG,u, we mitigate the conflict between the two objectives
+and promote a more harmonious joint optimization.
+5∆vG,u and ∆vN,u represent the quality of alignments, unlike Eq. (2).
+5.2. Main Results
+Comparisons with prior work. In Tab. 2, we benchmark
+our approach against existing proposals for learning fast
+flows on class-conditional ImageNet [63] generation at both
+256×256 and 512×512 resolutions. We highlight three key
+findings from our main results. (1) Our method achieves
+state-of-the-art performance by a significant margin. Dis-
+tilling from SiT-XL/2+REPA [100], our method reaches an
+impressive FID of 1.45 on 256×256 and 1.49 on 512×512,
+greatly outperforming prior proposals. (2) Competitive per-
+formance is realized very early in training. Our model
+surpasses the final performance of many strong baselines
+after only 100K iterations (≈20 epochs), demonstrating ex-
+ceptional training efficiency. (3) Our student faithfully
+reproduces the teacher’s full capabilities with 1-NFE.
+Our distilled model consistently stays within 10% of the
+teacher’s original performance with only a single step, even
+when the teacher employs advanced training techniques like
+REPA [100], and sampling techniques like guidance inter-
+vals [34]. This is a critical advantage over training fast flows
+from scratch: it allows us to seamlessly inherit the benefits
+of complex teacher training recipes, which can be compli-
+cated to adopt [36], simply by distilling the final product.
+Crucially, we emphasize that our results are achieved using
+only the pre-trained teacher model, without requiring access
+to a single sample from an external dataset, real or synthetic,
+thus validating the effectiveness of the data-free paradigm.
+Synergy between prediction and correction. While theory
+suggests that either learning the flow trajectories (Eq. (9)) or
+matching the marginal distributions (Eq. (11)) could suffice
+for generation, we find that neither is robust in isolation.
+The prediction objective, when used alone, falls victim to
+the error accumulation identified in Sec. 4.1, plateauing at
+suboptimal fidelity (blue line in Fig. 7). Conversely, train-
+ing only with the correction objective (Eq. (11)) leads to
+gradual mode collapse and performance degradation (green
+line in Fig. 7; also gray baseline in Fig. 6). Fig. 7 illustrates
+the powerful synergy realized by our framework on a SiT-
+XL/2 teacher. By combining both signals at their optimal
+settings, we achieve performance strictly superior to either
+independent component. The prediction signals construct
+7
+
+Table 2. Class-conditional generation on ImageNet 256×256 and 512×512. * indicates the use of AutoGuidance [29]. Methods marked
+with † are initialized from pretrained models. Crucially, unlike other listed distillation baselines, ours is constructed to be entirely data-free.
+Class-Conditional ImageNet 256×256
+Method
+Epochs
+#Params
+NFE ↓
+FID ↓
+Teacher Diffusion / Flow Models
+SiT-XL/2 [50]
+1400
+675M
+250×2
+2.06
+SiT-XL/2+REPA [100]
+800
+675M
+434
+1.37
+Fast Flow from scratch
+Shortcut-XL/2 [12]
+250
+675M
+1
+10.60
+128
+3.80
+IMM-XL/2 [106]
+3840
+675M
+1×2
+7.77
+8×2
+1.99
+STEI [42]
+1420†
+675M
+1
+7.12
+8
+1.96
+MeanFlow-XL/2 [14]
+240
+676M
+1
+3.43
+1000
+2
+2.20
+DMF-XL/2 [36]
+880†
+675M
+1
+2.16
+4
+1.51
+Fast Flow by distillation
+Teacher: SiT-XL/2 (FID = 2.06)
+SDEI [42]
+20
+675M
+8
+2.46
+FACM [57]
+–
+675M
+2
+2.07
+FreeFlow-XL/2
+20
+678M
+1
+2.24
+300
+1
+1.69
+Teacher: SiT-XL/2+REPA (FID = 1.37)
+FACM [57]
+–
+675M
+2
+1.52
+π-Flow [7]
+448
+675M
+1
+2.85
+2
+1.97
+FreeFlow-XL/2
+20
+678M
+1
+1.84
+300
+1
+1.45
+Class-Conditional ImageNet 512×512
+Method
+Epochs
+#Params
+NFE ↓
+FID ↓
+Teacher Diffusion / Flow Models
+SiT-XL/2 [50]
+600
+675M
+250×2
+2.62
+SiT-XL/2+REPA [100]
+400
+675M
+460
+1.37
+EDM2-S* [29]
+1678
+280M
+63×2
+1.34
+EDM2-XXL [30]
+734
+1.5B
+82
+1.40
+EDM2-XXL* [29]
+63×2
+1.25
+Fast Flow from scratch
+sCT-XXL [45]
+761†
+1.5B
+1
+4.29
+2
+3.76
+DMF-XL/2 [36]
+540†
+675M
+1
+2.12
+4
+1.68
+Fast Flow by distillation
+Teacher: EDM2-S* (FID = 1.34)
+AYF-S [64]
+80
+280M
+1
+3.32
+4
+1.70
+Teacher: EDM2-XXL (FID = 1.40)
+sCD-XXL [45]
+320
+1.5B
+1
+2.28
+2
+1.88
+sCD-XXL+VSD [45]
+32
+1
+2.16
+2
+1.89
+Teacher: SiT-XL/2 (FID = 2.62)
+FreeFlow-XL/2
+20
+678M
+1
+3.01
+200
+2.25
+Teacher: SiT-XL/2+REPA (FID = 1.37)
+FreeFlow-XL/2
+20
+678M
+1
+2.11
+200
+1.49
+the generative path, while the correction signals act as a
+stabilizer to rectify compounding errors, ensuring consistent
+improvement throughout training.
+Inference-time scaling. The recently proposed inference-
+time scaling framework [51, 72] offers a promising avenue
+to trade additional compute for generation quality. However,
+existing search strategies typically require the full integra-
+tion of ϕu for every candidate, making the search process
+prohibitively expensive. We propose a more efficient alter-
+native: by distilling the teacher into a flow map, we create a
+fast proxy that retains the teacher’s mapping from noise to
+data. This allows us to conduct the expensive search using
+the cheap, one-step student, transferring only the optimal
+noise to the teacher for final generation. We investigate a
+Best-of-N search with an oracle verifier [51], employing
+our student (trained for only 20 epochs) to guide the fixed
+SiT-XL/2 teacher. As shown in Fig. 8, this approach dras-
+tically improves the teacher’s sampling quality. Crucially,
+the results highlight the benefit of our prediction objective
+(Eq. (9)): while the correction-only model (Eq. (11)) yields
+improvements, it is notably less efficient at identifying trans-
+ferable noise candidates due to a lack of guaranteed trajec-
+tory alignment. Our combined objective, by enforcing strict
+consistency with ϕu, enables a much more effective search.
+With a total budget of only 80 NFEs, our method outperforms
+the teacher’s standard classifier-free guidance sampling at
+128 NFEs. This result demonstrates a powerful practical
+trade-off: by shifting a fraction of the inference burden to
+a short distillation phase, we enable the compute-efficient
+deployment of large-scale diffusion models.
+6. Conclusion
+In this work, we challenge the conventional reliance on ex-
+ternal datasets for flow map distillation. We identify a fun-
+damental vulnerability in this practice, the Teacher-Data
+Mismatch, and argue that a static dataset is an inherently
+unreliable proxy for a teacher’s full generative capabilities.
+This data-dependency is not only risky but also unneces-
+sary. Our principled, data-free alternative, formulated as a
+predictor-corrector framework, resolves this mismatch by
+construction as it samples only from the prior. Our strong em-
+pirical results, which establish a new state-of-the-art, confirm
+the practical viability and strength of this data-free paradigm.
+We believe this work provides a more robust foundation
+for accelerating generative models and hope it motivates a
+broader exploration of flow map distillation without data.
+8
+
+Acknowledgments
+We are grateful to Kaiming He for valuable discussions and
+feedback on the manuscript. This work was partly supported
+by the Google TPU Research Cloud (TRC) program and the
+Google Cloud Research Credits program (GCP19980904).
+ST and TJ acknowledge support from the Machine Learning
+for Pharmaceutical Discovery and Synthesis (MLPDS) con-
+sortium, the DTRA Discovery of Medical Countermeasures
+Against New and Emerging (DOMANE) threats program,
+the NSF Expeditions grant (award 1918839) Understand-
+ing the World Through Code. SX acknowledges support
+from the MSIT IITP grant (RS-2024-00457882) and the
+NSF award IIS-2443404.
+References
+[1] Michael Samuel Albergo and Eric Vanden-Eijnden. Build-
+ing normalizing flows with stochastic interpolants. In The
+Eleventh International Conference on Learning Representa-
+tions, 2023. 1, 2
+[2] Eugene L Allgower and Kurt Georg. Numerical continuation
+methods: an introduction. Springer Science & Business
+Media, 2012. 5
+[3] David Berthelot, Arnaud Autef, Jierui Lin, Dian Ang Yap,
+Shuangfei Zhai, Siyuan Hu, Daniel Zheng, Walter Tal-
+bott, and Eric Gu.
+Tract: Denoising diffusion models
+with transitive closure time-distillation.
+arXiv preprint
+arXiv:2303.04248, 2023. 1, 2, 18
+[4] Nicholas M Boffi, Michael S Albergo, and Eric Vanden-
+Eijnden. How to build a consistency model: Learning flow
+maps via self-distillation. arXiv preprint arXiv:2505.18825,
+2025. 1
+[5] Nicholas Matthew Boffi, Michael Samuel Albergo, and Eric
+Vanden-Eijnden. Flow map matching with stochastic inter-
+polants: A mathematical framework for consistency models.
+Transactions on Machine Learning Research, 2025. 1, 2, 14,
+18
+[6] Siyu Cao, Hangting Chen, Peng Chen, Yiji Cheng, Yutao
+Cui, Xinchi Deng, Ying Dong, Kipper Gong, Tianpeng Gu,
+Xiusen Gu, et al. Hunyuanimage 3.0 technical report. arXiv
+preprint arXiv:2509.23951, 2025. 2, 3
+[7] Hansheng Chen, Kai Zhang, Hao Tan, Leonidas Guibas,
+Gordon Wetzstein, and Sai Bi. pi-flow: Policy-based few-
+step generation via imitation distillation. arXiv preprint
+arXiv:2510.14974, 2025. 8, 18
+[8] Earl A Coddington, Norman Levinson, and T Teichmann.
+Theory of ordinary differential equations, 1956. 13
+[9] Prafulla Dhariwal and Alexander Nichol. Diffusion models
+beat gans on image synthesis. Advances in neural informa-
+tion processing systems, 34:8780–8794, 2021. 16, 17
+[10] Patrick Esser, Robin Rombach, and Bjorn Ommer. Taming
+transformers for high-resolution image synthesis. In Pro-
+ceedings of the IEEE/CVF conference on computer vision
+and pattern recognition, pages 12873–12883, 2021. 7
+[11] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim
+Entezari, Jonas Müller, Harry Saini, Yam Levi, Dominik
+Lorenz, Axel Sauer, Frederic Boesel, et al. Scaling rectified
+flow transformers for high-resolution image synthesis. In
+Forty-first international conference on machine learning,
+2024. 14
+[12] Kevin Frans, Danijar Hafner, Sergey Levine, and Pieter
+Abbeel. One step diffusion via shortcut models. arXiv
+preprint arXiv:2410.12557, 2024. 1, 2, 3, 7, 8
+[13] Zhengyang Geng, Ashwini Pokle, William Luo, Justin Lin,
+and J Zico Kolter. Consistency models made easy. arXiv
+preprint arXiv:2406.14548, 2024. 7, 18
+[14] Zhengyang Geng, Mingyang Deng, Xingjian Bai, J Zico
+Kolter, and Kaiming He. Mean flows for one-step generative
+modeling. arXiv preprint arXiv:2505.13447, 2025. 1, 2, 3,
+4, 7, 8, 18
+[15] Ian J Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing
+Xu, David Warde-Farley, Sherjil Ozair, Aaron Courville, and
+Yoshua Bengio. Generative adversarial nets. Advances in
+neural information processing systems, 27, 2014. 5
+[16] Jiatao Gu, Shuangfei Zhai, Yizhe Zhang, Lingjie Liu, and
+Joshua M Susskind. Boot: Data-free distillation of denoising
+diffusion models with bootstrapping. In ICML 2023 Work-
+shop on Structured Probabilistic Inference & Generative
+Modeling, 2023. 18
+[17] Jonathan Heek, Emiel Hoogeboom, and Tim Salimans. Mul-
+tistep consistency models. arXiv preprint arXiv:2403.06807,
+2024. 18
+[18] Eric Heitz, Laurent Belcour, and Thomas Chambon. Iterative
+α-(de) blending: A minimalist deterministic diffusion model.
+In ACM SIGGRAPH 2023 Conference Proceedings, pages
+1–8, 2023. 1, 2
+[19] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bern-
+hard Nessler, and Sepp Hochreiter. Gans trained by a two
+time-scale update rule converge to a local nash equilib-
+rium. Advances in neural information processing systems,
+30, 2017. 6, 15, 16
+[20] Geoffrey Hinton, Oriol Vinyals, and Jeff Dean.
+Distill-
+ing the knowledge in a neural network.
+arXiv preprint
+arXiv:1503.02531, 2015. 4
+[21] Jonathan Ho and Tim Salimans. Classifier-free diffusion
+guidance. arXiv preprint arXiv:2207.12598, 2022. 3, 5
+[22] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffu-
+sion probabilistic models. Advances in Neural Information
+Processing Systems, 33:6840–6851, 2020. 1, 2, 13
+[23] Emiel Hoogeboom, Vıctor Garcia Satorras, Clément Vignac,
+and Max Welling. Equivariant diffusion for molecule genera-
+tion in 3d. In International conference on machine learning,
+pages 8867–8887. PMLR, 2022. 1
+[24] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-
+Zhu, Yuanzhi Li, Shean Wang, Lu Wang, Weizhu Chen, et al.
+Lora: Low-rank adaptation of large language models. ICLR,
+1(2):3, 2022. 6
+[25] Aapo Hyvärinen and Peter Dayan.
+Estimation of non-
+normalized statistical models by score matching. Journal of
+Machine Learning Research, 6(4), 2005. 15
+[26] Zahra Kadkhodaie, Florentin Guth, Eero P Simoncelli, and
+Stéphane Mallat. Generalization in diffusion models arises
+from geometry-adaptive harmonic representations. arXiv
+preprint arXiv:2310.02557, 2023. 2, 3
+9
+
+[27] Mason Kamb and Surya Ganguli. An analytic theory of
+creativity in convolutional diffusion models. arXiv preprint
+arXiv:2412.20292, 2024. 2, 3
+[28] Tero Karras, Miika Aittala, Timo Aila, and Samuli Laine.
+Elucidating the design space of diffusion-based generative
+models. Advances in neural information processing systems,
+35:26565–26577, 2022. 1, 2, 14, 16, 17
+[29] Tero Karras, Miika Aittala, Tuomas Kynkäänniemi, Jaakko
+Lehtinen, Timo Aila, and Samuli Laine. Guiding a diffusion
+model with a bad version of itself. Advances in Neural
+Information Processing Systems, 37:52996–53021, 2024. 6,
+8
+[30] Tero Karras, Miika Aittala, Jaakko Lehtinen, Janne Hellsten,
+Timo Aila, and Samuli Laine. Analyzing and improving the
+training dynamics of diffusion models. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 24174–24184, 2024. 8, 16
+[31] Alex Kendall and Yarin Gal. What uncertainties do we need
+in bayesian deep learning for computer vision? Advances in
+neural information processing systems, 30, 2017. 7
+[32] Dongjun Kim, Chieh-Hsin Lai, Wei-Hsiang Liao, Naoki
+Murata, Yuhta Takida, Toshimitsu Uesaka, Yutong He, Yuki
+Mitsufuji, and Stefano Ermon. Consistency trajectory mod-
+els: Learning probability flow ODE trajectory of diffusion.
+In The Twelfth International Conference on Learning Repre-
+sentations, 2024. 1, 2, 18
+[33] Ba Jimmy Kingma, Diederik P. Adam: A method for stochas-
+tic optimization. arXiv preprint arXiv:1412.6980, 2014. 16,
+17
+[34] Tuomas Kynkäänniemi, Miika Aittala, Tero Karras, Samuli
+Laine, Timo Aila, and Jaakko Lehtinen. Applying guidance
+in a limited interval improves sample and distribution qual-
+ity in diffusion models. Advances in Neural Information
+Processing Systems, 37:122458–122483, 2024. 6, 7
+[35] Black Forest Labs, Stephen Batifol, Andreas Blattmann,
+Frederic Boesel, Saksham Consul, Cyril Diagne, Tim Dock-
+horn, Jack English, Zion English, Patrick Esser, et al. Flux. 1
+kontext: Flow matching for in-context image generation and
+editing in latent space. arXiv preprint arXiv:2506.15742,
+2025. 2, 3
+[36] Kyungmin Lee, Sihyun Yu, and Jinwoo Shin. Decoupled
+meanflow: Turning flow models into flow maps for acceler-
+ated sampling. arXiv preprint arXiv:2510.24474, 2025. 7,
+8, 18
+[37] Sangyun Lee, Yilun Xu, Tomas Geffner, Giulia Fanti,
+Karsten Kreis, Arash Vahdat, and Weili Nie. Truncated
+consistency models. arXiv preprint arXiv:2410.14895, 2024.
+18
+[38] Xingjian Leng, Jaskirat Singh, Yunzhong Hou, Zhenchang
+Xing, Saining Xie, and Liang Zheng. Repa-e: Unlocking
+vae for end-to-end tuning with latent diffusion transformers.
+arXiv preprint arXiv:2504.10483, 2025. 1, 3
+[39] Junzhe Li, Yutao Cui, Tao Huang, Yinping Ma, Chun Fan,
+Miles Yang, and Zhao Zhong. Mixgrpo: Unlocking flow-
+based grpo efficiency with mixed ode-sde. arXiv preprint
+arXiv:2507.21802, 2025. 1, 2, 3
+[40] Yaron Lipman, Ricky T. Q. Chen, Heli Ben-Hamu, Maxim-
+ilian Nickel, and Matthew Le. Flow matching for generative
+modeling. In The Eleventh International Conference on
+Learning Representations, 2023. 1, 2, 15
+[41] Jie Liu, Gongye Liu, Jiajun Liang, Yangguang Li, Jiaheng
+Liu, Xintao Wang, Pengfei Wan, Di Zhang, and Wanli
+Ouyang. Flow-grpo: Training flow matching models via
+online rl. arXiv preprint arXiv:2505.05470, 2025. 1, 2, 3
+[42] Wenze Liu and Xiangyu Yue. Learning to integrate dif-
+fusion odes by averaging the derivatives. arXiv preprint
+arXiv:2505.14502, 2025. 8, 18
+[43] Xingchao Liu, Chengyue Gong, and qiang liu. Flow straight
+and fast: Learning to generate and transfer data with rectified
+flow. In The Eleventh International Conference on Learning
+Representations, 2023. 1, 2, 4, 15
+[44] Xingchao Liu, Xiwen Zhang, Jianzhu Ma, Jian Peng, et al.
+Instaflow: One step is enough for high-quality diffusion-
+based text-to-image generation. In The Twelfth International
+Conference on Learning Representations, 2023. 18
+[45] Cheng Lu and Yang Song. Simplifying, stabilizing and
+scaling continuous-time consistency models. arXiv preprint
+arXiv:2410.11081, 2024. 3, 5, 8, 18
+[46] Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan
+Li, and Jun Zhu. Dpm-solver: A fast ode solver for diffusion
+probabilistic model sampling in around 10 steps. Advances
+in Neural Information Processing Systems, 35:5775–5787,
+2022. 14
+[47] Eric Luhman and Troy Luhman. Knowledge distillation in
+iterative generative models for improved sampling speed.
+arXiv preprint arXiv:2101.02388, 2021. 4, 18
+[48] Weijian Luo, Tianyang Hu, Shifeng Zhang, Jiacheng Sun,
+Zhenguo Li, and Zhihua Zhang. Diff-instruct: A universal
+approach for transferring knowledge from pre-trained diffu-
+sion models. Advances in Neural Information Processing
+Systems, 36:76525–76546, 2023. 5, 6, 15, 18
+[49] Weijian Luo, Zemin Huang, Zhengyang Geng, J Zico Kolter,
+and Guo-jun Qi. One-step diffusion distillation through
+score implicit matching. Advances in Neural Information
+Processing Systems, 37:115377–115408, 2024. 18
+[50] Nanye Ma, Mark Goldstein, Michael S Albergo, Nicholas M
+Boffi, Eric Vanden-Eijnden, and Saining Xie. Sit: Exploring
+flow and diffusion-based generative models with scalable
+interpolant transformers. arXiv preprint arXiv:2401.08740,
+2024. 2, 6, 8, 15, 16, 17
+[51] Nanye Ma, Shangyuan Tong, Haolin Jia, Hexiang Hu, Yu-
+Chuan Su, Mingda Zhang, Xuan Yang, Yandong Li, Tommi
+Jaakkola, Xuhui Jia, et al. Inference-time scaling for diffu-
+sion models beyond scaling denoising steps. arXiv preprint
+arXiv:2501.09732, 2025. 2, 8
+[52] Chenlin Meng, Robin Rombach, Ruiqi Gao, Diederik
+Kingma, Stefano Ermon, Jonathan Ho, and Tim Salimans.
+On distillation of guided diffusion models. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 14297–14306, 2023. 18
+[53] Thuan Hoang Nguyen and Anh Tran. Swiftbrush: One-
+step text-to-image diffusion model with variational score
+distillation. In Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition, pages 7807–7816,
+2024. 6
+10
+
+[54] Matthew Niedoba, Berend Zwartsenberg, Kevin Mur-
+phy, and Frank Wood.
+Towards a mechanistic explana-
+tion of diffusion model generalization.
+arXiv preprint
+arXiv:2411.19339, 2024. 2, 3
+[55] William Peebles and Saining Xie. Scalable diffusion models
+with transformers. In Proceedings of the IEEE/CVF inter-
+national conference on computer vision, pages 4195–4205,
+2023. 6, 16
+[56] Stefano Peluchetti. Non-denoising forward-time diffusions.
+arXiv preprint arXiv:2312.14589, 2023. 1, 2
+[57] Yansong Peng, Kai Zhu, Yu Liu, Pingyu Wu, Hebei Li,
+Xiaoyan Sun, and Feng Wu. Flow-anchored consistency
+models. arXiv preprint arXiv:2507.03738, 2025. 3, 8, 18
+[58] Jakiw Pidstrigach. Score-based generative models detect
+manifolds.
+Advances in Neural Information Processing
+Systems, 35:35852–35865, 2022. 2, 3
+[59] Ben Poole, Ajay Jain, Jonathan T Barron, and Ben Milden-
+hall. Dreamfusion: Text-to-3d using 2d diffusion. arXiv
+preprint arXiv:2209.14988, 2022. 6
+[60] Aditya Ramesh, Mikhail Pavlov, Gabriel Goh, Scott Gray,
+Chelsea Voss, Alec Radford, Mark Chen, and Ilya Sutskever.
+Zero-shot text-to-image generation. In International confer-
+ence on machine learning, pages 8821–8831. Pmlr, 2021.
+1
+[61] Yuxi Ren, Xin Xia, Yanzuo Lu, Jiacheng Zhang, Jie Wu, Pan
+Xie, Xing Wang, and Xuefeng Xiao. Hyper-sd: Trajectory
+segmented consistency model for efficient image synthesis.
+Advances in Neural Information Processing Systems, 37:
+117340–117362, 2024. 18
+[62] Robin Rombach, Andreas Blattmann, Dominik Lorenz,
+Patrick Esser, and Björn Ommer. High-resolution image
+synthesis with latent diffusion models. In Proceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pages 10684–10695, 2022. 1, 2, 3, 16
+[63] Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, San-
+jeev Satheesh, Sean Ma, Zhiheng Huang, Andrej Karpathy,
+Aditya Khosla, Michael Bernstein, et al. Imagenet large
+scale visual recognition challenge. International journal of
+computer vision, 115:211–252, 2015. 2, 6, 7
+[64] Amirmojtaba Sabour, Sanja Fidler, and Karsten Kreis. Align
+your flow: Scaling continuous-time flow map distillation.
+arXiv preprint arXiv:2506.14603, 2025. 1, 2, 3, 8, 18
+[65] Tim Salimans and Jonathan Ho. Progressive distillation for
+fast sampling of diffusion models. In International Confer-
+ence on Learning Representations, 2022. 1, 2, 18
+[66] Tim Salimans, Ian Goodfellow, Wojciech Zaremba, Vicki
+Cheung, Alec Radford, and Xi Chen. Improved techniques
+for training gans. Advances in neural information processing
+systems, 29, 2016. 16
+[67] Tim Salimans, Thomas Mensink, Jonathan Heek, and Emiel
+Hoogeboom. Multistep distillation of diffusion models via
+moment matching. Advances in Neural Information Pro-
+cessing Systems, 37:36046–36070, 2024. 18
+[68] Axel Sauer, Frederic Boesel, Tim Dockhorn, Andreas
+Blattmann, Patrick Esser, and Robin Rombach. Fast high-
+resolution image synthesis with latent adversarial diffusion
+distillation. In SIGGRAPH Asia 2024 Conference Papers,
+pages 1–11, 2024.
+[69] Axel Sauer, Dominik Lorenz, Andreas Blattmann, and Robin
+Rombach. Adversarial diffusion distillation. In European
+Conference on Computer Vision, pages 87–103. Springer,
+2024. 18
+[70] Christopher Scarvelis, Haitz Sáez de Ocáriz Borde, and
+Justin Solomon.
+Closed-form diffusion models.
+arXiv
+preprint arXiv:2310.12395, 2023. 2, 3
+[71] Team Seedream, Yunpeng Chen, Yu Gao, Lixue Gong,
+Meng Guo, Qiushan Guo, Zhiyao Guo, Xiaoxia Hou, Weilin
+Huang, Yixuan Huang, et al. Seedream 4.0: Toward next-
+generation multimodal image generation. arXiv preprint
+arXiv:2509.20427, 2025. 2, 3
+[72] Raghav Singhal, Zachary Horvitz, Ryan Teehan, Mengye
+Ren, Zhou Yu, Kathleen McKeown, and Rajesh Ranganath.
+A general framework for inference-time scaling and steering
+of diffusion models. arXiv preprint arXiv:2501.06848, 2025.
+2, 8
+[73] Jascha Sohl-Dickstein, Eric Weiss, Niru Maheswaranathan,
+and Surya Ganguli.
+Deep unsupervised learning using
+nonequilibrium thermodynamics. In International confer-
+ence on machine learning, pages 2256–2265. PMLR, 2015.
+1, 2
+[74] Jiaming Song,
+Chenlin Meng,
+and Stefano Ermon.
+Denoising diffusion implicit models.
+arXiv preprint
+arXiv:2010.02502, 2020. 2, 14
+[75] Kiwhan Song, Jaeyeon Kim, Sitan Chen, Yilun Du, Sham
+Kakade, and Vincent Sitzmann. Selective underfitting in
+diffusion models. arXiv preprint arXiv:2510.01378, 2025.
+2, 3
+[76] Yang Song and Prafulla Dhariwal. Improved techniques for
+training consistency models. In The Twelfth International
+Conference on Learning Representations, 2024. 3, 7, 18
+[77] Yang Song and Stefano Ermon. Generative modeling by
+estimating gradients of the data distribution. Advances in
+neural information processing systems, 32, 2019. 2, 15
+[78] Yang Song, Jascha Sohl-Dickstein, Diederik P Kingma, Ab-
+hishek Kumar, Stefano Ermon, and Ben Poole. Score-based
+generative modeling through stochastic differential equa-
+tions. In International Conference on Learning Representa-
+tions, 2021. 1, 2, 5, 14
+[79] Yang Song, Prafulla Dhariwal, Mark Chen, and Ilya
+Sutskever.
+Consistency models.
+In Proceedings of the
+40th International Conference on Machine Learning, pages
+32211–32252, 2023. 1, 2, 3, 18
+[80] Endre Süli and David F Mayers. An introduction to numeri-
+cal analysis. Cambridge university press, 2003. 14
+[81] Joshua Tian Jin Tee, Kang Zhang, Hee Suk Yoon, Dhanan-
+jaya Nagaraja Gowda, Chanwoo Kim, and Chang D Yoo.
+Physics informed distillation for diffusion models. arXiv
+preprint arXiv:2411.08378, 2024. 18
+[82] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-
+reit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia
+Polosukhin. Attention is all you need. Advances in neural
+information processing systems, 30, 2017. 16
+[83] Pascal Vincent. A connection between score matching and
+denoising autoencoders. Neural computation, 23(7):1661–
+1674, 2011. 2
+11
+
+[84] Bram Wallace, Meihua Dang, Rafael Rafailov, Linqi Zhou,
+Aaron Lou, Senthil Purushwalkam, Stefano Ermon, Caim-
+ing Xiong, Shafiq Joty, and Nikhil Naik. Diffusion model
+alignment using direct preference optimization. In Proceed-
+ings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition, pages 8228–8238, 2024. 1, 2, 3
+[85] Zhengyi Wang, Cheng Lu, Yikai Wang, Fan Bao, Chongx-
+uan Li, Hang Su, and Jun Zhu. Prolificdreamer: High-fidelity
+and diverse text-to-3d generation with variational score distil-
+lation. Advances in Neural Information Processing Systems,
+36:8406–8441, 2023. 5, 6
+[86] Joseph L Watson, David Juergens, Nathaniel R Bennett,
+Brian L Trippe, Jason Yim, Helen E Eisenach, Woody Ah-
+ern, Andrew J Borst, Robert J Ragotte, Lukas F Milles,
+et al. De novo design of protein structure and function with
+rfdiffusion. Nature, 620(7976):1089–1100, 2023. 1
+[87] Chenfei Wu, Jiahao Li, Jingren Zhou, Junyang Lin, Kaiyuan
+Gao, Kun Yan, Sheng-ming Yin, Shuai Bai, Xiao Xu, Yilei
+Chen, et al. Qwen-image technical report. arXiv preprint
+arXiv:2508.02324, 2025. 2, 3
+[88] Zhisheng Xiao, Karsten Kreis, and Arash Vahdat. Tackling
+the generative learning trilemma with denoising diffusion
+GANs. In International Conference on Learning Represen-
+tations, 2022. 2
+[89] Sirui Xie, Zhisheng Xiao, Diederik Kingma, Tingbo Hou,
+Ying Nian Wu, Kevin P Murphy, Tim Salimans, Ben Poole,
+and Ruiqi Gao. Em distillation for one-step diffusion models.
+Advances in Neural Information Processing Systems, 37:
+45073–45104, 2024. 18
+[90] Jiazheng Xu, Xiao Liu, Yuchen Wu, Yuxuan Tong, Qinkai
+Li, Ming Ding, Jie Tang, and Yuxiao Dong.
+Imagere-
+ward: Learning and evaluating human preferences for text-
+to-image generation. Advances in Neural Information Pro-
+cessing Systems, 36:15903–15935, 2023. 1, 2, 3
+[91] Yilun Xu, Ziming Liu, Max Tegmark, and Tommi Jaakkola.
+Poisson flow generative models. Advances in Neural In-
+formation Processing Systems, 35:16782–16795, 2022. 1,
+2
+[92] Yilun Xu, Ziming Liu, Yonglong Tian, Shangyuan Tong,
+Max Tegmark, and Tommi Jaakkola. Pfgm++: Unlocking
+the potential of physics-inspired generative models. In In-
+ternational Conference on Machine Learning, pages 38566–
+38591. PMLR, 2023. 1, 2
+[93] Yilun Xu, Shangyuan Tong, and Tommi S. Jaakkola. Stable
+target field for reduced variance score estimation in diffu-
+sion models. In The Eleventh International Conference on
+Learning Representations, 2023. 2
+[94] Yanwu Xu, Yang Zhao, Zhisheng Xiao, and Tingbo Hou.
+Ufogen: You forward once large scale text-to-image gener-
+ation via diffusion gans. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+pages 8196–8206, 2024. 18
+[95] Yilun Xu, Weili Nie, and Arash Vahdat. One-step diffu-
+sion models with f-divergence distribution matching. arXiv
+preprint arXiv:2502.15681, 2025. 6, 18
+[96] Mingyang Yi, Jiacheng Sun, and Zhenguo Li.
+On
+the generalization of diffusion model.
+arXiv preprint
+arXiv:2305.14712, 2023. 2, 3
+[97] Tianwei Yin, Michaël Gharbi, Taesung Park, Richard Zhang,
+Eli Shechtman, Fredo Durand, and Bill Freeman. Improved
+distribution matching distillation for fast image synthesis.
+Advances in neural information processing systems, 37:
+47455–47487, 2024. 6, 15, 18
+[98] Tianwei Yin, Michaël Gharbi, Richard Zhang, Eli Shecht-
+man, Fredo Durand, William T Freeman, and Taesung Park.
+One-step diffusion with distribution matching distillation.
+In Proceedings of the IEEE/CVF conference on computer
+vision and pattern recognition, pages 6613–6623, 2024. 6,
+15, 16, 18
+[99] TaeHo Yoon, Joo Young Choi, Sehyun Kwon, and Ernest K
+Ryu. Diffusion probabilistic models generalize when they
+fail to memorize. In ICML 2023 workshop on structured
+probabilistic inference & generative modeling, 2023. 2, 3
+[100] Sihyun Yu, Sangkyung Kwak, Huiwon Jang, Jongheon
+Jeong, Jonathan Huang, Jinwoo Shin, and Saining Xie.
+Representation alignment for generation: Training diffu-
+sion transformers is easier than you think. arXiv preprint
+arXiv:2410.06940, 2024. 1, 2, 3, 7, 8, 17, 18
+[101] Yinan Zhang, Eric Tzeng, Yilun Du, and Dmitry Kislyuk.
+Large-scale reinforcement learning for diffusion models.
+In European Conference on Computer Vision, pages 1–17.
+Springer, 2024. 1, 2, 3
+[102] Boyang Zheng, Nanye Ma, Shengbang Tong, and Saining
+Xie.
+Diffusion transformers with representation autoen-
+coders. arXiv preprint arXiv:2510.11690, 2025. 1, 3
+[103] Candi Zheng and Yuan Lan. Characteristic guidance: Non-
+linear correction for diffusion model at large guidance scale.
+In International Conference on Machine Learning, pages
+61386–61412. PMLR, 2024. 6
+[104] Hongkai Zheng, Weili Nie, Arash Vahdat, Kamyar Azizzade-
+nesheli, and Anima Anandkumar. Fast sampling of diffusion
+models via operator learning. In International conference
+on machine learning, pages 42390–42402. PMLR, 2023. 4,
+18
+[105] Kaiwen Zheng, Yuji Wang, Qianli Ma, Huayu Chen, Jin-
+tao Zhang, Yogesh Balaji, Jianfei Chen, Ming-Yu Liu, Jun
+Zhu, and Qinsheng Zhang. Large scale diffusion distillation
+via score-regularized continuous-time consistency. arXiv
+preprint arXiv:2510.08431, 2025. 18
+[106] Linqi Zhou, Stefano Ermon, and Jiaming Song. Inductive
+moment matching. arXiv preprint arXiv:2503.07565, 2025.
+8
+[107] Mingyuan Zhou, Huangjie Zheng, Yi Gu, Zhendong Wang,
+and Hai Huang.
+Adversarial score identity distillation:
+Rapidly surpassing the teacher in one step. arXiv preprint
+arXiv:2410.14919, 2024. 6, 18
+[108] Mingyuan Zhou,
+Huangjie Zheng,
+Zhendong Wang,
+Mingzhang Yin, and Hai Huang. Score identity distilla-
+tion: Exponentially fast distillation of pretrained diffusion
+models for one-step generation. In Forty-first International
+Conference on Machine Learning, 2024. 6, 18
+12
+
+A. Extended Technical Discussion
+We continue our technical discussion in Secs. 4 and 5, dividing this section into three parts.
+A.1. More on the Prediction Objective
+Optimality of training with Eq. (8).
+Recall that we have already established that the loss value of Eq. (8) equals
+Ez,δ∥∂δfθ(z, δ) −u(fθ(z, δ), 1 −δ)∥2. Thus, at optimality, we have ∂δfθ(z, δ) = u(fθ(z, δ), 1 −δ) for all z ∼π
+and δ ∈[0, 1]. Furthermore, we note that the parametric relationship fθ(z, δ) = z + δFθ(z, δ), which satisfies fθ(z, 0) = z
+for all z ∼π by design. We show that, assuming standard regularity conditions on u, we ensure ϕu is uniquely defined via an
+initial value problem by the Picard-Lindelöf theorem [8], thus providing a well-defined criterion for fθ. This is a direct result
+of the fundamental theory of ODE.
+Proposition A.1. Let ϕu(xt, t, s) be defined as in Eq. (3), and we assume that there exists some L > 0 for all y, y′ ∈Rd and
+r ∈[0, 1], ∥u(y, r) −u(y′, r)∥≤L∥y −y′∥. We further assume that fθ(z, δ) is continuously differentiable for δ ∈[0, 1].
+Then, we have fθ(z, δ) = ϕu(z, 1, 1 −δ) for all z ∼π, δ ∈[0, 1], if and only if, (i) fθ(z, 0) = z for all z ∼π, and (ii)
+∂δfθ(z, δ) = u(fθ(z, δ), 1 −δ) for all z ∼π, δ ∈[0, 1].
+Proof. By assuming u(y, r) continuous in r and Lipschitz continuous in y, we could apply the Picard-Lindelöf theorem [8]
+to guarantee the existence and uniqueness of its solution ϕu, which is
+ϕu(xt, t, s) = xt +
+Z s
+t
+−u(x(τ), τ)dτ.
+=⇒:
+(i). Since the equality fθ(z, δ) = ϕu(z, 1, 1 −δ) holds for all δ ∈[0, 1], it must hold for δ = 0. We know that
+ϕu(z, 1, 1) = z. Thus, for any z ∼π,
+fθ(z, 0) = ϕu(z, 1, 1) = z.
+(ii). Given that fθ(z, δ) = ϕu(z, 1, 1 −δ) for all δ ∈[0, 1], and both fθ(z, δ) and ϕu(z, 1, 1 −δ) are continuously
+differentiable with respect to δ on [0, 1], their derivatives with respect to δ must be equal. That is, for all z ∼π, δ ∈[0, 1],
+∂δfθ(z, δ) = d
+dδ ϕu(z, 1, 1 −δ) = u(ϕu(z, 1, 1 −δ), 1 −δ) = u(fθ(z, δ), 1 −δ).
+⇐=:
+Since fθ(z, 0) = z for all z ∼π, and ∂δfθ(z, δ) = u(fθ(z, δ), 1 −δ) for all z ∼π, δ ∈[0, 1], we know that fθ(z, δ) is
+a solution to the initial value problem on the interval δ ∈[0, 1]:
+d
+dδ fθ(z, δ) = u(fθ(z, δ), 1 −δ),
+fθ(z, 0) = z.
+By definition, ϕu(z, 1, 1 −δ) is also a solution to the same IVP on [0, 1]. Thus, we arrive at the equality between fθ(z, δ)
+and ϕu(z, 1, 1 −δ).
+Discrete-time objective. In Sec. 4.1, we skipped over the development of a more flexible discrete-time training objective for
+Eq. (8), which does not require efficient JVP implementations. First, recall that our default continuous-time objective is
+Ez,δ
+ Fθ(z, δ) + sg
+
+δ∂δFθ(z, δ) −u (fθ(z, δ), 1 −δ)
+ 
+2
+.
+(13)
+Specifically, we can discretize the time horizon and approximate the partial derivative ∂δFθ using finite differences. Following
+the common practice in the sampling procedure of flow models [22], we divide the time horizon into N intervals with N + 1
+boundary points: 1 = t1 > t2 > · · · > tN+1 = 0. We note that the generating velocity at point fθ(z, 1 −ti), or equivalently
+fθ(z, t1 −ti) where 1 ≤i ≤N, can be approximated by
+1
+ti−ti+1 (fθ(z, t1 −ti+1) −fθ(z, t1 −ti)). Short-handing ta −tb
+to δa,b, we have the following discrete-time objective:
+Ez,i
+ Fθ(z, δ1,i+1) + sg
+
+δ1,i · Fθ(z, δ1,i+1) −Fθ(z, δ1,i)
+δi,i+1
+−u (fθ(z, δ1,i), ti)
+ 
+2
+,
+(14)
+13
+
+which approximates Eq. (8) as δi,i+1 →0. Just like Eq. (13) equals to Ez,δ∥∂δfθ(z, δ) −u(fθ(z, δ), 1 −δ)∥2, we
+note that the loss value of Eq. (14) is the same as Ez,i ∥(fθ(z, δ1,i+1) −fθ(z, δ1,i)) /δi,i+1 −u (fθ(z, δ1,i), ti)∥2, where
+(fθ(z, δ1,i+1) −fθ(z, δ1,i)) /δi,i+1 is the model’s generating velocity, approximating ∂δfθ(z, δ). If we use vG to further
+simplify the notations, we arrive at the following optimization gradients in Eq. (9):
+∇θ Ez,δ
+
+Fθ(z, δ)⊤sg
+
+vG
+ fθ(z, δ), 1 −δ
+
+−u
+ fθ(z, δ), 1 −δ
+
+|
+{z
+}
+∆vG,u(fθ(z,δ),1−δ)
+
+,
+(15)
+Error analysis. With a discrete-time objective, we essentially train the student to trace a numerically integrated trajectory
+by an ODE solver. More concretely, the loss function inherently mimics a specific solver, whose error rate depends on the
+technique deployed. As written, Eq. (14) can be understood as using an Euler method [74, 78] for solving the flow, specified at
+time steps t1, t2, . . . , tN. Similar to existing fast-solver literature, we could readily adapt the objective using higher-order
+finite differences to mimic more precise, higher-order solvers [28, 46]. The classical theory from numerical analysis [80]
+indicates that a local truncation error at ti bounded by O((δi,i+1)p+1) leads to the global error rate is O((δmax)p), where
+δmax := maxi δi,i+1 = maxi(ti −ti+1) is the maximum step size. This component is the discretization error, which is entirely
+independent of the network’s approximation error (the inevitable training inaccuracy discussed in Sec. 4.1). Together, these
+two errors represent the total deviation of the student’s trajectory from the true teacher flow defined by u. The total error can
+also be shown [5] to directly control the Wasserstein distance between the generative distribution of the student and the teacher.
+22
+23
+24
+25
+26
+27
+Discretization Steps
+5
+10
+15
+20
+25
+FID-50K
+Eq.9
+Eq.9 + Eq.11
+Euler
+Heun
+Figure 9.
+Effects of discretization steps
+and solver type. Our correction objective in
+Eq. (11) makes the model robust against both.
+Number of discretization steps. The above discussion suggests that one
+should take as small a step as possible, (ti −ti+1) →0, and as precise a
+solver as possible, for the discretization error to be minimal. This means that
+we should use the continuous-time setup if allowed, and for the discrete-time
+setting, we should choose to use a large number of discretization steps N.
+However, this is not the trend we observe in practice. Surprisingly, larger
+N after a certain point actually degrades the performance. We attribute this
+behavior to the accumulated approximation error (discussed in Sec. 4.1) made
+by the model. Since u is evaluated at the model’s prediction, the goodness
+of the trajectory implicitly depends on the quality of fθ itself, and such a
+problem exacerbates as N becomes larger. We further note that incorporating
+higher-order solvers in u like the Heun method [28] is helpful, as it significantly
+reduces the discretization error. Fortunately, in Fig. 9, we observe that while
+the model is sensitive to the number of discretization steps and solver choices
+when training with Eq. (9) alone, the corrective signal in Eq. (11) effectively
+renders such a decision unimportant, making our final proposal robust against
+N and the precision of solvers.
+% of δ = 0
+δ sampling
+FID ↓
+10%
+LogitNormal(0, 1)
+12.40
+0%
+LogitNormal(0, 1)
+47.09
+30%
+LogitNormal(0, 1)
+13.19
+50%
+LogitNormal(0, 1)
+14.30
+10%
+LogitNormal(-0.8, 1)
+13.78
+10%
+LogitNormal(-0.4, 1)
+12.98
+10%
+LogitNormal(0, 1.2)
+12.60
+0%
+LogitNormal(-0.8, 1.6)
+13.43
+0%
+LogitNormal(-0.4, 1.6)
+12.98
+0%
+LogitNormal(0, 1.6)
+12.59
+Table 3. Ablation of δ sampling. A mixture
+of a logit-normal and a fixed δ=0 works well.
+Sampling of δ. Another important aspect of the training algorithm is the
+time sampling of δ. On one hand, the correctness of the model propagates
+from small jumps δ = 0 to large jumps δ = 1. On the other hand, the high-
+frequency features of the images only emerge at a lower noise level (large
+δ). To balance these two notions, we investigate a mixture of a logit-normal
+distribution [11, 28] and a fixed value of δ = 0 (effectively a dropout on δ).
+Results are presented in Tab. 3. Note that for the discrete-time setting, we apply
+an additional step of the floor operation with respect to our predefined set of
+discrete time steps.
+Confident region warmup. We observe that naively optimizing with Eq. (9)
+brings about instability early on in training, mainly with the JVP approach. We
+hypothesize that it is because u is evaluated at a state predicted by fθ, which
+can be out-of-distribution for u at initialization. We propose to add noise to the
+predicted state before feeding it to u. Specifically, we replace u(fθ(z, δ), 1−δ),
+with u(Itc|1−δ(fθ(z, δ), n), tc), where Itc|t is the generalized interpolating
+function, a transition kernel that takes samples from the noise level of t to tc.
+14
+
+For the linear interpolation scheme [40, 43, 50], we have Itc|t(xt, n) = 1−tc
+1−t xt +
+q
+t2c −(1−tc)2
+(1−t)2 t2n, assuming tc > t; if
+tc ≤t, it simply does nothing and returns xt. At the start of training, we linearly decrease tc from 1 to 0 over a short warmup
+of 10K steps. Intuitively, this procedure ensures that u always operates in a region where it is confident. After the inclusion of
+this warmup period, we do not find any instability of training fθ with a reasonable sampling distribution of δ.
+A.2. More on the Correction Objective
+From minimizing IKL to aligning the noising velocities. We know from prior works [48, 98] that minimizing Eq. (10) w.r.t.
+θ gives us the following gradient:
+Er,xr
+h
+(∇θxr)⊤(∇xr log qr(xr) −∇xr log pr(xr))
+i
+,
+(16)
+where ∇xr log qr(xr) and ∇xr log pr(xr) are the score functions [25, 77] of qr and pr respectively. It has also been shown
+that there exists a direct bijective translation between the score functions and the marginal velocities [50]. Specifically, for the
+linear interpolation scheme [40, 43, 50] and our definition of the conditional velocity, we have:
+u(xr, r) =
+r
+1 −r∇xr log pr(xr) +
+1
+1 −rxr
+∇xr log pr(xr) = 1 −r
+r
+u(xr, r) −1
+r xr.
+Additionally, recall that the student predicts the data sample as fθ(z, 1). With average velocity parameterization, the
+intermediate state is thus xr = Ir(fθ(z, 1), n) = (1 −r)(z + Fθ(z, 1)) + rn. Thus, we could rewrite Eq. (16) as
+Er,xr
+(1 −r)2
+r
+(∇θFθ(z, 1))⊤ vN
+ Ir(fθ(z, 1), n), r
+
+−u
+ Ir(fθ(z, 1), n), r
+
+,
+where vN is the marginal noising velocity induced by the student’s generated distribution q, similar to u with p. Dropping the
+weighting (1−r)2
+r
+, as it does not change the optimal solution and provides us with easier-to-control gradients, we arrive at
+Eq. (11). Note that a different interpolation scheme does not change our investigation.
+∇θ Ez,n,r
+
+Fθ(z, 1)⊤sg
+
+vN
+ Ir(fθ(z, 1), n), r
+
+−u
+ Ir(fθ(z, 1), n), r
+
+|
+{z
+}
+∆vN,u(Ir(fθ(z,1),n),r)
+
+.
+(17)
+learning rate for gψ
+FID ↓
+3 × 10−5
+8.28
+6 × 10−5
+5.77
+8 × 10−5
+5.72
+1 × 10−4
+5.63
+Table 4. Ablation of gψ’s lr. A higher lr
+compared to fθ’s one (3 × 10−5) is better.
+Learning rate. Our correction objective defined in Eq. (11) assumes access to
+vN, which is the velocity of the noising flow starting from the generated distri-
+bution, and we approximate it by training an auxiliary model gψ concurrently
+with Eq. (2). The quality of the optimization signal ∆vN,u depends on the
+quality of this approximation. Empirically in Tab. 4, we confirm this intuition
+and observe that the algorithm benefits from having a larger learning rate on
+gψ compared to fθ. We note that it is also possible to adopt a two time-scale
+update rule [19, 97], where we train multiple iterations on gψ before updating
+fθ, but we do not explore this option given the overhead. In a related vein, we
+find that while training with only the prediction objective in Eq. (9) permits a
+wide range of learning rates, incorporating the correction objective in Eq. (11)
+prefers a smaller one on fθ (adopted 3 × 10−5 compared to 1 × 10−4 in SiT).
+Additional note on sampling of r in Eq. (11). Recall that our understanding of Eq. (11) with a PDE perspective through the
+continuity equation in Sec. 5.1 leads to our design of sampling r more in the higher noise levels. We would like to make a brief
+note that, similar to Eq. (9), if Fθ is further parameterized, we should replace the first term in Eq. (11) with the actual network
+output. Additionally, one needs to ensure ∆vN,u across different r values are roughly on the same scale first, so that their
+actual contributions can be precisely controlled via the sampling of r. Concretely, for our case of the linear interpolation and
+velocity parameterization [40, 43, 50], ∆vN,u is really just the difference between the direct outputs of two neural networks,
+which does not require further manipulations, assuming the network outputs are of consistent scale. In comparison, another
+15
+
+1.0
+1.25
+1.5
+1.75
+2.0
+Guidance Weight
+1.6
+1.8
+2.0
+2.2
+FID-50K @ ImageNet-256
+SiT-XL
+SiT-XL+Repa
+1.0
+1.25
+1.5
+1.75
+2.0
+Guidance Weight
+1.5
+1.8
+2.0
+2.2
+2.5
+2.8
+3.0
+3.2
+FID-50K @ ImageNet-512
+SiT-XL
+SiT-XL+Repa
+1.0
+1.25
+1.5
+1.75
+2.0
+Guidance Weight
+220
+240
+260
+280
+300
+320
+IS-50K @ ImageNet-256
+SiT-XL
+SiT-XL+Repa
+1.0
+1.25
+1.5
+1.75
+2.0
+Guidance Weight
+200
+220
+240
+260
+280
+300
+320
+IS-50K @ ImageNet-512
+SiT-XL
+SiT-XL+Repa
+Figure 10. Performances across different guidance strength parameter γ in terms of FID (↓) and Inception Score (↑).
+commonly used setup is the EDM parameterization [28], whose velocity at (xr = fθ(z, 1) + rn, r), n ∼π is of the form
+cskip(r)−1
+r
+xr + cout(r)
+r
+G, where G is the actual network (the auxiliary or teacher model). Notice that the outputs of G are
+by design of constant norm across r, so the magnitude of ∆vN,u is proportional to cout(r)
+r
+. In Yin et al. [98], an additional
+weighting of r is applied, which makes the overall gradient contributions from Eq. (11) proportional to cout(r). Substituting in
+the actual terms used, we have
+0.5r
+√
+0.52+r2 , which heavily downplays the effect of small r (lower noise levels).
+A.3. More on How to Combine Both
+Additional schedule on α. We set α = 0 for the first 10K steps (recall that the prediction objective has a warmup of 10K
+steps), and follow it with a linear warmup of another 10K steps before α settles at a reference value αref. While the model
+performance is shown to be robust across a wide range of α in Fig. 6, we further notice a general trend that larger α learns
+faster in the beginning of training, and smaller α converges better as the training continues. Hence, for our REPA distillation
+tasks, we try out a simple inverse square root decay [30, 33], and arrive at the following schedule on α:
+α = αref
+clip
+
+n−Tdelay
+Twarmup , 0, 1
+
+p
+max(n/Tdecay, 1),
+where n is the current training iteration, Tdelay = Twarmup = 10K, and Tdecay is the hyperparameter that controls the decay
+rate with ∞indicating no decay applied (α stays at the constant value αref after warmup). We also would like to clarify that,
+considering the adopted 75-25 split, an α value of 0.3 really means that the gradient contribution of the correction objective is
+around 10% of that of the prediction objective.
+objective
+FID ↓
+IS ↑
+Eq. (9)
+5.78
+257.02
+Eq. (11)
+3.19
+258.15
+Eqs. (9) and (11)
+1.69
+273.49
+Table 5. Synergy between Eqs. (9) and (11).
+Together, they achieve performance that nei-
+ther could attain in isolation.
+Additional empirical results on prediction and correction synergy. In ad-
+dition to presenting the model progress in Fig. 7, we list the final performances
+of training with only prediction Eq. (9), only correction Eq. (11), and both
+in Tab. 5. Specifically, all models are distilled from SiT-XL/2 [50], and we
+compare them in terms of FID [19] and Inception Score [66] at 1.5M iterations
+(300 epochs). For each method, we select the optimal γ based on the FID per-
+formances. Recall from Fig. 7, at this point in training, although Eq. (9) makes
+progress, its absolute performance still lags far behind the other two configu-
+rations because of the significant error accumulation. In contrast, Eq. (11) has
+already suffered from mode collapse, and its diversity continues to deteriorate.
+B. Implementation Details
+Training. We follow the standard practice and train our models in the latent space of the VAE used in Rombach et al. [62]. The
+model architecture we use is based on a standard DiT [55] with 2×2 patches. Recall that the standard input to a flow model
+for ImageNet is fθ(xt, t, c) (c is the class label), and we need to include two additional scalar inputs: jump duration δ and
+guidance strength γ. That is, during both training and inference, the model follows fθ(z, 1, c, δ, γ). Thus, we add a few layers
+to handle these additional conditions. For both, we follow the standard design for including scalar input. Specifically, we use a
+256-dimensional frequency embedding [9, 82] followed by a two-layer SiLU-activated MLP with the same dimensionality as
+the model’s hidden size. We then add all four embeddings from t, c, δ, and γ together (the newly added ones, δ and γ, are
+initialized at 0) and feed the sum to each block. The same goes for gψ, where it is modified to take input gψ(xt, t, c, γ) as it
+needs to track different noising flows from different γ of fθ. No further architecture changes are necessary for stable and
+16
+
+Table 6. Detailed experimental configurations of our main results.
+Task
+teacher model
+SiT-XL/2 [50]
+SiT-XL/2+REPA [100]
+resolution
+256×256
+512×512
+256×256
+512×512
+General
+iterations (epochs)
+1.5M (300)
+1M (200)
+1.5M (300)
+1M (200)
+batch size
+256
+optimizer
+Adam [33]
+optimizer betas
+(0.9, 0.99)
+optimizer eps
+1 × 10−8
+weight decay
+0.0
+dropout
+0.0
+fθ learning rate
+constant 3 × 10−5
+gψ learning rate
+constant 1 × 10−4
+EMA decay
+0.9999
+Network
+params (M)
+678
+FLOPs (G)
+119
+525
+119
+525
+depth
+28
+hidden dim
+1152
+heads
+16
+patch size
+2×2
+change from teacher
+additional input for δ and γ in fθ; additional input for γ in gψ
+Training
+Specific to Eq. (9)
+confident region warmup duration
+10K
+δ type
+discrete; uniform; N=8
+δ sampling
+LogitNormal(0, 1)
+LogitNormal(-0.4, 1.2)
+% of δ = 0
+10%
+u type
+Heun solver [28]
+k
+1
+Specific to Eq. (11)
+r sampling
+LogitNormal(0.8, 1.6)
+guidance interval
+[0, 0.4]
+[0, 0.5]
+[0, 0.3]
+[0, 0.3]
+Relevant to both Eqs. (9) and (11)
+split between Eqs. (9) and (11)
+75% : 25%
+γ range
+[1, 2]
+αref
+0.3
+0.6
+αref schedule (Tdelay, Twarmup, Tdecay)
+(10K, 10K, ∞)
+(10K, 10K, 25K)
+effective training. For each of our reported entries listed in Tab. 2, we present their implementation details in Tab. 6. All model
+trainings are done with an internal JAX codebase on TPU.
+Evaluation. We observe small performance variations between TPU-based FID evaluation and GPU-based FID evaluation
+(ADM’s TensorFlow evaluation suite [9]6). To ensure a fair comparison with the baseline methods, we convert all of our
+models into PyTorch, sample all of our models on GPU, and obtain FID scores using the ADM evaluation suite for reporting
+the final results of our XL-size models in Tabs. 2 and 5 and Fig. 10. Additionally, since our model is trained on a range of
+guidance strengths γ ∼U(1, 2), we can efficiently sweep for an optimal value during inference. We report the best FID in
+Tab. 2, and provide the complete performance curves in Fig. 10.
+6https://github.com/openai/guided-diffusion/tree/main/evaluations
+17
+
+C. Related Work
+Among the existing distillation approaches, BOOT [16] stands as the most closely related precursor, sharing the distinct
+operational characteristic of being data-free. However, our works diverge fundamentally in their conceptual positioning
+and the identified imperative for removing data. BOOT frames the data-free property primarily as a practical/logistical
+advantage, emphasizing the benefits of bypassing the storage and privacy burdens associated with massive, proprietary training
+sets. In contrast, we argue that the exclusion of data is not merely a convenience but a theoretical necessity for ensuring
+distributional fidelity. We elevate the data-free paradigm from a strategy of efficiency to one of correctness, presenting it as
+the rigorous solution to the identified Teacher-Data Mismatch. Our proposed method also differs significantly from BOOT
+and its subsequent improvements, which are not necessarily data-free in nature. In particular, Gu et al. [16] focuses on the
+specific signal-ODE parameterization, which requires a separate loss just to enforce the boundary condition fθ(z, 0) = z. In
+comparison, our prediction objective stems from the properties of average velocity [14], which satisfy the boundary condition
+by design. Tee et al. [81] and the Lagrangian objective in Boffi et al. [5] consider more general ODE formulations. Their
+optimization involves costly computations of the gradients over the partial derivatives ∂δfθ, whereas ours does not (the partial
+derivatives in Eq. (8) are placed inside the stop-gradient operation). This improved training efficiency also originates from the
+average velocity perspective and our deduced identity in Eq. (7). Furthermore, we introduce an auxiliary correction objective
+for the accumulated prediction errors, pushing the model performance beyond the current state-of-the-art. In doing so, we
+believe our work finally completes the picture, validating the data-free paradigm as a robust and promising foundation for the
+future of generative model acceleration.
+Our contribution sits within a much broader body of literature dedicated to accelerating diffusion and flow models. These
+techniques generally fall into two categories based on their distillation targets. The first category operates at the trajectory level,
+attempting to compress the complex ODE integration into fewer steps by directly mimicking the sampling path or its solution
+operator [47, 104]. The foundational work of Progressive Distillation [52, 65] further established the viability of this direction
+through an iterative strategy that progressively halves the required sampling steps. This paradigm was significantly expanded by
+Consistency Models [3, 45, 76, 79], which enforce a property of self-consistency along the trajectory, allowing the model to map
+arbitrary intermediate states directly to the data origin. More recent approaches [5, 7, 13, 14, 17, 32, 36, 37, 42–44, 57, 61, 64]
+have further refined this objective by formulating direct matching conditions between the student’s transport map and the
+teacher’s vector field. The second category operates at the distribution level [48, 49, 67–69, 89, 94, 95, 97, 98, 107, 108],
+where the student is trained to match the teacher’s marginal distribution directly, often utilizing adversarial or score-based
+objectives without strictly adhering to the teacher’s specific trajectory. We make contributions in both directions by proposing
+an efficient algorithm for distilling trajectories without data and elucidating additional design spaces for better distribution
+matching objectives. Together, our proposed predictor-corrector framework can be seen as combining the strengths of the two
+categories [45, 105], achieving superior quality while maintaining desired diversity, all without reliance on external data.
+D. Additional Visual Results
+In Figs. 11 to 18, we present additional uncurated samples generated by FreeFlow-XL/2 at 512×512 resolution with only
+1-NFE. Again, we emphasize that, during training, we only make use of the teacher model (SiT-XL/2+REPA [100]), without
+querying any samples from ImageNet.
+18
+
+Figure 11. Uncurated 512×512 samples by FreeFlow, 1-NFE.
+Class label = “robin” (15)
+Figure 12. Uncurated 512×512 samples by FreeFlow, 1-NFE.
+Class label = “Siberian husky” (250)
+19
+
+Figure 13. Uncurated 512×512 samples by FreeFlow, 1-NFE.
+Class label = “barn” (425)
+Figure 14. Uncurated 512×512 samples by FreeFlow, 1-NFE.
+Class label = “desktop computer” (527)
+20
+
+Figure 15. Uncurated 512×512 samples by FreeFlow, 1-NFE.
+Class label = “dogsled” (537)
+Figure 16. Uncurated 512×512 samples by FreeFlow, 1-NFE.
+Class label = “fire truck” (555)
+21
+
+Figure 17. Uncurated 512×512 samples by FreeFlow, 1-NFE.
+Class label = “lakeside” (975)
+Figure 18. Uncurated 512×512 samples by FreeFlow, 1-NFE.
+Class label = “volcano” (980)
+22

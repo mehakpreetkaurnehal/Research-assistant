@@ -5,6 +5,10 @@ import pandas as pd
 import time
 import arxiv
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 # Configuration
 OUTPUT_CSV        = "data/raw/arxiv_metadata.csv"
 MAX_RESULTS       = 50      # number of papers to fetch (adjust as needed)

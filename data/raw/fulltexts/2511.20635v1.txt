@@ -1,0 +1,1993 @@
+iMontage: Unified, Versatile, Highly Dynamic Many-to-many Image Generation
+Zhoujie Fu1,2, Xianfang Zeng2,++, Jinghong Lan2, Xinyao Liao1,2, Cheng Chen1, Junyi Chen3,
+Jiacheng Wei1, Wei Cheng2, Shiyu Liu2, Yunuo Chen2,3, Gang Yu†,2 Guosheng Lin†,1
+1Nanyang Technological University
+2StepFun
+3Shanghai Jiao Tong University
+iMontage Homepage
+One to One
+ to One
+ to 
+Figure 1. iMontage can flexibly deal with many input images, and can generate many output images with highly consistency. We use three
+different colors to represent three settings. The dotted-line box images are the input.
+Abstract
+Pre-trained video models learn powerful priors for gen-
+erating high-quality, temporally coherent content. While
+these models excel at temporal coherence, their dynam-
+ics are often constrained by the continuous nature of their
+++ Project Leader
+† Corresponding Author
+training data. We hypothesize that by injecting the rich and
+unconstrained content diversity from image data into this
+coherent temporal framework, we can generate image sets
+that feature both natural transitions and a far more expan-
+sive dynamic range. To this end, we introduce iMontage, a
+unified framework designed to repurpose a powerful video
+model into an all-in-one image generator. The framework
+1
+arXiv:2511.20635v1  [cs.CV]  25 Nov 2025
+
+consumes and produces variable-length image sets, unify-
+ing a wide array of image generation and editing tasks. To
+achieve this, we propose an elegant and minimally invasive
+adaptation strategy, complemented by a tailored data cura-
+tion process and training paradigm. This approach allows
+the model to acquire broad image manipulation capabilities
+without corrupting its invaluable original motion priors.
+iMontage excels across several mainstream many-in-many-
+out tasks, not only maintaining strong cross-image contex-
+tual consistency but also generating scenes with extraordi-
+nary dynamics that surpass conventional scopes. Our code
+and model weights will be made publicly available.
+1. Introduction
+Large-scale diffusion-based generative models[16, 26, 38,
+39, 44, 45] have sparked a revolution in creative and high-
+quality image generation, accelerating progress in down-
+stream tasks such as image editing. A recent trend in the
+field is to unify diverse image tasks within a single frame-
+work [33, 35, 40, 58], inspired by the success of Large Lan-
+guage Models (LLMs) and large vision language models
+(VLMs) [12, 14, 36, 59]. While most unified image mod-
+els remain specialized for single-in-single-out image tasks,
+certain commercial model has taken an early lead in extend-
+ing unified image generation to multi-input, multi-output
+settings[3] very recently. Accordingly, the many-to-many
+(multi-input, multi-output) setting warrants systematic ex-
+ploration by the academic and open-source communities.
+The many-to-many paradigm splits into two approaches:
+(i) token-centric models that represent text and images as a
+unified multimodal token stream and autoregressively gen-
+erate target tokens conditioned on the inputs[58], thereby
+achieving many-to-many mappings; and (ii) video-centric
+pipelines that repurpose video diffusion generation as back-
+bones, casting the task as discontinuous video generation
+and naturally accommodating variable numbers of input
+and output frames[10, 30]. While the first approach pro-
+vides an appealing and promising modal-unified solution,
+it’s generation quality and instruction following capabil-
+ity is challenged by common sense compared to diffusion
+paradigm. In contrast, the second approach elegantly lever-
+ages pre-trained motion priors to markedly enhance tem-
+poral coherence and handle variable-length inputs and out-
+puts. Specifically, [10] trained a model of video genera-
+tion from scratch and constructed a large-scale dataset of
+captioned frame pairs for instruction-tuned editing, demon-
+strating strong consistency and faithful detail preservation
+with respect to the input images.
+Despite these advances for the diffusion-based paradigm,
+a critical question persists: How can a model generate
+highly dynamic multi-image outputs while maintaining
+temporal and semantic consistency?
+To our empirical
+knowledge, image-only models can produce highly diverse
+images based on the same inputs, yet they struggle with
+temporal consistency due to limited implicit understand-
+ing of world dynamics. Meanwhile, video-based models
+bring strong motion priors that improve temporal consis-
+tency; however, most foundation video models are trained
+predominantly on contiguous clips, which rarely contains
+hard cuts, abrupt transitions, or large camera/subject mo-
+tions, and thereby transferring poorly to highly dynamic
+content and limiting task versatility.
+In response, we present iMontage, a unified genera-
+tive model that produces multiple, highly dynamic images
+conditioned on instructions and arbitrary reference images.
+Following the video-based paradigm, iMontage builds on
+a large pretrained video model and treats both inputs and
+outputs as pseudo-frames.
+We introduce a novel rotary
+positional embedding (RoPE) strategy to prevent concep-
+tual ambiguity between multiple image frames and video
+frames. Our strategy explicitly maintains the model’s pre-
+trained capability in modeling temporal coherence, while
+clearly differentiating the discrete nature of image sets from
+the continuous flow of video sequences. We further provide
+a data-curation pipeline, which is carefully categorized and
+filtered for motion diversity and instruction quality, support-
+ing broad, highly dynamic scenario. Finally, we detail a
+training regimen that offers practical insights into multi-task
+unification. Together, these components marry video gener-
+ation with many-to-many image generation, achieving both
+temporal and content consistency.
+We evaluate iMontage across three settings: one-to-one
+image editing, many-to-one image generation, and many-
+to-many image generation. For each setting, we present
+strong qualitative performances across all sub-tasks, show-
+casing robust instruction following, high-dynamic outputs,
+and consistent content generation, as presented in Fig. 1.
+Furthermore, we provide state-of-the art quantitative met-
+rics on image editing benchmark (one-to-one), in-context
+learning benchmark (many-to-one) and storyboard genera-
+tion evaluation (many-to-many).
+In summary, our contributions are as follows:
+• We introduce iMontage, a unified model that handles
+variable numbers of input and output frames, bridging
+video generation and highly dynamic image generation.
+• We develop a task-agnostic, temporally diverse data cura-
+tion pipeline paired with a multi-task training paradigm,
+ensuring learnability across heterogeneous tasks and tem-
+poral structures and enabling robust many-to-many gen-
+eralization.
+• Our model showcases convincing results over huge num-
+ber of variable experiments, including most mainstream-
+ing image generation and editing tasks. Massive visual-
+ization results and comprehensive evaluation metrics pro-
+vide SOTA results in open-source community and even
+comparable results with commercial models.
+2
+
+iMontage
+VAE Encoder
+Input images
+Please output N images, 
+following the instruction: 
+Ref to the characters, 
+generate stories: 
+1…,    2…,    3…,    4…
+Text Tokenizer
+× 1
+3 N
+fix-len text tokens
+var-len image/noise tokens
+Dual
+Stream    Blocks
+Marginal RoPE
+Single
+Stream   Blocks
+× 2
+3 N
+Target images
+Text Prompts
++ Noise
+Marginal RoPE
+(0, H0, W0) (1, H1, W1)
+(Tmax, Hout, Wout)
+Head Slots
+Margin
+Tail Slots
+Figure 2. Overview of iMontage. The model accepts a flexible set of reference images and produces N outputs conditioned on a text
+prompt. Images are encoded by a 3D VAE separately, text by a language model, and both token streams are processed by an MMDiT.
+We concatenate clean reference-image tokens with noisy target tokens before denoising. Right: training uses fixed-length text tokens and
+variable-length image/noise tokens, transitions from dual stream to single stream blocks. For image branch, we apply Marginal RoPE, a
+head–tail temporal indexing that separates input and output pseudo-frames, preserves spatial RoPE, and supports many-to-many generation.
+In figure, notation H and W with subscription denote the height/width indices of the 2D RoPE computed at the image’s native resolution,
+while notation T represents assigned time index for temporal dimension.
+2. Related work
+2.1. Unified Generation and Editing Models
+Recent research has increasingly focused on consolidating
+diverse visual synthesis tasks into single, unified frame-
+works. Early efforts[17, 28, 57] like OmniGen [58] and
+ACE++ [35] pioneered monolithic architectures capable of
+handling generation, editing, and other vision tasks without
+requiring task-specific modules. This trend evolved with the
+integration of powerful multimodal large language models
+(MLLMs) as reasoning engines. Models such as Step1X-
+Edit [33] and Qwen-Image [14] leverage an MLLM to inter-
+pret complex user instructions, which then guide a diffusion
+decoder to produce high-fidelity edits. This approach sig-
+nificantly improves instruction-following capabilities. No-
+tably, unified systems in other AIGC area are also emerg-
+ing, such as [2, 34, 52] in video generation, [32, 49, 62] in
+audio generation, and even more powerful combining dif-
+ferent modalities together[8, 13, 37, 46, 47]. While these
+unified image models demonstrate impressive versatility,
+they are predominantly architected for single-input, single-
+output tasks. They lack the inherent capability to manage
+multiple image inputs and generate a set of dynamically var-
+ied yet coherent outputs from a single prompt, a key limita-
+tion our work addresses.
+2.2. From One-to-one to Many-to-many Generation
+The frontier of generative modeling is advancing from
+single-image tasks to more complex many-to-many scenar-
+ios that require handling multiple inputs to produce multi-
+ple outputs. A significant paradigm shift was introduced by
+UniReal [10] , which re-frames multi-image generation as
+”discontinuous video generation.” By leveraging the pow-
+erful temporal priors of video models, this approach natu-
+rally accommodates a variable number of input and output
+”frames” and uses large-scale video data as a source of uni-
+versal supervision for learning real-world dynamics. Fol-
+lowing this direction, models like RealGeneral [30] also ex-
+plore video backbones for unified image generation. More
+recent ”any-to-any” models, such as BAGEL [59] and Om-
+niGen [58], are trained on vast, interleaved multimodal
+datasets, enabling them to handle arbitrary combinations
+of inputs and outputs and exhibit emergent world-modeling
+capabilities. However, a critical challenge persists. Foun-
+dation video models are typically trained on contiguous
+video clips, which limits their ability to generate highly dy-
+namic or temporally discontinuous content. This reliance
+on smooth motion priors hinders their versatility for tasks
+requiring abrupt scene changes or significant variations be-
+tween outputs, a gap that iMontage is designed to fill.
+3. Method
+3.1. Model Design
+Network Archtecture.
+As illustrated in Fig. 2, we adopt
+a hybrid-to-single-stream MMDiT paired with a 3D VAE
+for images and a language model for text instruction. All
+components are initialized from HunyuanVideo [24]: the
+3
+
+Website 
+Source
+Open-
+Source
+Dataset
+Distilled 
+Dataset
+Internal 
+Dataset
+Single-turn & Multi-turn Image Editing
+“removed the scissors 
+box from top”
+Subject Removal
+Color Alteration
+“change the color of the 
+barber's cape to blue”
+Subject Addition
+“add a photo frame in 
+the top”
+Style Transfer
+“change the style of 
+the image to 
+Watercolor”
+Multi CRef
+Human
+Object
+Object
+Scenario
+"A polar bear<image_1> stands on a boat<image_3> next 
+to a man<image_0> holding an orange phone<image_0>, 
+with a basket of oysters<image_2> in the foreground."
+Qwen2.5-VL
+GPT-4o
+Target
+Conditioned CRef
+Human
+Object
+Target
+Depth Anything V2
+ControlNet
+Echo-4o
+"Position the person from <image_0> standing 
+next to the object from <image_1>, … "
+OpenPose
+SRef
+Character
+Style
+"Ref to the second image, transfer 
+the style from <image_1> to 
+<image_0> and generate a new 
+image."
+Multi View Generation
+"<image_0>Let's 
+see what it looks 
+like from the 
+left.<image_1>"
+"<image_1>The lens 
+turns right around the 
+object, showing a 
+diagonal back view, 
+about 150 
+degrees.<image_2>"
+"<image_2>The 
+viewpoint moves from 
+directly in front of the 
+object to a bit to the 
+right, about 25 
+degrees.<image_3>"
+"<image_3>Let's 
+take a look from 
+the left 
+back.<image_4>"
+GPT-4o
+Storyboard Generation
+Seedream 4.0
+GPT-4o
+1. She discovers a 
+glowing map in an 
+attic 
+2. She steps through a 
+door into a floating 
+garden
+3. Fireflies form an 
+arrow toward a 
+hidden gate
+Figure 3. Overview of our dataset: Our dataset is constructed from four sources and is organized into two stages, comprising high-quality
+foundational data and multiple task-oriented subsets.
+MMDiT and 3D VAE are taken from the I2V checkpoint,
+while the text encoder is taken from the T2V checkpoint.
+Reference images are encoded by the 3D VAE seperately
+and then patchified into tokens; textual instructions are en-
+coded by the language model into text tokens. Following
+the I2V formulation, we concatenate clean reference-image
+tokens with noisy target tokens and feed the sequence to
+the image branch block. We train our model to accommo-
+date variable numbers of input and output frames by con-
+structing variable-length attention maps over their image
+tokens, guided by prompt-engineering cues. During train-
+ing, we frozen VAE and text encoder, only full-finetune the
+MMDiT.
+Position Embedding
+A key objective is to endow
+the transformer with sensitivity to multiple images with-
+out perturbing its original positional geometry. We adopt
+a simple yet effective strategy: cast all input/output im-
+ages as pseudo-frames along the temporal axis, assign each
+a unique time index, and keep their native spatial resolu-
+tion and 2D positional encoding intact. Concretely, we pre-
+serve the pretrained spatial RoPE and introduce a separa-
+ble temporal RoPE with per-image index offsets, supplying
+cross-image ordering cues while leaving the spatial distri-
+bution unchanged. Inspired by L-RoPE [25], we assign in-
+put images to early temporal positions and output images
+to late positions. In practice, we allocate a 3D RoPE with
+32 temporal indices, reserving {0, . . . , 7} for inputs and
+{24, . . . , 31} for outputs, leaving a wide temporal margin
+between them. This head–tail layout reduces positional in-
+terference between inputs and targets and empirically pro-
+motes more diverse output content while preserving tempo-
+ral coherence.
+Prompt Engineering We adopt a purely text-instruction
+interface powered by a strong LLM encoder, without masks
+or auxiliary visual embeddings.
+To unify heterogeneous
+tasks, we pair a set of common prompts with task-specific
+templates.
+For the common prompts, we (i) prepend a
+system-style preamble: Please output N images accord-
+ing to the instruction: and (ii) use an interleaved multi-
+modal format that explicitly marks image positions via tex-
+tual placeholders <image n> within the prompt.
+3.2. Dataset Creation
+We divide our data construction into two phases: a pre-
+training dataset and a supervised fine-tuning (SFT) dataset.
+The overview of our dataset construction is refered in Fig. 3.
+3.2.1. Pretraining Dataset
+We partition the pretraining data into two pools: an image-
+edit pool and a video frame-pair pool, sourced from internal
+corpora. The image-edit pool spans most single-image edit-
+ing tasks, providing paired (input, edited) images with con-
+cise, fine-grained instructions specifying the operation. The
+video frame-pair pool consists of high-quality frame pairs
+extracted from videos (with associated captions), curated
+under stringent quality criteria. We further refine the video
+4
+
+Table 1. Comparison metrics of Motion Change and Edit overall on GEdit-GPT4o-EN; Action and Average on ImgEdit. For GEdit-
+GPT4o-EN, Semantic Consistency (G SC), Perceptual Quality (G PQ), and Overall Score (G O) are reported. Bold means the best
+performance and underline means the second best performance.
+Category
+Models
+Motion Change - GEdit
+Edit overall - GEdit
+ImgEdit
+G SC ↑
+G P Q ↑
+G O ↑
+G SC ↑
+G P Q ↑
+G O ↑
+Action
+Average
+Closed-source
+Gemini 2.5[12]
+6.87
+7.79
+6.72
+8.25
+8.29
+7.89
+4.61
+4.30
+GPT-4o[36]
+7.81
+8.53
+7.81
+8.74
+7.67
+8.01
+4.83
+4.30
+Seedream 4.0[3]
+5.58
+8.53
+5.53
+8.41
+8.04
+7.81
+4.66
+4.32
+Open-source
+ICEdit[69]
+0.93
+7.98
+1.13
+4.94
+7.39
+4.87
+3.68
+3.05
+Omnigen[58]
+3.35
+6.68
+3.12
+5.88
+5.87
+5.01
+3.38
+2.96
+Omnigen2[53]
+4.75
+8.08
+5.13
+7.16
+6.77
+6.41
+4.68
+3.44
+Bagel[14]
+5.25
+8.03
+5.09
+7.48
+6.80
+6.60
+4.17
+3.20
+UniWorld-V1[29]
+1.58
+7.55
+1.76
+4.93
+7.43
+4.85
+2.74
+3.26
+HiDream-I1 (E1)[4]
+1.58
+7.23
+1.66
+5.66
+6.06
+5.01
+3.33
+3.17
+HiDream-E1.1[20]
+5.55
+7.80
+5.64
+7.15
+6.65
+6.42
+4.18
+3.97
+Flux-Kontext-dev[26]
+5.23
+7.53
+4.95
+7.16
+7.37
+6.51
+4.35
+3.97
+Step1X-Edit v1.1[33]
+4.65
+8.15
+4.73
+7.66
+7.35
+6.97
+3.73
+3.90
+Open-source
+iMontage (Ours)
+5.25
+8.43
+5.53
+7.21
+7.80
+6.94
+4.48
+4.11
+frame pairs by selecting samples that satisfy the following
+filtering criteria:
+For frame pairs drawn from a single clip, we apply mo-
+tion filtering with an optical-flow estimator [48]: for each
+sample, we compute the average motion magnitude and
+preferentially retain or upweight high-motion instances to
+increase their prevalence. To further diversify dynamics,
+we concatenate segments from the same source video and
+re-clip them without motion- or camera-change heuristics
+(i.e., not cutting at large motions or pans), thereby produc-
+ing cross transition frame pairs and mitigating the bias to-
+ward quasi-static content.
+Post-filtering, the dataset comprises 5M image-edit pairs
+and 15M video frame pairs, providing supervision for
+highly dynamic content generating and robust instruction
+following.
+3.2.2. Multi Task Dataset
+Our Multi Task dataset is constructed based on tasks, vary-
+ing from one-to-one task to many-to-many task. Our data
+curation pipeline for each task is described as follows:
+Multi CRef. We crawl web posts to assemble reference
+images for human, object, and scenario. Human images
+are filtered to single-person shots via a detector [15]; ob-
+ject/scenario images need no extra filtering. A VLM [1]
+composes CRef prompts by randomly combining sources,
+GPT-4o [36] generates the corresponding images, and the
+VLM then scores and filters candidates. This pipeline yields
+around 90k high-quality samples.
+Conditioned CRef. Different from the CRef dataset, we
+collect the data from an open-source dataset Echo-4o[66].
+We apply some classic ControlNet[68] generation control
+maps to the target image. We use OpenPose[5] to gener-
+ate the character poses of the composite image, use Depth-
+Anything-V2[63] to generate the depth map of the target
+image, and also use the Lineart model[22] as an edge detec-
+tor. We add these condition pairs to Echo-4o and create a
+new Conditioned CRef dataset about 50k samples.
+SRef. We curate style-reference data analogously to CRef.
+We scrape character posts and select human images via a
+VLM aesthetic score [1] as content references, and collect
+hand-drawn illustrations from open sources as style refer-
+ences. Using subject–style models[55, 60], we generate im-
+ages by randomly pairing content and style. A VLM then
+scores outputs and checks ID consistency with the content
+image to prevent style leakage. This yields 35k samples.
+Multi Turn Editing. In this task, we generate multiple re-
+sponses at the same time according to instruction, where
+sub-steps instruction cover all editing tasks in pretraining
+image-edit dataset. Our data is extracted from an internal
+dataset and we collect around 100k samples.
+Multi View Generation. We curate our multi-view dataset
+from the open-source 3D corpus MVImageNet V2 [19]. For
+each base sample, we randomly select 1–4 additional view-
+points and, in successive order, use GPT-4o [36] to caption
+the relative camera motion between adjacent images, yield-
+ing concise supervision for multi-view generation. We col-
+lect around 90k samples.
+Storyboard Generation. Storyboard generation is closely
+related to the storytelling setting [42, 51], but targets high
+inter-panel diversity, for example, drastic scene changes and
+distinct character actions across images. Leveraging recent
+commercial foundation model Seedream4.0[3], we distill
+high-quality supervision from their outputs to construct in-
+struction–image sequences for training. We begin with an
+internal character image dataset and apply a face-detection
+filter [15] and an NSFW filter [27] to obtain whole-face
+character reference images. We then design instruction tem-
+plates that prompt Seedream4.0 to produce semantically
+rich, dynamic scenes and multi-panel stories. The gener-
+ated images are captioned with GPT-4o [36], yielding con-
+5
+
+Table 2. Quantitative comparison on OmniContext grouped by model availability. “Char. + Obj.” indicates Character + Object.
+Category
+Model
+SINGLE
+MULTIPLE
+SCENE
+Average↑
+Char.
+Obj.
+Char.
+Obj.
+Char.
++ Obj.
+Char.
+Obj.
+Char.
++ Obj.
+Closed-source
+Gemini 2.5[12]
+8.62
+9.11
+8.77
+8.88
+7.39
+7.29
+7.05
+6.68
+7.84
+GPT-4o[36]
+8.90
+9.01
+9.07
+8.95
+8.54
+8.90
+8.44
+8.60
+8.80
+Open-source
+InfiniteYou[23]
+6.05
+–
+–
+–
+–
+–
+–
+–
+–
+OmniGen[58]
+7.21
+5.71
+5.65
+5.44
+4.68
+3.59
+4.32
+5.12
+4.34
+UNO[56]
+6.60
+6.83
+2.54
+5.61
+4.39
+2.06
+3.33
+4.37
+4.71
+BAGEL[14]
+5.48
+7.03
+5.17
+6.64
+6.24
+4.07
+5.71
+5.47
+5.73
+OmniGen2[53]
+8.05
+7.58
+7.11
+7.13
+7.45
+6.38
+6.71
+7.04
+7.18
+Open-source
+iMontage (Ours)
+7.94
+7.77
+6.75
+7.57
+8.20
+6.90
+6.81
+7.37
+7.41
+cise storyboard (instruction, images) pairs for supervision.
+We collect around 29k samples.
+3.3. Training Scheme
+We adopt a three-stage training strategy using a dynamic
+mixture of the curated data described above-specifically, a
+Pre-training stage for large-scale pre-training, a Supervised
+Fine-tuning stage, and a High-Quality Annealing stage:
+Pre-training Stage. In this stage, we train on the Pretrain-
+ing Dataset to instill instruction following and acclimate the
+model to highly dynamic content. Since we initialize from
+a pretrained backbone, we eschew progressive resolution
+schedules [7, 16, 18]; instead, we adopt aspect-ratio–aware
+resolution bucketing: for each sample, we select the best-
+fitting size from a set of 37 canonical resolutions and resize
+accordingly. Batch size in this stage is dynamically adjusted
+by sequence length, equalizing the token budget across res-
+olutions and yielding smoother, more stable optimization.
+SFT Stage. We investigate the best solution of unifying
+multitasks with huge variance in this stage. Our strategy
+can be concluded as follows:
+• FlatMix: All-in-One Joint Training. Train all tasks to-
+gether in a single mixed pool.
+• StageMix: Curriculum Training. Two-phase schedule:
+first train on the three many-to-one tasks, then add the
+three many-out tasks and continue mixed training.
+• CocktailMix:
+Difficulty-Ordered Fine-Tuning.
+We
+witness notable training difficulty variance for each sin-
+gle task, motivating us of a mixture of training by diffi-
+culty. In practice, we begin with the simplest task, then
+introduce the second-easiest while reducing the sampling
+weight of the first. We continue this process by adding
+one harder task at a time and gradually shifting mixture
+weights until the hardest task is included and receives the
+largest training share.
+For the final decision, we choose the CocktailMix train-
+ing strategy, and discussion about the training is detailed in
+the ablation study (Sec. 4.4). During all mixture training,
+we apply weights based on the data amount of each task,
+ensuring all tasks are treated equally. In this stage, we al-
+low different resolution for input images while fix output
+resolution for convenience. Since input images can be dif-
+ferent resolution, we set batch size per GPU to 1 during all
+SFT training stage.
+HQ Stage. In image and video generation, it is widely ob-
+served that concluding training with a small tranche of high-
+quality data improves final fidelity [39, 64, 71]. We adopt
+this strategy: using a combination of manual review and
+VLM assistance, we curate high-quality subsets for each
+task, then perform a brief, unified finetuning pass across all
+tasks after SFT. During this stage, we anneal the learning
+rate to zero.
+All our experiments all conducted on 64 NVIDIA H800
+GPUs.
+We apply a constant learning rate of 1e-5 for
+all training stages and the training target follows flow
+matching[31]. More detailed implementation can be found
+in Sec. 6.
+4. Experiment
+As a unified model, iMontage shows strong performance on
+various tasks even compared to fixed input/output models.
+Note that our model only need one inference, with a de-
+fault of 50 diffusion steps. For clarity, we organize results
+by input–output cardinality, spliting into one-to-one editing
+(Sec. 4.1), many-to-one generation (Sec. 4.2) and many-to-
+many generation (Sec. 4.3).
+4.1. One-to-one Editing
+We report competitive quantitative metrics and compelling
+qualitative results on instruction-based image editing. We
+compare our model against twelve strong baselines, includ-
+ing native image editing models, unified MLLM models
+and powerful closed-source product. Average metrics on
+GEdit benchmark[33] and ImgEdit benchmark[67] can be
+found in Tab. 1. Despite closed-source models and commer-
+cial models, iMontage shows strong performance on both
+benchmark over other models.
+We also report metric about motion-related sub-task in
+Tab. 1. Our method demonstrates superior motion-aware
+editing, exhibiting strong temporal consistency and motion
+6
+
+1.
+Messie in a cozy library reaches for a book on a wooden shelf under warm lighting; 
+2.
+Messie sits at a sunlit table by a window, pondering over an open notebook; 
+3.
+Messie walks through an art gallery, admiring the vibrant paintings on the walls. 
+4.
+Messie is running joyfully along  shoreline, with the setting sun casting warm glow 
+over the scene.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+Ours
+1.
+A woman in a kimono walks through a lush garden path, 
+holding a red parasol; 
+2.
+She kneels down to gently reach out to a white cat on a leaf-
+covered path; 
+3.
+The woman strolls along a sunlit garden path, her parasol 
+casting a shadow behind her.
+1.
+On a sunlit beach, a woman in her own suit waves while the 
+man arranges seashells nearby;  
+2.
+By a sparkling pool, the woman and man toast with 
+refreshing drinks under the shade of an umbrella;  
+3.
+In a golden field at sunset, they enjoy a picnic with an array 
+of fruits and drinks on a blanket.
+Figure 4. Comparison with three baselines on storyboard generation setting. Single character and many characters samples are presented.
+priors. These gains are expected: we inherit strong world
+dynamic knowledge from a large pretrained video back-
+bone, then reinforce it with pretrained on a high-dynamics
+video–frame corpus. Please find our one-to-one image edit-
+ing visualization results in Fig. 6 and Fig. 7.
+4.2. Many-to-one Generation
+The core challenge for multiple inputs is how to preserve
+all their content and harmony them together.
+We report
+our results on the OmniContext benchmark[53], which aims
+to provide a comprehensive evaluation of the models’ in-
+context generation abilities. We report our metrics against
+seven baselines. Detailed metrics can be found in Tab. 2.
+We also visualize representative results in supplemen-
+tary materials, showing that iMontage handles diverse tasks
+while maintaining the source image’s context. We select
+challenging cases to stress control and fidelity. In Multi-
+CRef, the model fuses cues from multiple references with-
+out altering core content, while being faithful to complex
+instruction by generating a highly detailed background.
+In Conditioned CRef, it respects the conditioning signal
+yet preserves the human’s details, which is considered to
+be hard for generation models.
+For SRef, we include
+scene-centric and human/object-centric inputs to demon-
+strate strong style transfer that retains style and identity.
+4.3. Many-to-many Generation
+Generating multiple outputs while preserving consistency
+is highly challenging. We raise the bar by requiring both
+cross-output content consistency and temporal consistency.
+To evaluate capability, we consider three disparate tasks.
+Multi-view generation. We simulate camera rotations, fol-
+lowing [14], and use natural-language descriptions of cam-
+era motion to render novel views from a single reference
+image. This temporally continuous setting probes whether
+Table 3. Storyboard generation metrics over iMontage (ours) and
+three baselines. Dino feature similarity, Clip feature similarity and
+VLM rating scores are reported.
+(a) Identity Preservation.
+Method
+DINO↑
+CLIP↑
+VLMpref ↑
+StoryDiffusion
+0.367
+0.570
+3.962
+UNO (w/ UMO)
+0.519
+0.674
+6.625
+OmniGen2 (w/ UMO)
+0.486
+0.619
+6.857
+iMontage (Ours)
+0.585
+0.690
+7.909
+(b) Temporal Consistency.
+Method
+DINO↑
+CLIP↑
+VLMpref ↑
+StoryDiffusion
+0.440
+0.649
+7.111
+UNO (w/ UMO)
+0.479
+0.676
+6.556
+OmniGen2 (w/ UMO)
+0.460
+0.655
+7.889
+iMontage (Ours)
+0.615
+0.745
+9.556
+the model preserves identity, geometry, materials, and back-
+ground context as the viewpoint changes. We report iden-
+tity/structure consistency across views and visualize long
+arcs of rotation to stress continuity. All our visualization
+results can be found in Fig. 10.
+Multi-turn editing. Most image editors support multi-turn
+pipelines by running inference sequentially, yet they often
+drift, overwriting non-target content. We cast multi-turn
+editing as a content-preservation task: given an initial im-
+age and a sequence of edit instructions, the model should
+localize changes while maintaining other parts. All our vi-
+sualization results can be found in Fig. 7.
+Storyboard generation.
+This is our most comprehen-
+sive setting: temporally, the model must produce smooth,
+continuous trajectories while also handling highly dynamic
+transitions such as hard cuts, large camera or subject mo-
+tions, and scene changes; spatially, it must preserve con-
+7
+
+Table 4. User study metrics on storyboard generation of twenty
+samples. Rating scores are between 1 and 5, while a higher score
+means better performance.
+(a) Instruction following (IF) and identity preservation (IP).
+Method
+IF ↑
+IP ↑
+StoryDiffusion
+2.81
+1.86
+UNO (w/ UMO)
+3.68
+2.90
+OmniGen2 (w/ UMO)
+3.97
+3.07
+iMontage (Ours)
+4.46
+3.91
+(b) Temporal consistency (TC) and overall quality (OQ).
+Method
+TC ↑
+OQ ↑
+StoryDiffusion
+2.28
+2.12
+UNO (w/ UMO)
+3.05
+3.03
+OmniGen2 (w/ UMO)
+3.04
+3.23
+iMontage (Ours)
+4.31
+4.16
+tent consistency by maintaining identity, layout, and fine-
+grained appearance across all outputs.
+As illustrated in visualization results in supplementary
+material, iMontage delivers coherent yet highly diverse re-
+sults across all three settings in a single forward pass. To
+the best of our knowledge, this is the first model to unify
+these tasks within one model and one-shot inference.
+To better quantify many-out capability, we conduct a
+quantitative study in the storyboard setting, comparing
+our method against two unified systems (OmniGen2 and
+UNO) and a storytelling-focused baseline, StoryDiffusion
+[72]. We focus on two axes: ID preservation and tempo-
+ral consistency.
+The former measures how closely each
+generated character matches the reference identity (espe-
+cially the character’s whole body details, such as clothes,
+skin color, hair), while the latter captures cross-panel co-
+herence among the generated images. In our evaluation,
+the evaluated OmniGen2 and UNO models are optimized
+by UMO[11], which improves identity preservation and
+other quality measures. For metrics, we use DINO[6] and
+CLIP[41] feature similarity following [21, 70], along with
+a VLM rating system. We report the comparison score in
+Tab. 3. We also present visualization comparison in Fig. 4.
+Detailed conduction of our storyboard evaluation can be
+found in Sec. 8.1.
+Furthermore, for a more comprehensive evaluation, we
+conduct a user study with 50 professional participants.
+We show the comparison metrics in Tab. 4. Our method
+achieves the best performance both at instruction following
+and identity preservation, outperforms baselines with a big
+margin. Detailed experiments of user study can be found in
+Sec. 8.2.
+4.4. Ablation Study
+RoPE Strategy. We first ablate our RoPE strategy design.
+Our default Marginal RoPE assigns inputs to the head of
+Figure 5. Ablation on different RoPE strategy. We evaluate on a
+subset of the editing data with low resolution, training each strat-
+egy for the same number of steps. In the figure, corner numbers
+indicate provenance: 1 original input, 2 edited ground truth, 3 out-
+put from Marginal RoPE, and 4 output from Even RoPE.
+the temporal index range and outputs to the tail, leaving a
+gap between them; the control, Even RoPE, distributes all
+images uniformly along the temporal axis. We conduct our
+ablation study using a same setting from pretraining dataset,
+of which is only a small amount of data. We observe a late
+convergence for Even RoPE, with the same training steps.
+Fig. 5 indicates the visualization of the RoPE ablation study.
+Training Scheme.
+As discussed in Sec. 3.3, we ablate
+three SFT strategies. With FlatMix, the training loss oscil-
+lates strongly and does not stabilize. After some updates,
+the model drifts toward the easier tasks even with inverse-
+size reweighting. We conduct StageMix and CocktailMix
+experiments at the same time, the former groups training by
+task type, while the latter organizes the schedule by task dif-
+ficulty. CocktailMix delivers strong results across all tasks
+and shows a clear advantage on the harder settings, outper-
+forming StageMix by a significant margin. We also conduct
+a comparison experiment on Multi CRef, with a same train-
+ing steps for both strategy. The result reveals a 12.6% gain
+on OmniContext for CocktailMix. We show more details in
+Sec. 8.3.
+5. Conclusion and Limitations
+In conclusion, we introduce iMontage, a unified many-to-
+many image generation model that can create highly dy-
+namic contents while preserving both temporal and con-
+tent consistency. Adequate experiments demonstrate iMon-
+tage’s superior capabilities in image generation.
+However, iMontage still face some limitations. First, due
+to data and compute constraints, we have not explored long-
+context many-to-many settings, and the model currently de-
+livers its best quality with up to four inputs and four outputs.
+Second, several capabilities remain limited. We provide a
+detailed breakdown and failure cases in Sec. 9.2. We also
+include more discussion about concurrent work in Sec. 9.1.
+For next step, we view scaling long-context supervision, en-
+hancing data quality and broadening task coverage as pri-
+mary directions for future work.
+8
+
+References
+[1] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin
+Ge, Sibo Song, Kai Dang, Peng Wang, Shijie Wang, Jun
+Tang, et al. Qwen2. 5-vl technical report. arXiv preprint
+arXiv:2502.13923, 2025. 5
+[2] Omer Bar-Tal, Hila Chefer, Omer Tov, Charles Her-
+rmann, Roni Paiss, Shiran Zada, Ariel Ephrat, Junhwa Hur,
+Guanghui Liu, Amit Raj, et al. Lumiere: A space-time diffu-
+sion model for video generation. In SIGGRAPH Asia 2024
+Conference Papers, pages 1–11, 2024. 3
+[3] Bytedance.
+Seedream4.0, 2025.
+https://seed.
+bytedance.com/en/seedream4_0. 2, 5
+[4] Qi Cai, Jingwen Chen, Yang Chen, Yehao Li, Fuchen Long,
+Yingwei Pan, Zhaofan Qiu, Yiheng Zhang, Fengbin Gao,
+Peihan Xu, et al. Hidream-i1: A high-efficient image gen-
+erative foundation model with sparse diffusion transformer.
+arXiv preprint arXiv:2505.22705, 2025. 5
+[5] Zhe Cao, Gines Hidalgo, Tomas Simon, Shih-En Wei, and
+Yaser Sheikh.
+Openpose: Realtime multi-person 2d pose
+estimation using part affinity fields. IEEE transactions on
+pattern analysis and machine intelligence, 43(1):172–186,
+2019. 5
+[6] Mathilde Caron, Hugo Touvron, Ishan Misra, Herv´e J´egou,
+Julien Mairal, Piotr Bojanowski, and Armand Joulin. Emerg-
+ing properties in self-supervised vision transformers. In Pro-
+ceedings of the IEEE/CVF international conference on com-
+puter vision, pages 9650–9660, 2021. 8, 1
+[7] Junsong Chen, Jincheng Yu, Chongjian Ge, Lewei Yao,
+Enze Xie, Yue Wu, Zhongdao Wang, James Kwok, Ping
+Luo, Huchuan Lu, et al. Pixart: Fast training of diffusion
+transformer for photorealistic text-to-image synthesis. arXiv
+preprint arXiv:2310.00426, 2023. 6
+[8] Junyi Chen, Haoyi Zhu, Xianglong He, Yifan Wang, Jian-
+jun Zhou, Wenzheng Chang, Yang Zhou, Zizun Li, Zhou-
+jie Fu, Jiangmiao Pang, et al.
+Deepverse: 4d autoregres-
+sive video generation as a world model.
+arXiv preprint
+arXiv:2506.01103, 2025. 3
+[9] Lan Chen, Yuchao Gu, and Qi Mao. Univid: Unifying vi-
+sion tasks with pre-trained video generation models. arXiv
+preprint arXiv:2509.21760, 2025. 3
+[10] Xi Chen, Zhifei Zhang, He Zhang, Yuqian Zhou, Soo Ye
+Kim, Qing Liu, Yijun Li, Jianming Zhang, Nanxuan Zhao,
+Yilin Wang, et al. Unireal: Universal image generation and
+editing via learning real-world dynamics. In Proceedings of
+the Computer Vision and Pattern Recognition Conference,
+pages 12501–12511, 2025. 2, 3
+[11] Yufeng Cheng, Wenxu Wu, Shaojin Wu, Mengqi Huang, Fei
+Ding, and Qian He. Umo: Scaling multi-identity consistency
+for image customization via matching reward. arXiv preprint
+arXiv:2509.06818, 2025. 8
+[12] Google Deepmind.
+Gemini2.5, 2025.
+https : / /
+deepmind.google/models/gemini/pro/. 2, 5, 6
+[13] Google Deepmind. Veo3, 2025. https://deepmind.
+google/models/veo/. 3
+[14] Chaorui Deng, Deyao Zhu, Kunchang Li, Chenhui Gou,
+Feng Li, Zeyu Wang, Shu Zhong, Weihao Yu, Xiaonan Nie,
+Ziang Song, et al. Emerging properties in unified multimodal
+pretraining. arXiv preprint arXiv:2505.14683, 2025. 2, 3, 5,
+6, 7
+[15] Arnab Dhar.
+Yolov8-face-detection, 2024.
+https:
+//huggingface.co/arnabdhar/YOLOv8-Face-
+Detection. 5
+[16] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim
+Entezari, Jonas M¨uller, Harry Saini, Yam Levi, Dominik
+Lorenz, Axel Sauer, Frederic Boesel, et al. Scaling recti-
+fied flow transformers for high-resolution image synthesis.
+In Forty-first international conference on machine learning,
+2024. 2, 6
+[17] Tsu-Jui Fu, Yusu Qian, Chen Chen, Wenze Hu, Zhe Gan,
+and Yinfei Yang.
+Univg: A generalist diffusion model
+for unified image generation and editing.
+arXiv preprint
+arXiv:2503.12652, 2025. 3
+[18] Peng Gao, Le Zhuo, Dongyang Liu, Ruoyi Du, Xu Luo,
+Longtian Qiu, Yuhang Zhang, Chen Lin, Rongjie Huang,
+Shijie Geng, et al. Lumina-t2x: Transforming text into any
+modality, resolution, and duration via flow-based large diffu-
+sion transformers. arXiv preprint arXiv:2405.05945, 2024.
+6
+[19] Xiaoguang Han, Yushuang Wu, Luyue Shi, Haolin Liu,
+Hongjie Liao, Lingteng Qiu, Weihao Yuan, Xiaodong Gu,
+Zilong Dong, and Shuguang Cui.
+Mvimgnet2. 0:
+A
+larger-scale dataset of multi-view images.
+arXiv preprint
+arXiv:2412.01430, 2024. 5
+[20] HiDream-ai.
+Hidream-e1-1,
+2025.
+https : / /
+huggingface.co/HiDream-ai/HiDream-E1-1. 5
+[21] Ziqi Huang, Yinan He, Jiashuo Yu, Fan Zhang, Chenyang Si,
+Yuming Jiang, Yuanhan Zhang, Tianxing Wu, Qingyang Jin,
+Nattapol Chanpaisit, et al. Vbench: Comprehensive bench-
+mark suite for video generative models. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 21807–21818, 2024. 8, 1
+[22] Huggingface.
+Controlnet auxiliary models.
+https:
+//github.com/huggingface/controlnet_aux?
+tab=readme-ov-file, 2023. 5
+[23] Liming Jiang, Qing Yan, Yumin Jia, Zichuan Liu, Hao Kang,
+and Xin Lu.
+Infiniteyou: Flexible photo recrafting while
+preserving your identity. arXiv preprint arXiv:2503.16418,
+2025. 6
+[24] Weijie Kong, Qi Tian, Zijian Zhang, Rox Min, Zuozhuo Dai,
+Jin Zhou, Jiangfeng Xiong, Xin Li, Bo Wu, Jianwei Zhang,
+et al. Hunyuanvideo: A systematic framework for large video
+generative models. arXiv preprint arXiv:2412.03603, 2024.
+3
+[25] Zhe Kong, Feng Gao, Yong Zhang, Zhuoliang Kang, Xi-
+aoming Wei, Xunliang Cai, Guanying Chen, and Wenhan
+Luo. Let them talk: Audio-driven multi-person conversa-
+tional video generation. arXiv preprint arXiv:2505.22647,
+2025. 4
+[26] Black Forest Labs.
+Flux.1 [dev], 2024.
+https://
+huggingface.co/black- forest- labs/FLUX.
+1-dev. 2, 5
+[27] LAION.
+Clip-based nsfw detector, 2021.
+https:
+//github.com/LAION-AI/CLIP-based-NSFW-
+Detector. 5
+9
+
+[28] Wei Li, Xue Xu, Jiachen Liu, and Xinyan Xiao. Unimo-
+g: Unified image generation through multimodal conditional
+diffusion. arXiv preprint arXiv:2401.13388, 2024. 3
+[29] Bin Lin, Zongjian Li, Xinhua Cheng, Yuwei Niu, Yang Ye,
+Xianyi He, Shenghai Yuan, Wangbo Yu, Shaodong Wang,
+Yunyang Ge, et al. Uniworld: High-resolution semantic en-
+coders for unified visual understanding and generation. arXiv
+preprint arXiv:2506.03147, 2025. 5
+[30] Yijing Lin, Mengqi Huang, Shuhan Zhuang, and Zhendong
+Mao. Realgeneral: Unifying visual generation via tempo-
+ral in-context learning with video models.
+arXiv preprint
+arXiv:2503.10406, 2025. 2, 3
+[31] Yaron Lipman, Ricky TQ Chen, Heli Ben-Hamu, Maximil-
+ian Nickel, and Matt Le. Flow matching for generative mod-
+eling. arXiv preprint arXiv:2210.02747, 2022. 6
+[32] Haohe Liu, Yi Yuan, Xubo Liu, Xinhao Mei, Qiuqiang Kong,
+Qiao Tian, Yuping Wang, Wenwu Wang, Yuxuan Wang, and
+Mark D Plumbley. Audioldm 2: Learning holistic audio gen-
+eration with self-supervised pretraining. IEEE/ACM Trans-
+actions on Audio, Speech, and Language Processing, 32:
+2871–2883, 2024. 3
+[33] Shiyu Liu, Yucheng Han, Peng Xing, Fukun Yin, Rui Wang,
+Wei Cheng, Jiaqi Liao, Yingming Wang, Honghao Fu, Chun-
+rui Han, et al. Step1x-edit: A practical framework for general
+image editing. arXiv preprint arXiv:2504.17761, 2025. 2, 3,
+5, 6, 1
+[34] Jiabin Luo, Junhui Lin, Zeyu Zhang, Biao Wu, Meng Fang,
+Ling Chen, and Hao Tang. Univid: The open-source unified
+video model. arXiv preprint arXiv:2509.24200, 2025. 3
+[35] Chaojie Mao, Jingfeng Zhang, Yulin Pan, Zeyinzi Jiang,
+Zhen Han, Yu Liu, and Jingren Zhou. Ace++: Instruction-
+based image creation and editing via context-aware content
+filling. arXiv preprint arXiv:2501.02487, 2025. 2, 3
+[36] OpenAI. Gpt4o, 2024. https://www.openai.com/.
+2, 5, 6, 1
+[37] OpenAI. Sora2, 2025. https://openai.com/index/
+sora-2/. 3
+[38] William Peebles and Saining Xie. Scalable diffusion models
+with transformers. In Proceedings of the IEEE/CVF inter-
+national conference on computer vision, pages 4195–4205,
+2023. 2
+[39] Dustin
+Podell,
+Zion
+English,
+Kyle
+Lacey,
+Andreas
+Blattmann, Tim Dockhorn, Jonas M¨uller, Joe Penna, and
+Robin Rombach.
+Sdxl: Improving latent diffusion mod-
+els for high-resolution image synthesis.
+arXiv preprint
+arXiv:2307.01952, 2023. 2, 6
+[40] Qi Qin, Le Zhuo, Yi Xin, Ruoyi Du, Zhen Li, Bin Fu, Yiting
+Lu, Jiakang Yuan, Xinyue Li, Dongyang Liu, et al. Lumina-
+image 2.0: A unified and efficient image generative frame-
+work. arXiv preprint arXiv:2503.21758, 2025. 2
+[41] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning
+transferable visual models from natural language supervi-
+sion. In International conference on machine learning, pages
+8748–8763. PmLR, 2021. 8, 1
+[42] Tanzila Rahman, Hsin-Ying Lee, Jian Ren, Sergey Tulyakov,
+Shweta Mahajan, and Leonid Sigal. Make-a-story: Visual
+memory conditioned consistent story generation.
+In Pro-
+ceedings of the IEEE/CVF conference on computer vision
+and pattern recognition, pages 2493–2502, 2023. 5
+[43] Tianhe Ren, Shilong Liu, Ailing Zeng, Jing Lin, Kunchang
+Li, He Cao, Jiayu Chen, Xinyu Huang, Yukang Chen, Feng
+Yan, et al. Grounded sam: Assembling open-world models
+for diverse visual tasks. arXiv preprint arXiv:2401.14159,
+2024. 1
+[44] Robin Rombach, Andreas Blattmann, Dominik Lorenz,
+Patrick Esser, and Bj¨orn Ommer.
+High-resolution image
+synthesis with latent diffusion models.
+In Proceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pages 10684–10695, 2022. 2
+[45] Chitwan Saharia, William Chan, Saurabh Saxena, Lala
+Li, Jay Whang, Emily L Denton, Kamyar Ghasemipour,
+Raphael Gontijo Lopes, Burcu Karagol Ayan, Tim Salimans,
+et al. Photorealistic text-to-image diffusion models with deep
+language understanding.
+Advances in neural information
+processing systems, 35:36479–36494, 2022. 2
+[46] Sizhe Shan, Qiulin Li, Yutao Cui, Miles Yang, Yuehai Wang,
+Qun Yang, Jin Zhou, and Zhao Zhong.
+Hunyuanvideo-
+foley: Multimodal diffusion with representation alignment
+for high-fidelity foley audio generation.
+arXiv preprint
+arXiv:2508.16930, 2025. 3
+[47] Aether Team, Haoyi Zhu, Yifan Wang, Jianjun Zhou, Wen-
+zheng Chang, Yang Zhou, Zizun Li, Junyi Chen, Chun-
+hua Shen, Jiangmiao Pang, et al. Aether: Geometric-aware
+unified world modeling. arXiv preprint arXiv:2503.18945,
+2025. 3
+[48] Zachary Teed and Jia Deng. Raft: Recurrent all-pairs field
+transforms for optical flow. In European conference on com-
+puter vision, pages 402–419. Springer, 2020. 5
+[49] Apoorv Vyas, Bowen Shi, Matthew Le, Andros Tjandra,
+Yi-Chiao Wu, Baishan Guo, Jiemin Zhang, Xinyue Zhang,
+Robert Adkins, William Ngan, et al. Audiobox: Unified au-
+dio generation with natural language prompts. arXiv preprint
+arXiv:2312.15821, 2023. 3
+[50] Qixun Wang, Xu Bai, Haofan Wang, Zekui Qin, Anthony
+Chen, Huaxia Li, Xu Tang, and Yao Hu. Instantid: Zero-shot
+identity-preserving generation in seconds.
+arXiv preprint
+arXiv:2401.07519, 2024. 3
+[51] Wen Wang, Canyu Zhao, Hao Chen, Zhekai Chen, Kecheng
+Zheng, and Chunhua Shen. Autostory: Generating diverse
+storytelling images with minimal human efforts.
+Interna-
+tional Journal of Computer Vision, pages 1–22, 2024. 5
+[52] Cong Wei, Quande Liu, Zixuan Ye, Qiulin Wang, Xintao
+Wang, Pengfei Wan, Kun Gai, and Wenhu Chen. Univideo:
+Unified understanding, generation, and editing for videos.
+arXiv preprint arXiv:2510.08377, 2025. 3
+[53] Chenyuan Wu, Pengfei Zheng, Ruiran Yan, Shitao Xiao, Xin
+Luo, Yueze Wang, Wanli Li, Xiyan Jiang, Yexin Liu, Junjie
+Zhou, et al. Omnigen2: Exploration to advanced multimodal
+generation. arXiv preprint arXiv:2506.18871, 2025. 5, 6, 7,
+1, 3
+[54] Jay Zhangjie Wu, Xuanchi Ren, Tianchang Shen, Tianshi
+Cao, Kai He, Yifan Lu, Ruiyuan Gao, Enze Xie, Shiyi Lan,
+Jose M Alvarez, et al. Chronoedit: Towards temporal reason-
+10
+
+ing for image editing and world simulation. arXiv preprint
+arXiv:2510.04290, 2025. 3
+[55] Shaojin Wu, Mengqi Huang, Yufeng Cheng, Wenxu Wu, Ji-
+ahe Tian, Yiming Luo, Fei Ding, and Qian He. Uso: Unified
+style and subject-driven generation via disentangled and re-
+ward learning. arXiv preprint arXiv:2508.18966, 2025. 5,
+3
+[56] Shaojin Wu, Mengqi Huang, Wenxu Wu, Yufeng Cheng, Fei
+Ding, and Qian He. Less-to-more generalization: Unlocking
+more controllability by in-context generation. arXiv preprint
+arXiv:2504.02160, 2025. 6
+[57] Bin Xia, Yuechen Zhang, Jingyao Li, Chengyao Wang,
+Yitong Wang, Xinglong Wu, Bei Yu, and Jiaya Jia.
+Dreamomni: Unified image generation and editing. In Pro-
+ceedings of the Computer Vision and Pattern Recognition
+Conference, pages 28533–28543, 2025. 3
+[58] Shitao Xiao, Yueze Wang, Junjie Zhou, Huaying Yuan, Xin-
+grun Xing, Ruiran Yan, Chaofan Li, Shuting Wang, Tiejun
+Huang, and Zheng Liu. Omnigen: Unified image genera-
+tion.
+In Proceedings of the Computer Vision and Pattern
+Recognition Conference, pages 13294–13304, 2025. 2, 3, 5,
+6
+[59] Jinheng Xie, Weijia Mao, Zechen Bai, David Junhao Zhang,
+Weihao Wang, Kevin Qinghong Lin, Yuchao Gu, Zhijie
+Chen, Zhenheng Yang, and Mike Zheng Shou.
+Show-o:
+One single transformer to unify multimodal understanding
+and generation. arXiv preprint arXiv:2408.12528, 2024. 2,
+3
+[60] Peng Xing, Haofan Wang, Yanpeng Sun, Qixun Wang,
+Xu Bai,
+Hao Ai,
+Renyuan Huang,
+and Zechao Li.
+Csgo: Content-style composition in text-to-image genera-
+tion. arXiv preprint arXiv:2408.16766, 2024. 5, 3
+[61] Hengyuan Xu, Wei Cheng, Peng Xing, Yixiao Fang,
+Shuhan Wu, Rui Wang, Xianfang Zeng, Daxin Jiang, Gang
+Yu, Xingjun Ma, et al.
+Withanyone:
+Towards control-
+lable and id consistent image generation.
+arXiv preprint
+arXiv:2510.14975, 2025. 3
+[62] Dongchao Yang, Jinchuan Tian, Xu Tan, Rongjie Huang,
+Songxiang Liu, Xuankai Chang, Jiatong Shi, Sheng Zhao,
+Jiang Bian, Xixin Wu, et al. Uniaudio: An audio founda-
+tion model toward universal audio generation. arXiv preprint
+arXiv:2310.00704, 2023. 3
+[63] Lihe Yang, Bingyi Kang, Zilong Huang, Zhen Zhao, Xiao-
+gang Xu, Jiashi Feng, and Hengshuang Zhao. Depth any-
+thing v2. Advances in Neural Information Processing Sys-
+tems, 37:21875–21911, 2024. 5
+[64] Zhuoyi Yang, Jiayan Teng, Wendi Zheng, Ming Ding, Shiyu
+Huang, Jiazheng Xu, Yuanming Yang, Wenyi Hong, Xiao-
+han Zhang, Guanyu Feng, et al. Cogvideox: Text-to-video
+diffusion models with an expert transformer. arXiv preprint
+arXiv:2408.06072, 2024. 6
+[65] Hu Ye, Jun Zhang, Sibo Liu, Xiao Han, and Wei Yang. Ip-
+adapter: Text compatible image prompt adapter for text-to-
+image diffusion models. arXiv preprint arXiv:2308.06721,
+2023. 3
+[66] Junyan Ye, Dongzhi Jiang, Zihao Wang, Leqi Zhu, Zheng-
+hao Hu, Zilong Huang, Jun He, Zhiyuan Yan, Jinghua Yu,
+Hongsheng Li, et al. Echo-4o: Harnessing the power of gpt-
+4o synthetic images for improved image generation. arXiv
+preprint arXiv:2508.09987, 2025. 5
+[67] Yang Ye, Xianyi He, Zongjian Li, Bin Lin, Shenghai Yuan,
+Zhiyuan Yan, Bohan Hou, and Li Yuan. Imgedit: A uni-
+fied image editing dataset and benchmark. arXiv preprint
+arXiv:2505.20275, 2025. 6
+[68] Lvmin Zhang, Anyi Rao, and Maneesh Agrawala. Adding
+conditional control to text-to-image diffusion models.
+In
+Proceedings of the IEEE/CVF international conference on
+computer vision, pages 3836–3847, 2023. 5
+[69] Zechuan Zhang, Ji Xie, Yu Lu, Zongxin Yang, and Yi Yang.
+In-context edit: Enabling instructional image editing with in-
+context generation in large scale diffusion transformer. arXiv
+preprint arXiv:2504.20690, 2025. 5
+[70] Dian Zheng, Ziqi Huang, Hongbo Liu, Kai Zou, Yinan He,
+Fan Zhang, Lulu Gu, Yuanhan Zhang, Jingwen He, Wei-
+Shi Zheng, et al. Vbench-2.0: Advancing video generation
+benchmark suite for intrinsic faithfulness.
+arXiv preprint
+arXiv:2503.21755, 2025. 8, 1
+[71] Zangwei Zheng, Xiangyu Peng, Tianji Yang, Chenhui Shen,
+Shenggui Li, Hongxin Liu, Yukun Zhou, Tianyi Li, and Yang
+You. Open-sora: Democratizing efficient video production
+for all. arXiv preprint arXiv:2412.20404, 2024. 6
+[72] Yupeng Zhou, Daquan Zhou, Ming-Ming Cheng, Jiashi
+Feng, and Qibin Hou.
+Storydiffusion:
+Consistent self-
+attention for long-range image and video generation. Ad-
+vances in Neural Information Processing Systems, 37:
+110315–110340, 2024. 8
+11
+
+iMontage: Unified, Versatile, Highly Dynamic Many-to-many Image Generation
+Supplementary Material
+6. Implementation Details
+For training, we treat all DiT blocks as trainable compo-
+nents in all stages, frozen VAE and text encoders. In pre-
+training stage, we start with more video clip data and less
+image editing data, then gradually counting more image
+editing data for better instruction following capability. The
+ratio is a linear increase of 25% to 75% for image editing
+data. In this stage, we adopt dynamic resolution grouping.
+We choose 5122, 7682 and 10242 as base buckets and de-
+rive ±32-pixel variants on both height and width, yielding
+candidate resolution of 37 categories. Each training image
+is assigned to the candidate that best matches its native size
+(preserving aspect ratio via short-side resize and optional
+padding), and then resized accordingly. Batch size for 512-
+resolution bucket per gpu is 8, while 4 for 768 bucket and 2
+for 1024 bucket. In the SFT stage, due to data constraints,
+each task is trained at a fixed resolution.
+At inference,
+however, the model generalizes well to arbitrary resolutions
+across tasks, exhibiting stable behavior and consistent qual-
+ity without task-specific resizing rules. In the HQ stage,
+we collect a set of high-aesthetic, higher-resolution multi-
+task samples and mix them with curated subsets from ear-
+lier datasets, then perform an annealed finetuning pass. All
+our training are conducted on NVIDIA H800 gpus, takes
+about 7 days to cover all training stage on 64 H800 gpus.
+More detailed hyperparameters used in training stage can
+be found in Tab. 5.
+For inference, we conduct classifier-free guidance (CFG)
+for text embeddings. The default cfg is 6.0 for all inference
+tasks, and inference steps is set to 50. To align uncondi-
+tional generation, we adopt a 0.1 probability for none cap-
+tion in all training stage.
+7. More Qualitative Results
+We present more visualization results to reveal the power-
+ful capability of our model. Please find our image editing
+results in Fig. 6 and Fig. 7, multi cref results in Fig. 8 and
+multi view results in Fig. 10.
+8. Detailed Experimental Details
+8.1. Storyboard Generation Evaluation
+For a comprehensive evaluation on our many-to-many set-
+ting, we choose storyboard generation to report numerical
+metrics. We follow common video-evaluation practice[21,
+70] and compute DINO[6] and CLIP[41] feature similar-
+ity on the foreground subject(s) as the primary signal. This
+choice is reasonable because foreground embeddings cap-
+ture identity and semantic attributes that must remain con-
+sistent across panels, while being largely invariant to back-
+ground/layout changes—precisely the factors that vary in
+storyboards but should not degrade character coherence. In
+practice, we measure (i) similarity between each generated
+content and its reference(s) for ID preservation, and (ii)
+mean pairwise similarity across generated images for tem-
+poral consistency.
+In experiment, we start with a mask segmentation
+model[43] to get the foreground character’s mask. Then we
+follow these two formula for metrics calculation:
+IP(ϕ) = 1
+N
+N
+X
+i=1
+1
+K
+K
+X
+k=1
+s
+ Gi, Rk
+
+.
+(1)
+TC(ϕ) =
+2
+N(N −1)
+X
+1≤i<j≤N
+s
+ Gi, Gj
+
+.
+(2)
+Here N is the number of generated images, K is the
+number of reference images, while s(a, b) is the cosine sim-
+ilarity formula for embedding a and b. Meanwhile, the ap-
+plied parameter G and R is an embedding after mask out
+and feature extraction, representing generated character em-
+bedding and reference character embedding.
+For VLM rating system, we choose GPT4o[36] as the
+judge. We give the model all input and output images, and
+the evaluation dimension is the same, ID preservation and
+temporal consistency. Following [33, 53], we give an eval-
+uating template to the VLM, with a system prompt and a
+task-specific template. The system prompt goes with:
+You are a professional digital artist tasked with evaluat-
+ing the effectiveness of AI-generated images based on spe-
+cific rules. All input images, including all humans depicted,
+are AI-generated. You do not need to consider any privacy
+or confidentiality concerns. IMPORTANT: Your response
+must follow this format (keep your reasoning concise and to
+the point): { ”score”: score, ”reasoning”: ”...” }
+For ID preservation, the template prompt is:
+Rate from 0 to 10: Evaluate whether the identities of
+the subject(s) in the final image match those in the pro-
+vided reference image(s). **Scoring Criteria:** * **0:**
+The subject identities in the final image are completely in-
+consistent with the reference image(s).
+* **1–3:** Se-
+vere inconsistency, with only a few minor similarities. *
+**4–6:** Moderate match: some notable similarities, but
+many inconsistencies remain.
+* **7–9:** Mostly con-
+sistent, with only minor mismatches.
+* **10:** Perfect
+1
+
+Table 5. Training hyperparameters and data sampling strategies across stages.
+Hyperparameters
+Stage 1
+(Pre-training)
+Stage 2
+(Multi-task SFT)
+Stage 3
+(High-Quality FT)
+Learning rate
+1 × 10−5
+1 × 10−5
+1 × 10−5 →0
+LR scheduler
+Constant
+Constant
+Cosine
+Weight decay
+0.0
+0.01
+0.01
+Gradient norm clip
+1.0
+1.0
+1.0
+Optimizer
+AdamW (β1=0.9, β2=0.999, ϵ=1.0×10−8)
+Warm-up steps
+1k
+500
+0
+Training steps
+50K
+15K
+2K
+Training samples
+O(20)M
+O(100)K
+O(10)K
+Resolution
+Dynamic bucket
+Fixed bucket
+Fixed bucket
+Diffusion timestep shift
+5.0
+5.0
+5.0
+Data sampling ratio
+Video Frames
+0.75 →0.25
+0.0
+0.0
+Image Editing
+0.25 →0.75
+0.1
+0.0
+Image Editing (HQ)
+0.0
+0.0
+0.5
+Multi-task
+0.0
+0.9
+0.0
+Multi-task (Cocktail)
+0.8 for new added task, 0.2 evenly divided for former tasks.
+Multi-task (HQ)
+0.0
+0.0
+0.5
+identity preservation compared to the reference image(s).
+**Pay special attention to:** * Whether **facial and
+head features** match across images: eyes, nose, mouth,
+cheekbones, chin, wrinkles/lines, makeup, hairstyle, hair
+color, overall facial structure and head shape. * **Body
+shape/proportions** and **skin tone** consistency; watch
+for abnormal anatomical changes. * **Clothing and acces-
+sories** if the instruction does not request changes; other-
+wise do not penalize expected edits. * Distinctive attributes
+(moles, scars, freckles, tattoos, piercings) that should per-
+sist. * If multiple references are given, ensure the correct
+individual(s) from each reference are present and not con-
+fused. **Do not** assess composition, pose, background,
+or aesthetics unrelated to identity preservation. **Scoring
+should be strict** — avoid giving high scores unless the
+identity match is clearly strong. Editing instruction: in-
+struction.
+And for temporal consistency, the template prompt is:
+Rate from 0 to 10: Evaluate whether the identities of
+all subject(s) remain consistent across the provided gen-
+erated images (sequence or set).
+**Scoring Criteria:**
+* **0:** Subjects are completely inconsistent across im-
+ages (identity changes or swaps occur). * **1–3:** Severe
+inconsistency; frequent identity drift, swaps, or major at-
+tribute changes. * **4–6:** Moderate consistency; some
+notable similarities but multiple mismatches across images.
+* **7–9:** Mostly consistent identities with only minor
+mismatches. * **10:** Perfect temporal identity consis-
+tency across all images. **Pay special attention to:** *
+Stable **facial/head features** for the same subject across
+images (eyes, nose, mouth, facial structure, hairstyle/color).
+* Consistent **body shape** and **skin tone** for each
+individual across images. * **Clothing/accessories** sta-
+bility unless the instruction implies changes; otherwise do
+not penalize expected edits. * For **multi-person scenes**,
+ensure each person maintains a consistent identity mapping
+across images (no A/B swapping). **Ignore** differences
+in pose, composition, viewpoint, background, or lighting
+that do not affect identity. **Scoring should be strict** —
+do not award high scores unless identity consistency is clear
+across all images. Editing instruction: instruction
+8.2. User Study
+We invite 50 participants, who are familiar with image and
+video generative models, to engage in our evaluation on sto-
+ryboard generation. We curate twenty evaluation samples
+by first searching some high quality human photos from
+website, then manually craft some storyboard caption based
+on them. For fairness, we include reference subjects span-
+ning three racial groups (black, white and yellow) and two
+genders (female and male), and we vary prompts from sim-
+ple to complex. Each testing sample provides one or two
+reference characters and requests generation of two to four
+storyboard images.
+We request participants to rate for all results in the same
+sample. The rating system follows four criteria scored on a
+5-point Likert scale (1=Poor, 5=Excellent): (i) Instruction
+Following—whether the images follow the prompt; (ii) ID
+Preservation—consistency with the reference character(s),
+emphasizing facial and fine attributes; (iii) Temporal Con-
+2
+
+sistency—whether the same character remains consistent
+across the generated panels; and (iv) Overall Quality—a
+holistic judgment beyond adherence and consistency. For
+each sample, all competing models are rated by the same
+participant to reduce between-rater variance, and model
+identities are anonymized and presentation order is random-
+ized. We then report scores for each metric based on the
+mean rating. We provide a showcase of our rating system in
+Fig. 12.
+For a fair comparison, we use each model’s recom-
+mended inference settings. Specifically: StoryDiffusion at
+768×768, classifier-free guidance (CFG)=5.0, 50 inference
+steps; UNO at 768×768, CFG=4.0, 25 steps; and Omni-
+Gen2 at 1024×1024, CFG=5.0, 50 steps. Our model follows
+setting as 1024x640 resolution, CFG=5.0, 50 steps. All ex-
+periments are conducted based on a random seed. Note that
+for a single sample, other models should be inferred sev-
+eral times with the same seed; iMontage uses one seed, out-
+putting many results for one inference.
+We present the visualization results of evaluation from
+Fig. 13 to Fig. 19.
+8.3. Training Scheme Ablation
+We ablate three scheduling strategies for SFT: FlatMix
+(all tasks jointly), StageMix (grouped by task type), and
+CocktailMix (difficulty-ordered curriculum). We begin with
+FlatMix and then transition to difficulty-aware scheduling.
+Task difficulty gap. Under a shared setup (data, optimizer,
+steps), we observe a clear difficulty spread across tasks: the
+easiest task, multi-editing, and the hardest task, storyboard
+generation, differ by roughly 0.2 in training loss. This gap
+motivates difficulty-aware mixing.
+StageMix vs. CocktailMix.
+We train StageMix with
+the same protocol used for our Stage 2 and Stage 3
+runs and compare it head-to-head with CocktailMix. On
+OmniContext[53], StageMix underperforms by 12.6% rel-
+ative to CocktailMix. Other tasks all have worser visual-
+ization results for StageMix. These observations indicate
+that difficulty-ordered mixing yields better optimization sta-
+bility and stronger generalization, especially on the harder
+tasks.
+9. More Discussion
+9.1. Concurrent Works
+Though we are not the first unified image generation
+model developed upon video models[10, 30], we consider
+iMontage as the first practical many-to-many system for
+open-source community.
+Likewise, two very recent ef-
+forts build image capabilities on top of video backbones.
+ChronoEdit[54] treats the input and edited outputs as the
+first and last frames of a short “video” and jointly de-
+noises them with temporal-reasoning tokens, leveraging a
+pretrained video generator to improve physical plausibil-
+ity and temporal coherence in edits. UniVid[9] explores
+a complementary route: it adapts a pretrained video DiT
+with lightweight SFT to a broad suite of vision tasks—both
+understanding and generation—by casting tasks as “vi-
+sual sentences,” thereby avoiding task-specific architec-
+tural changes and generalizing across modalities and data
+sources.
+Our model focuses on another area, narrowing the gap
+between image and video generation by casting image syn-
+thesis as a unified many-to-many problem. We view this as
+a practical technical pathway and plan to extend it into a
+more capable, fully unified system.
+9.2. Observed Failure Case
+Our model still exhibits failure cases on certain tasks,
+as illustrated in Fig. 11.
+For image editing, the most
+salient issue is near-zero ability to render Chinese charac-
+ters (Fig. 11a), largely inherited from the base backbone
+HunyuanVideo [24], which lacks robust text-rendering su-
+pervision. For SRef, our training data are distilled from
+other models [55, 60], which is suboptimal; we observe oc-
+casional background leakage, which is a known challenge
+in style-reference transfer. Finally, we note a head-detail
+mismatch in some generations. This limitation stems from
+data constraints—namely, insufficient training coverage of
+diverse, high-detail head/face depictions. Two complemen-
+tary remedies are promising: (i) adopt human-centric iden-
+tity modules by injecting face embeddings [50, 61, 65]; and
+(ii) expand coverage of high-quality, head-focused data to
+strengthen fine-grained facial detail preservation.
+3
+
+Remove
+Add
+Replace
+Color
+Background
+Style
+Figure 6. Visualization results for image editing. Zoom in to see more details.
+4
+
+Material
+Text
+Motion
+Atmosphere
+Multi-turn
+Restoration
+Figure 7. Visualization results for image editing. Zoom in to see more details.
+5
+
+Multi Char
+Char + Obj
+Multi Obj
+Scene + Char
+Scene + Obj
+Scene + Char + Obj
+Figure 8. Visualization results for multi CRef. Zoom in to see more details.
+6
+
+Depth
+Lineart
+OpenPose
+SRef
+Figure 9. Visualization results for conditioned CRef and SRef. Zoom in to see more details.
+7
+
+3D object
+Camera movement
+World exploration
+Figure 10. Visualization results for multi view generation, which can be divided to object-centric and scene-centric. Zoom in to see more
+details.
+8
+
+(a) Add Chinese characters.
+(b) Background leakage.
+(c) Bad performance at head details.
+Figure 11. Representative failure case for certain task. Zoom in to see more details.
+Your task. For each prompt with 1–2 reference characters, evaluate the 2–4 storyboard images produced by each model. Rate every model on the 
+same example. Ignore watermarks/branding.
+Scoring dimensions:
+1.
+Instruction Following: - Do the images follow the text prompt?
+2.
+ID Preservation: - Across the generated images, do the same characters and key elements remain consistent?
+3.
+Temporal Consistency: - Across the generated images, do the same characters and key elements remain consistent?
+4.
+Overall Quality: - Holistic visual quality and usability (clarity, naturalness, composition).
+Scoring Rules (1–5, 1=Poor, 5=Excellent):
+1.
+Instruction Following: 1: Largely mismatched; 2–3: Partially matched, key elements missing/wrong; 4–5: Largely/fully matched with correct 
+details.
+2.
+ID Preservation: 1: Clear mismatch; 2–3: Roughly similar but noticeable detail errors; 4–5: Clearly consistent and recognizable with stable fine 
+details.
+3.
+Temporal Consistency: 1: Strong drift across images; 2–3: Main subject consistent but several details vary; 4–5: Good consistency with stable 
+details.
+4.
+Overall Quality: 1: Low quality/unnatural; 2–3: Acceptable with flaws; 4–5: High quality, natural, well-formed.
+Ref Char
+Prompt
+1.
+A woman in a kimono walks through a 
+lush garden path, holding a red parasol; 
+2.
+2. She kneels down to gently reach out 
+to a white cat on a leaf-covered path; 
+3.
+3. The woman strolls along a sunlit 
+garden path, her parasol casting a 
+shadow behind her.
+Model_1
+Model_2
+Model_3
+Model_4
+Instruct Following
+Score:
+Score:
+Score:
+Score:
+ID Preservation
+Score:
+Score:
+Score:
+Score:
+Temporal Consistency
+Score:
+Score:
+Score:
+Score:
+Overall Quality
+Score:
+Score:
+Score:
+Score:
+Figure 12. User study template.
+9
+
+Ref Char
+1.
+A woman stands amidst a vibrant rose garden, gently holding her dress; 
+2.
+She in a kimono walks gracefully through tall grass under the warm glow of the setting sun; 
+3.
+She stands in front of a mirror in a dimly lit room, adjusting her attire with a thoughtful expression; 
+4.
+As night falls, she sits on the beach, with a lighthouse in the distance, enjoying a picnic by the sea.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+messi_1.png
+Ref Char
+1.
+Donald Trump, dressed in a sharp navy suit with a red tie, delivers a passionate speech from a brightly lit 
+podium at a packed political rally, a large American flag waving behind him. 
+2.
+Donald Trump, in a dark business suit, is engaged in a heated debate on a brightly lit presidential debate stage, 
+gesturing emphatically.
+.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+Figure 13. User study comparison visualization results. Zoom in to see more details.
+10
+
+Ref Char
+1.
+Marilyn Monroe, in her iconic white halter dress, laughs joyfully as she stands over a subway grate 
+on a bustling New York City street, her dress billowing dramatically around her. 
+2.
+Marilyn Monroe is elegantly posed, lying on her side in bed, supporting her head with one hand, 
+looking directly at the viewer with a captivating gaze.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+messi_1.png
+Ref Char
+1.
+The woman stands confidently in a military uniform, surveying a battlefield; 
+2.
+She kneels down to examine a map spread out on the ground; 
+3.
+The woman stands atop a hill at sunset, looking out over a vast landscape with determination.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+Figure 14. User study comparison visualization results. Zoom in to see more details.
+11
+
+Ref Char
+1.
+The woman reclines against a wooden wall, exuding a relaxed and contemplative mood. 
+2.
+She sits comfortably in a wicker chair by a sunlit window, enjoying a steaming cup of tea with an open book nearby. 
+3.
+3. She gracefully walks through a sunlit doorway, her dress flowing as she moves. 
+4.
+4. She sits thoughtfully on a plush sofa in a warmly lit room, surrounded by elegant decor.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+messi_1.png
+Ref Char
+1.
+The woman sits on her bed in a red-themed room, gazing thoughtfully out the window. 
+2.
+She enjoys a moment of reflection in a cozy café, sipping coffee while watching the world outside. 
+3.
+Walking along a rose-lined path at sunset, she admires the beauty of the flowers. 
+4.
+On a rooftop under a starry sky, she relaxes with a glass of wine, contemplating the city lights below.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+Figure 15. User study comparison visualization results. Zoom in to see more details.
+12
+
+Ref Char
+1. An elderly man digs a garden, with the sun shining down; 
+2. The old man enjoys a walk in the park, feeding pigeons.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+messi_1.png
+Ref Char
+1. The man is posing confidently on a city street, showcasing his stylish outfit.
+2. The man walks down a runway during a fashion show, under bright lights.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+Figure 16. User study comparison visualization results. Zoom in to see more details.
+13
+
+Ref Char
+1. The man is playing skateboard in a sunlit park; 
+2. He shares a laugh with friends walking in the streets, going home; 
+3. He open his house's door, with a big meal waiting for him.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+messi_1.png
+Ref Char
+1. The man in his black uniform, walking on the school hallway. 
+2. He sits near a window, studying intently in his classroom. 
+3. He takes care of the plants on the windowsill. 
+4. He goes out of the front door of the school, carrying his backpack.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+Figure 17. User study comparison visualization results. Zoom in to see more details.
+14
+
+Ref Char
+1. The woman is waiting for the airplane in the airport terminal. 
+2. She enjoys a moment of excitement as she boards the plane. 
+3. She takes in the view from her window seat, marveling at the clouds below. 
+4. Finally, she arrives at her destination, a beautiful beach.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+messi_1.png
+Ref Char
+1. The woman is dressed in an elegant gown, standing on a grand balcony overlooking a kingdom. 
+2. The woman is seated on a lavish throne, adorned with jewels and intricate patterns.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+Figure 18. User study comparison visualization results. Zoom in to see more details.
+15
+
+Ref Char
+1. The woman is decorating a christmas tree with colorful ornaments and twinkling lights; 
+2. The woman is wrapping presents with festive paper and ribbons.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+messi_1.png
+Ref Char
+1. The first woman and the second woman in white attire meet outside a sleek glass building, the first one 
+holding an umbrella; 2. Inside an art gallery, the first woman and the second woman admire sculptures and 
+paintings, the first one pointing at a statue; 3. On a rooftop at night, the first woman and the second woman 
+gaze at the city lights and stars, with the umbrella set aside.
+StoryDiffusion
+UNO (UMO)
+OmniGen2 (UMO)
+iMontage (Ours)
+Figure 19. User study comparison visualization results. Zoom in to see more details.
+16

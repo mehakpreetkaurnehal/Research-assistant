@@ -1,0 +1,2117 @@
+POUR: A Provably Optimal Method for Unlearning Representations via Neural
+Collapse
+Anjie Le
+Can Peng
+Yuyuan Liu
+J. Alison Noble
+Institute of Biomedical Engineering, University of Oxford, UK
+Abstract
+In computer vision, machine unlearning aims to remove
+the influence of specific visual concepts or training images
+without retraining from scratch. Studies show that exist-
+ing approaches often modify the classifier while leaving
+internal representations intact, resulting in incomplete for-
+getting. In this work, we extend the notion of unlearning
+to the representation level, deriving a three-term interplay
+between forgetting efficacy, retention fidelity, and class sep-
+aration. Building on Neural Collapse theory, we show that
+the orthogonal projection of a simplex Equiangular Tight
+Frame (ETF) remains an ETF in a lower dimensional space,
+yielding a provably optimal forgetting operator. We fur-
+ther introduce the Representation Unlearning Score (RUS)
+to quantify representation-level forgetting and retention fi-
+delity. Building on this, we introduce POUR (Provably
+Optimal Unlearning of Representations), a geometric projec-
+tion method with closed-form (POUR-P) and a feature-level
+unlearning variant under a distillation scheme (POUR-D).
+Experiments on CIFAR-10/100 and PathMNIST demonstrate
+that POUR achieves effective unlearning while preserving re-
+tained knowledge, outperforming state-of-the-art unlearning
+methods on both classification-level and representation-level
+metrics. Code will be released upon acceptance of the paper.
+1. Introduction
+The ability to selectively remove knowledge from trained
+models has become an increasingly important requirement
+for modern machine learning systems. Motivations include
+regulatory compliance with data protection laws (e.g., the
+“right to be forgotten”) [4, 12, 28], mitigating reliance on spu-
+rious correlations, and ensuring the safe deployment of large
+pre-trained models in sensitive domains such as autonomous
+driving and medical imaging. In these applications, models
+often need to forget outdated, biased, or privacy-sensitive
+visual data while retaining general visual understanding for
+reliable downstream use. Figure 1 illustrates this goal on
+the PathMNIST dataset, showing how our method erases the
+”adipose” class while preserving the remaining categories.
+after POUR
+unlearning
+ADIPOSE
+DEBRIS
+LYMPHO-
+CYTES
+MUCUS
+? ?
+DEBRIS
+LYMPHO-
+CYTES
+MUCUS
+Figure 1. Grad-CAM visualization on PathMNIST before and
+after unlearning. Each row shows a tissue class. After applying
+POUR on the adipose class, its Grad-CAM signal vanishes, while
+the retained classes (debris, lymphocytes, mucus) preserve clear
+and distinct attention patterns.
+A growing literature on machine unlearning has explored
+how to make models forget a specific class, subset, or con-
+cept without retraining from scratch [1, 8, 13]. Previous
+work on machine unlearning has primarily focused on align-
+ing the prediction probabilities on the forget and retain sets.
+This line of research, often referred to as weak unlearning
+[14, 32], aims to ensure that the distributions of the final log-
+its produced by the original and unlearned models are indis-
+tinguishable. However, recent studies [21] have questioned
+whether such methods truly forget the targeted information,
+as they often only perturb classifier logits while leaving the
+underlying feature representations largely unchanged. This
+shallow modification leaves residual information that can
+lead to privacy leakage [37]. This issue is particularly critical
+for deep vision encoders whose internal representations can
+still leak forgotten visual concepts through linear probing or
+feature inversion [13, 21].
+In parallel, theoretical advances have revealed that deep
+visual classifiers exhibit highly structured geometric behav-
+ior at convergence. The theory of Neural Collapse (NC)
+shows that class features concentrate around equidistant cen-
+troids and classifier weights align to form a simplex Equian-
+gular Tight Frame (ETF) [27]. This geometry provides a
+powerful lens for reasoning about class-level knowledge
+in image recognition: each class corresponds to a single
+ETF direction, and as we propose in this work, forgetting
+1
+arXiv:2511.19339v1  [cs.CV]  24 Nov 2025
+
+a class corresponds to removing its associated vector from
+the representation space. Previous work [22] has pursued
+heuristic realizations of ”projection as unlearning” through
+Singular Value Decomposition (SVD)-based decomposition
+in activation space. However, the method lacks geometric
+consistency and theoretical guaranties.
+In this work, we first extend the traditional notion of weak
+unlearning to the representation level, and propose the Rep-
+resentation Unlearning Score (RUS) as a principled feature
+space metric for quantifying how well a model forgets. Build-
+ing on this formulation, we observe that the restructuring of
+forget and retain representations occurs at different stages of
+unlearning, governed by class separation. We also establish
+two new properties from the current NC framework: (i) a
+simplex ETF structure certifies Bayes optimality in balanced
+classification, and (ii) the orthogonal projection of a simplex
+ETF remains a simplex ETF. Therefore, class forgetting can
+be implemented as a projection operator that preserves the
+NC geometry along the direction of the forget classes, which
+leads to our proposed algorithm POUR (Provably Optimal
+Unlearning of Representations).
+POUR comes in two variants: a closed-form projection
+(POUR-P) that performs instantaneous forgetting, and a
+projection-guided distillation scheme (POUR-D) that prop-
+agates forgetting into the feature extractor using only the
+forget set through feature alignment.
+In summary, our contributions are threefold:
+• We reformulate machine unlearning at the representation
+level and introduce RUS based on feature-space discrep-
+ancy.
+• We establish a three-term interplay among forget, retain
+and class separation for unlearning problems, and derive
+two new theoretical properties of NC geometry, linking the
+simplex ETF structure to Bayes optimality and projection
+invariance.
+• We propose POUR, a provably optimal projection-based
+unlearning algorithm with both closed-form and feature-
+adaptive variants, and formally prove its optimality.
+Experiments on CIFAR-10 and CIFAR-100 demonstrate
+that POUR effectively removes targeted visual concepts
+while preserving performance on retained classes.
+On
+PathMNIST, POUR further exhibits consistent generaliza-
+tion under domain shift, achieving reliable performance
+across both internal and external test sets.
+2. Reformulating Unlearning: Representation
+Removal with the Forget Set
+We define the class-centric machine unlearning problem
+with standard notation as follows. Let D = {(xi, yi)}n
+i=1
+denote the entire dataset, where each sample xi ∈X ⊆Rd
+is a d-dimensional vector, yi ∈Y = {1, 2, . . . , C} is the
+ground truth label among C classes, and n is the size of
+D. A training algorithm A maps a dataset D to a model
+M = (θ, W), where θ : X →Z is a feature extractor and W
+is a classifier head. For each sample, M(xi) approximates
+its label yi.
+We partition D into a retain set Dr and a forget set Df,
+such that D = Df ∪Dr and Df ∩Dr = ∅. The goal of un-
+learning is to remove the influence of the forget set Df ⊂D
+from the trained model while preserving performance on Dr.
+Let Mr = A(Dr) denote the reference model retrained from
+scratch using only Dr. The unlearning process U(M, D)
+is then defined as a function that takes a trained model
+M = A(D) and produces a new model Mf that behaves
+similarly to Mr.
+In the class-forgetting setting, if we wish to forget a class
+u ∈Y, then Df = Du := {xi : yi = u}. The retain set Dr
+is often inaccessible due to privacy or practical constraints.
+Following [5, 37], we therefore consider the realistic setting
+where unlearning is performed using only the forget set Df,
+denoted by U(M, Df).
+2.1. Definition
+Recent findings by Kim et al. [21] demonstrate that focusing
+solely on final logits does not guarantee complete forgetting,
+as the forgotten information may still be recoverable through
+linear probing. This observation highlights the need to inves-
+tigate forgetting at the representation level, within the feature
+extractor itself, rather than only at the output layer. Moti-
+vated by this, we propose the concept of representation-
+level weak unlearning, which, in contrast to the original
+definition of weak unlearning, explicitly accounts for the
+internal feature representations of models.
+Definition 2.1 (Representation-Level Weak Unlearning). An
+unlearning procedure U applied to (M, Df) is said to sat-
+isfy representation-level weak unlearning if the feature dis-
+tributions of the unlearned model are close to those of the
+reference model Mr, i.e.
+K
+
+P U(M,Df )
+z
+, P Mr
+z
+
+< ϵ,
+(1)
+for some distributional discrepancy measure K (e.g. MMD,
+Wasserstein-2, or Energy Distance) and tolerance ϵ > 0.
+Here P M
+z
+denotes the distribution of features z = θ(x) in-
+duced by model M on input x, where x ∼D.
+Intuitively, this condition requires that, after unlearning,
+the feature representations of D are statistically indistin-
+guishable from those produced by the retrained reference
+model Mr.
+2.2. Practical Estimation of K
+Due to the stochastic nature of training, comparing the fea-
+ture distributions of the unlearned model and the retrained
+model is not straightforward. We require a representation
+measure that is robust to randomness, including random
+2
+
+initialization, rotations of the feature basis, and uniform
+rescaling of feature magnitudes. Therefore, we adopt Cen-
+tered Kernel Alignment (CKA) [23] as a practical estimator
+of representation similarity, for its invariance to scaling and
+rotation; additional justification is provided in Appendix.
+Formally, given two representation matrices X, Y
+∈
+Rn×d from two models evaluated on the same set of n sam-
+ples, their linear CKA similarity is defined as
+CKA(X, Y ) =
+⟨XX⊤, Y Y ⊤⟩F
+∥XX⊤∥F ∥Y Y ⊤∥F
+,
+(2)
+where ⟨·, ·⟩F denotes the Frobenius inner product, making it
+robust to common randomness in neural networks.
+In the unlearning setting, for Mo, Mf, and Mr, the origi-
+nal, unlearned, and retrained models, we define two families
+of CKA similarities:
+CKA(o)
+f
+:= CKA(Mf, Mo; Df),
+CKA(o)
+r
+:= CKA(Mf, Mo; Dr),
+CKA(r)
+f
+:= CKA(Mf, Mr; Df),
+CKA(r)
+r
+:= CKA(Mf, Mr; Dr).
+(3)
+The superscript (o) indicates comparison with the original
+model, which is commonly available in practice, while (r)
+denotes comparison with the retrained model, which approx-
+imates the theoretical ideal.
+To jointly balance the forgetting and retention objectives,
+we define the Representation Unlearning Score (RUS) as
+RUS(∗) :=
+2 Φ(∗)
+f
+CKA(∗)
+r
+Φ(∗)
+f
++ CKA(∗)
+r
+,
+(∗) ∈{(o), (r)},
+(4)
+where
+Φ(o)
+f
+= 1 −CKA(o)
+f ,
+Φ(r)
+f
+= CKA(r)
+f .
+RUS(r) represents the evaluation using the retrained
+model as the reference, while RUS(o) provides a practical
+surrogate when the retrained model is inaccessible, for exam-
+ple, due to computational cost or data availability. RUS(∗)
+corresponds to the harmonic mean of retention alignment
+CKAr and the forgetting indicator Φ(∗)
+f , rewarding methods
+that achieve both effective forgetting and faithful retention.
+The definition ensures that both variants of RUS take values
+in [0, 1] and increase with successful forgetting.
+2.3. Theoretical Characterization
+We next show that the discrepancy between unlearned and
+reference feature distributions can be decomposed into three
+interpretable components that directly capture forgetting
+efficacy, retention fidelity, and class separation.
+Proposition 2.2 (Decomposition of K Bound). Let P (f)
+z
+and P (r)
+z
+denote the feature distributions induced by the
+unlearned and retrained models, respectively. For a forget
+class u ∈Y and an Integral Probability Metric (IPM) K
+defined on the feature space, by the law of total probability
+we can express
+P (f)
+z
+= α P (f)
+u
++ (1 −α) P (f)
+¬u ,
+P (r)
+z
+= β P (r)
+u
++ (1 −β) P (r)
+¬u ,
+(5)
+where α := P (f)
+z
+(ˆy = u) and β := P (r)
+z
+(ˆy = u) are the
+predicted probabilities of the unlearning class under each
+model, and P (·)
+u , P (·)
+¬u denote the unlearned and retained
+class feature distribution. Then, the discrepancy between the
+unlearned and retrained feature distributions is bounded as
+α K
+ P (f)
+u
+, P (r)
+u
+
+−(1 −α) K
+ P (f)
+¬u , P (r)
+¬u
+ −| α −β | ∆c
+≤K
+ P (f)
+z
+, P (r)
+z
+
+≤| α −β | ∆c
+|
+{z
+}
+class separation
++
+α K
+ P (f)
+u
+, P (r)
+u
+
+|
+{z
+}
+forgotten-class discrepancy
++ (1 −α) K
+ P (f)
+¬u , P (r)
+¬u
+
+|
+{z
+}
+retained-class discrepancy
+,
+(6)
+where ∆c := K
+ P (r)
+u , P (r)
+¬u
+
+.
+A complete statement and proof is given in Appendix 1.1.
+When unlearning is performed on the forget set, we have
+β = 0, and the forgetting coefficient α decreases gradually
+from approximately 1 to 0 as unlearning proceeds. In this
+regime, the effective supervision target becomes P (r)
+¬u , while
+both P (f)
+u
+and P (f)
+¬u are progressively aligned toward the
+retained-class manifold of the retrained model at different
+stages of unlearning. The class-separation term simplifies
+to α∆c, indicating that stronger geometric separation in the
+retrained feature space enables more effective guidance for
+forgetting at early stages. Consequently, unlearning can
+often be achieved using the forget set alone when class sepa-
+ration is sufficient; however, when separation in the retrained
+model is weak, the forget-set-only strategy becomes less ef-
+fective. This phenomenon is also confirmed empirically, as
+discussed in Section 5.2.
+3. Representation Space: Neural Collapse and
+Simplex ETF Geometry
+The trade-off derived above reveals that unlearning dynamics
+are fundamentally governed by the geometry of class separa-
+tion in representation space. To analyze this geometry, we
+draw inspiration from the theory of Neural Collapse (NC),
+which shows that deep classifiers trained with cross-entropy
+loss organize features into a Simplex ETF during the Termi-
+nal Phase of Training (TPT) [27] under certain assumptions
+described in Appendix 2.
+Formally, for each class i, the learned feature representa-
+tion takes the form
+zθ(x) = α(x) vi,
+3
+
+where zθ(x) denotes the feature extractor θ applied to input
+x, α(x) > 0 is a class-dependent scaling factor, and vi ∈
+Rd is a unit direction representing the class mean. The
+set of class directions {vi}C
+i=1 lies in a (C−1)-dimensional
+subspace and forms a simplex ETF, i.e.,
+∥vi∥= 1,
+v⊤
+i vj = −
+1
+C−1 for i ̸= j,
+and
+C
+X
+i=1
+vi = 0,
+which implies that class means are maximally separated and
+symmetrically arranged in feature space. Furthermore, the
+classifier’s weight vectors align with these class directions.
+A detailed formulation of the underlying assumptions and
+the full NC statements are included in Appendix 2. An empir-
+ical investigation of the NC phenomenon is given in Section
+5.4. This provides a natural foundation for understanding
+and manipulating class forgetting at the representation level.
+In prior work, this ETF geometry has primarily been re-
+garded as a descriptive limit of training dynamics. In this
+work, we establish two new properties of the NC phe-
+nomenon. First, we show that the simplex ETF geometry
+is not only a consequence of optimization, but also a suffi-
+cient condition for Bayes optimality under natural statistical
+assumptions. In this sense, the ETF structure serves as an
+optimality certificate. Second, we demonstrate that the ETF
+geometry is preserved under orthogonal projection when one
+vertex is removed, thereby providing the geometric founda-
+tion for our proposed unlearning method.
+3.1. ETF as an Optimal Condition
+In addition to the NC assumptions, we further assume that
+the class-conditional feature distributions are isotropic Gaus-
+sians,
+x | y = i ∼N(vi, σ2Id),
+where ∥vi∥= 1 for all i and σ2 > 0 is fixed. Empiri-
+cally, this corresponds to features within each class cluster-
+ing around a well-defined mean with approximately uniform
+variance in all directions, consistent with an isotropic Gaus-
+sian structure. In practice, datasets with sufficiently large
+sample sizes naturally satisfy this assumption by the Law
+of Large Numbers. Under these assumptions, we have the
+following proposition:
+Proposition 3.1 (ETF ⇒Bayes optimality).
+(i)
+the simplex ETF uniquely maximizes the minimum
+pairwise angle among class means,
+(ii)
+it maximizes the multiclass angular margin of the
+nearest-class-mean classifier, and
+(iii)
+in the limit κ →∞or as the within-class variance
+σ2 →0, the induced decision rule coincides with the
+Bayes-optimal classifier.
+Detailed proof of is provided in Appendix 3.
+v⊥
+1 (z = 0)
+x
+y
+z
+v1
+v2
+v3
+v4
+u2
+u3
+u4
+∠(vi, vj) = arccos(−1
+3)
+Figure 2. C=4 simplex ETF. One vertex v1 along +z; the other three
+lie at z = −1/3 with equal 120◦separation in xy. Orthogonal
+projection onto v⊥
+1 (z = 0) yields an equilateral triangle formed by
+u2, u3, u4.
+3.2. ETF Stability under Projection.
+The second property concerns the robustness of ETF geome-
+try under dimensionality reduction. Geometrically, removing
+one vertex of a regular simplex and projecting the remaining
+vertices onto the complementary subspace yields a smaller
+regular simplex. This effect, visualized in Figure 2 for a
+C = 4 case, is captured in the following proposition.
+Proposition 3.2 (Projection of a simplex ETF remains a
+simplex ETF). With the assumption and notations above, fix
+u ∈{1, . . . , C} and let P = I −vuv⊤
+u be the orthogonal
+projector onto v⊥
+u . For i ∈Y¬u, define gi =
+P vi
+∥P vi∥. Then
+{gi}i∈Y¬u ⊂v⊥
+u ∼= RC−2 is a simplex ETF of size C −1,
+i.e. g⊤
+i gj = −
+1
+C−2(∀i ̸= j), P
+i∈Y¬u gi = 0.
+A proof of Proposition 3.2 is given in Appendix 4.1. This
+invariance implies that class forgetting via orthogonal pro-
+jection maintains perfect angular separation among retained
+classes, forming the geometric basis of our POUR method.
+4. Method
+Inspired by these theoretical insights, we propose our method
+POUR, which comes in two variants: a one-shot projec-
+tion operation on model weights enabled by Proposition 3.2,
+which we call POUR-P; and a distillation version using the
+forget set, which we call POUR-D, as summarized in Fig. 3.
+4.1. Projection Operator (POUR-P)
+We consider the class forgetting setting, where we want to
+forget a class u, so that Df = Du := {xi : yi = u}. Let
+W ∈Rd×C denote the classifier weight matrix, where each
+column wc corresponds to class c, and let z ∈Rd denote the
+penultimate-layer feature. In the NC regime, both {wc}C
+c=1
+and the class means of {z} form a simplex ETF. To forget a
+class u, we define the orthogonal projection operator
+P = I −wuw⊤
+u
+∥wu∥2 ,
+(7)
+4
+
+input stream
+feature alignment
+NC structure
+classification
+original
+feature
+extractor
+unlearned
+feature
+extractor
+PA
+feature alignment
+unlearning
+feature
+extractor
+L2 
+loss
+classifier
+classifier
+Figure 3. Overview of the POUR framework. During training, the unlearning module applies an orthogonal projection operator PA on the
+feature space of the original model to remove the contribution of the forgotten class A. The unlearned feature extractor θ′ is optimized
+via an L2 loss to align its projected features with those of the original extractor θ using the unlearning data. This alignment preserves the
+Neural Collapse geometry among retained classes (B, C, D) while collapsing features of the forgotten class to the origin, leading to uniform
+predictions. At inference, the unlearned model is Bayes-optimal on retained classes as proved in Theorem 4.2.
+which removes the contribution of the forgotten class di-
+rection wu. The unlearned features can then be obtained
+by
+z′ = P ⊤z = Pz.
+(8)
+Directly applying this projection after the feature extractor
+is what we call POUR-P. By Proposition 3.2, this operation
+maps features into a (C −1)-class simplex ETF subspace,
+thereby preserving optimal geometry among the retained
+classes.
+Practical estimation of P. When classifier weights are
+not directly available, or when only the feature encoder is
+available (e.g., for vision-language models), we can estimate
+wu as the empirical class mean of penultimate features,
+˜wu =
+1
+|Du|
+X
+x∈Du
+θo(x),
+(9)
+where θo denotes the original feature extractor. The projec-
+tion operator P can then be constructed using ˜wu.
+4.2. Projection-Guided Distillation (POUR-D)
+While POUR-P provides an immediate, closed-form forget-
+ting operation, it only modifies features post hoc. To induce
+forgetting deeper into the feature extractor and improve ro-
+bustness, we introduce a teacher-student distillation [18]
+scheme, POUR-D.
+Teacher construction. We use the projected model POUR-P
+as the teacher. Given a trained model (θ, W) and a forget
+class u, we apply the projection operator P from Equation 7
+to obtain a projected teacher model (Pθ, W) which encodes
+the post-forgetting ETF geometry in the representation space.
+Student training. The student model finetunes the fea-
+ture extractor parameters on the forget set to align with the
+teacher model. In particular, for θ the feature extractor of
+the original model and θs the feature extractor of the student
+model, we minimize the L2 loss defined as:
+LPOUR-D(x) = ∥θs(x) −Pθ(x)∥2
+2,
+x ∈Df.
+Under NC, the class means form a simplex ETF, and
+the classifier head aligns with them. Projection preserves
+this ETF structure for retained classes. This loss penalizes
+deviations from the projected ETF features, ensuring that the
+student model remains aligned in both direction and scale
+with the teacher, while requiring minimal updates to the
+feature extractor parameters. Convergence can be guaranteed
+by the following proposition.
+Proposition 4.1 (L2 convergence implies CKA conver-
+gence). Let Z, T ∈Rn×p be row-centered, and assume
+TT ⊤̸= 0. If ∥Z −T∥F →0, then CKA(Z, T) →1.
+4.3. Optimality of Projection for Weak Unlearning
+We now show that the proposed projection operator is op-
+timal under the definition of representation-level weak un-
+learning (Def. 2.1). Projecting onto the orthogonal comple-
+ment of the forgotten class removes its contribution while
+5
+
+Table 1. Comparison of unlearning methods for ResNet18 on CIFAR-10. We report both classification-level metrics and representation-
+level metrics. Methods requiring access to the retain set are included as reference values and not included in ranking. Values represent
+mean ± std across three runs. Best values are in bold, and second-best values are underlined. Darker blue indicates better performance.
+Method
+Classification-Level Metrics
+Representation-Level Metrics
+Accr ↑
+Accf ↓
+Acctr ↑
+Acctf ↓
+AUS ↑
+rMIA ↓
+CKA(o)
+f
+↓
+CKA(o)
+r
+↑
+RUS(o) ↑
+CKA(r)
+f
+↑
+CKA(r)
+r
+↑
+RUS(r) ↑
+Original Model
+94.47±0.12
+95.03±0.35
+99.99±0.00
+99.99±0.01
+0.51±0.00
+56.70±0.00
+1.00±0.00
+1.00±0.00
+0.00±0.00
+0.26±0.01
+0.98±0.00
+0.42±0.01
+Retrained Model
+94.68±0.38
+0.00±0.00
+99.98±0.01
+0.00±0.00
+1.00±0.00
+–
+0.26±0.03
+0.97±0.01
+0.84±0.01
+1.00±0.00
+1.00±0.00
+1.00±0.00
+Methods requiring the retain set
+Finetune
+93.96±0.19
+0.00±0.00
+100.00±0.00
+0.00±0.00
+0.99±0.00
+54.60±1.37
+0.32±0.01
+0.97±0.01
+0.80±0.00
+0.63±0.02
+0.97±0.00
+0.76±0.02
+FCS
+94.89±0.01
+0.67±0.55
+100.00±0.00
+0.79±0.67
+1.00±0.00
+56.00±0.61
+0.51±0.09
+1.00±0.02
+0.66±0.08
+0.45±0.01
+0.98±0.00
+0.62±0.01
+Methods on forget set only
+Random Label
+87.42±0.54
+23.20±0.44
+93.13±0.44
+25.13±0.34
+0.75±0.00
+54.07±1.31
+0.29±0.05
+0.86±0.02
+0.78±0.02
+0.24±0.01
+0.84±0.00
+0.37±0.01
+Gradient Ascent
+86.71±4.04
+15.37±4.13
+93.51±4.00
+16.29±3.54
+0.80±0.01
+50.40±0.82
+0.21±0.06
+0.80±0.07
+0.79±0.02
+0.18±0.01
+0.77±0.05
+0.29±0.02
+Boundary Shrink
+85.30±1.66
+12.33±2.14
+90.81±1.38
+13.96±2.12
+0.81±0.01
+53.07±1.10
+0.25±0.04
+0.85±0.02
+0.80±0.01
+0.28±0.01
+0.84±0.00
+0.42±0.01
+Boundary Expand
+85.74±0.55
+14.63±0.06
+91.21±0.44
+16.66±0.37
+0.80±0.00
+53.00±0.78
+0.25±0.04
+0.85±0.02
+0.80±0.01
+0.28±0.01
+0.83±0.00
+0.42±0.01
+DELETE
+88.73±2.32
+2.43±0.12
+95.43±1.78
+2.93±0.46
+0.92±0.02
+53.43±0.40
+0.37±0.09
+0.82±0.03
+0.71±0.05
+0.26±0.01
+0.78±0.02
+0.39±0.01
+POUR-P† (ours)
+94.97±0.16
+0.00±0.00
+99.99±0.00
+0.00±0.00
+1.01±0.00
+56.67±1.08
+–
+–
+–
+–
+–
+–
+POUR-D (ours)
+92.86±1.02
+0.37±0.64
+99.74±0.29
+0.43±0.44
+0.97±0.00
+51.80±2.42
+0.23±0.06
+0.95±0.02
+0.82±0.03
+0.31±0.01
+0.94±0.00
+0.47±0.01
+† POUR-P does not modify the encoder representations; therefore, representation-level metrics would be unchanged and are omitted.
+preserving the Bayes-optimal ETF geometry of the retained
+classes.
+Theorem 4.2 (Optimality of POUR-P). Assume (A1)–(A5)
+as in Appendix 2 in the model training pipeline, and class
+priors are balanced and isotropic Gaussians, as described in
+Section 3.1. Let θ(x) denote the penultimate layer features,
+vi the class means, then by NC, we have θ(x) | (y = i) ∼
+N(vi, σ2Id), where {vi}C
+i=1 form a simplex ETF.
+Now fix a class u ∈Y and define the orthogonal projec-
+tion P = I −vuv⊤
+u , projected features θ′(x) = Pθ(x), and
+˜vi = Pvi/∥Pvi∥for i ̸= u. Then:
+(a) Retained optimality and ETF equivalence. The pro-
+jected means {˜vi}i̸=u form a simplex ETF (Prop. 3.2).
+The retained-class ETF of the projected model and that
+of Mr differ by at most an orthogonal transform, i.e.,
+for any discrepancy K invariant under orthogonal trans-
+forms and rescaling, K(P¬u, Q¬u) = 0.
+Moreover, under the Gaussian model, when class means
+dominate intra-class variability, the projected model is
+Bayes-optimal (Prop. 3.1).
+(b) Complete forgetting. Since Pvu = 0, features of the
+forgotten class satisfy θ′(x)|(y = u)∼N(0, σ2P). In
+the low-variance (NC) limit σ2 →0, θ′(x)→0 and all
+retained logits vanish, so q¬u(·|x)→U¬u: the forgotten
+class is represented by a uniform predictive distribution
+among the retained classes, i.e., α = 0.
+Complete statement and proof are included in Ap-
+pendix 4.2. Consequently, the POUR-P projection yields
+a representation that is (i) Bayes-optimal on Y¬u and (ii)
+representation-equivalent to the retrained model up to or-
+thogonal gauge freedom, so that the representation-level dis-
+crepancy K(P (f)
+z
+, P (f)
+z
+) attains its minimum under Def. 2.1.
+5. Experiments and Results
+We evaluate both POUR-P and POUR-D on CIFAR-10/100
+with ResNet-18 and PathMNIST with pretrained ViT-S/16.
+5.1. Experimental Setup
+Protocol constraints. We follow the standard unlearning
+setting in recent literature [37], that assumes (i) no access to
+the retained set Dr during unlearning, and (ii) no intervention
+in the original training procedure. All methods are applied
+directly to the already trained model.
+Datasets and Models. For CIFAR-10 and CIFAR-100, we
+implement modified ResNet-18 backbones in which the ini-
+tial 7×7 convolution (stride 2) is replaced by a 3×3 con-
+volution (stride 1) and the subsequent max-pooling layer is
+removed to better suit 32×32 inputs. For PathMNIST [34],
+we tested in a pretraining setting, where we loaded a ViT-
+S/16 pretrained on ImageNet and trained a classifier head.
+We evaluate performance on both internal and external test
+sets for the same task, which exhibits a domain shift.
+Baselines. We benchmark POUR-P and POUR-D against a
+diverse set of existing unlearning strategies, including Fine-
+tune, FCS [2], Random Label [15], Gradient Ascent [15],
+Boundary Shrink, Boundary Expand [6], and DELETE [37].
+Original Model and Retrain Model serve as the lower and
+upper bounds, respectively.
+Metrics. We report the following metrics:
+• Accf, Acctf (% ↓) and Accr, Acctr (% ↑): validation and
+training accuracy on the forget and retain sets, respectively.
+• Adaptive Unlearning Score (AUS) (↑) [9, 25] : Jointly
+capture retention and forgetting accuracy, defined as
+AUS = 1−dropr
+1+accf , where dropr, and accf denote the drop
+in retain accuracy and forgotten-class accuracy.
+• rMIA (% ↓): representation-level membership-inference
+attack success rate on Df. We perform a five-fold attack
+6
+
+Table 2. Comparison of unlearning methods for ResNet18 on
+CIFAR-100. Best values are in bold, and second-best values are
+underlined. Darker blue indicates better performance.
+Method
+Accr ↑
+Accf ↓
+AUS ↑
+CKA(r)
+f
+↑
+CKA(r)
+r
+↑
+RUS(r) ↑
+rMIA ↓
+Original Model
+77.69
+92.00
+0.52
+0.60
+0.78
+0.68
+62.00
+Retrained Model
+76.28
+0.00
+1.00
+1.00
+1.00
+1.00
+–
+Methods requiring the retain set
+Finetune
+76.32
+0.00
+0.99
+0.57
+0.76
+0.67
+54.00
+FCS
+76.81
+2.00
+0.97
+0.61
+0.78
+0.68
+55.00
+Methods on forget set only
+Random Label
+61.98
+11.00
+0.76
+0.40
+0.53
+0.46
+49.00
+Gradient Ascent
+50.46
+6.00
+0.69
+0.44
+0.44
+0.44
+50.00
+Boundary Shrink
+68.87
+4.00
+0.88
+0.55
+0.72
+0.62
+49.00
+Boundary Expand
+66.47
+13.00
+0.79
+0.55
+0.74
+0.63
+42.00
+DELETE
+64.67
+8.00
+0.81
+0.51
+0.67
+0.58
+60.00
+POUR-P† (ours)
+77.65
+0.00
+1.00
+–
+–
+–
+62.00
+POUR-D (ours)
+73.44
+1.00
+0.95
+0.57
+0.76
+0.65
+46.00
+† POUR-P does not modify the encoder representations.
+using a linear regressor on the representation between the
+train and test sets.
+• CKA(o)
+f , CKA(o)
+r , RUS(o) (↓, ↑, ↑) and CKA(r)
+f , CKA(r)
+r ,
+RUS(r) (↑, ↑, ↑): as defined in Sect. 2.2.
+5.2. Unlearning on CIFAR-10/100
+On CIFAR-10, as shown in Table 1, our method achieves
+the best performance for both the classification-level metric
+(AUS) and the representation-level metrics (RUS), suggest-
+ing that POUR enables efficient forgetting directly in repre-
+sentation space. In contrast, other methods, such as Gradient
+Ascent, Boundary Shrink, and DELETE, show lower AUS
+or RUS scores, indicating that their forgetting is either in-
+complete or occurs primarily at the classifier layer without
+sufficiently modifying the underlying representation geome-
+try, as visualized in Figure 4a. This also provide a parallel
+comparison of the two variants of the RUS. In general, these
+two scores establish a similar trend.
+On the more challenging CIFAR-100 dataset, as shown in
+Table 2, our method again achieves state-of-the-art (SOTA)
+performance for both classification and representation-level
+metrics. We note that on CIFAR-100, classes are more
+entangled, as shown as a high CKA(r)
+f
+and visualized in
+Figure 4b. Therefore, supervision on the forget set is lower
+and therefore forgetting is harder, as discussed in Section
+2.3. Methods such as gradient ascent and random labels
+largely disrupt the structure of the retained classes. Boundary
+Shrink and Boundary Expand, though among the stronger
+baselines, fail to reproduce the structure of the retrained
+model representations as effectively as POUR.
+5.3. Unlearning on PathMNIST
+PathMNIST exhibits a substantial domain shift between its
+internal and external test sets due to differences in slide
+acquisition. The ViT backbone is pretrained on ImageNet
+with a finetuned classifier head on PathMNIST, which makes
+this setting challenging for existing unlearning methods, as
+the learning is shallow.
+(a) t-SNE visualization on CIFAR10.
+(b) t-SNE visualization on CIFAR100.
+Figure 4. t-SNE visualization of representation spaces after
+unlearning on CIFAR-10 and CIFAR-100. Each color denotes
+a retained class, with dark red points represent the forgotten class.
+The Gold panel shows the representation of the retrained model,
+serving as the ideal reference for successful unlearning. Structure
+of representations after POUR unlearning mostly resemble that of
+the retrained gold model.
+Our method again achieves SOTA in this setting. As
+shown in Figure 1, the activation on the forget set vanishes
+after POUR-P unlearning, meaning unlearning signals suc-
+cessfully propagate from the finetuned classifier head into
+the pretrained backbone. Methods like Boundary Shrink and
+Boundary Expand fail in this setting. Random Label and
+Gradient Ascent exhibit higher classification-level perfor-
+mance on the internal test set than on the external test set.
+We hypothesize that these methods are ”learning to mask”
+the forget set rather than genuinely erasing the associated
+knowledge, resulting in poor generalization. In contrast,
+DELETE and POUR achieve consistent performance across
+both domains, suggesting that they perform true knowledge
+removal rather than overfitting to the forget set. The effec-
+tiveness of the unlearning methods in this setting provides a
+scalable pathway for unlearning in pretrained and foundation
+7
+
+Table 3. Comparison of unlearning methods on PathMNIST with ViT. Performance is reported on both the internal and external test sets
+under domain shift. Best values are in bold, and second-best values are underlined. Darker blue indicates better performance.
+Method
+ViT on PathMNIST Internal Test
+ViT on PathMNIST External Test
+Accr ↑
+Accf ↓
+AUS ↑
+RUS (o) ↑
+rMIA ↓
+Accr ↑
+Accf ↓
+AUS ↑
+RUS (o) ↑
+rMIA ↓
+Original Model
+87.49
+96.83
+0.51
+–
+50.43
+87.13
+97.53
+0.51
+–
+84.20
+Retrained Model∗
+88.70
+0.00
+1.01
+–
+–
+88.63
+0.00
+1.02
+–
+–
+Methods requiring the retain set
+Finetune
+97.78
+0.00
+1.10
+0.05
+46.67
+86.99
+0.00
+1.00
+0.06
+86.10
+FCS
+88.81
+0.00
+1.01
+0.13
+49.00
+83.86
+0.00
+0.97
+0.10
+96.60
+Methods on forget set only∗
+Random Label
+78.71
+23.73
+0.74
+0.26
+48.23
+70.61
+25.34
+0.67
+0.29
+83.60
+Gradient Ascent
+81.43
+9.03
+0.86
+0.22
+48.71
+76.72
+10.61
+0.81
+0.26
+83.90
+DELETE
+72.75
+0.00
+0.85
+0.50
+49.76
+73.04
+0.00
+0.86
+0.42
+88.40
+POUR-P (ours)
+87.14
+0.00
+1.00
+–
+50.43
+87.44
+0.00
+1.00
+–
+84.20
+POUR-D (ours)
+81.09
+7.88
+0.87
+0.63
+51.00
+80.90
+7.92
+0.87
+0.61
+85.20
+*Note: Boundary Shrink and Boundary Expand did not work in this setting. Retraining only performed on classifier head.
+models, where original data may be unavailable.
+5.4. NC as an Assumption
+Our analysis relies on the theory of NC, which typically
+emerges under sufficient overparameterization. We also
+found in practice that standard training naturally reaches a
+regime where NC is sufficiently well established for POUR
+to be effective. Figure 5 shows the classifier weight angle dis-
+tributions across datasets, revealing how closely the trained
+models conform to NC geometry. The empirical mean an-
+gles align almost perfectly with the ideal simplex ETF angle
+on all of the datasets.
+6. Related Work
+The problem of removing specific training data from a model,
+often motivated by privacy regulations such as the “right to
+be forgotten,” was first formalized in the systems security
+community [3]. The seminal work of Bourtoule et al. [1]
+introduced the SISA framework, partitioning training data
+across multiple shards so that forgetting can be achieved
+by retraining only the affected shards. Subsequent work
+developed more fine-grained methods that avoid full retrain-
+ing. For linear models, Guo et al. [16] proposed certified
+removal via influence-based updates. Sekhari et al. [30] pro-
+vided theoretical guarantees for approximate unlearning in
+general models. For deep networks, approaches include am-
+nesiac unlearning [15], which inverts stored gradients, and
+Fisher information–based scrubbing [13, 14], which perturbs
+weights along sensitive directions. Other efficient methods
+use adversarial weight perturbations [31], incompetent teach-
+ers [7], or zero-shot synthetic forget data [8]. Most recently,
+anchored fine-tuning methods such as FAMR [29] enforce
+uniform predictions on forget sets while constraining the
+model to remain close to its original parameters. Kodge
+et al. [22] proposed a gradient-free method that explicitly
+computes class-specific subspaces via singular value decom-
+(a) CIFAR-10
+(b) CIFAR-100
+(c) PathMNIST
+Figure 5. Classifier weight angle distributions. The green dashed
+line denotes the mean pairwise angle, while the red dashed line
+marks the ideal NC angle. The closeness between the two reflects
+how well the classifier aligns with NC geometry at convergence.
+position and suppresses discriminatory directions associated
+with the forget class. Boundary Shrink and Boundary Ex-
+pand [6] perform local decision-boundary adjustments for
+forgetting, while maintaining model utility through margin
+control. DELETE [37] formulates unlearning as a decou-
+pled distillation problem, erasing class-specific information
+via probability decoupling. Yet, none of these approaches
+connect to Neural Collapse theory [27], where class features
+converge to a simplex ETF.
+7. Conclusion
+We introduced a representation-level formulation of machine
+unlearning and a new metric, RUS, to rigorously quantify
+forgetting beyond classifier logits. By connecting unlearn-
+ing to NC geometry, we derived new theoretical insights
+which enabled POUR. Extensive experiments across CIFAR-
+10/100 and PathMNIST confirm that POUR achieves better
+forgetting than prior approaches at both the classification
+and representation levels, providing a principled geometric
+perspective on machine unlearning.
+8
+
+References
+[1] Laurent Bourtoule, Varun Chandrasekaran, Christopher A.
+Choquette-Choo, Haoche Jia, Adeline Travers, Benjamin
+Zhang, David Lie, and Nicolas Papernot. Machine unlearn-
+ing. In IEEE Symposium on Security and Privacy (SP), pages
+141–159, 2021. 1, 8
+[2] Xavier
+F
+Cadet,
+Anastasia
+Borovykh,
+Mohammad
+Malekzadeh, Sara Ahmadi-Abhari, and Hamed Haddadi.
+Deep unlearn: Benchmarking machine unlearning. arXiv
+preprint arXiv:2410.01276, 2024. 6
+[3] Yinzhi Cao and Junfeng Yang. Towards making systems
+forget with machine unlearning. In IEEE Symposium on
+Security and Privacy (SP), pages 463–480, 2015. 8, 1
+[4] CCPA. California consumer privacy act of 2018, 2018. Cali-
+fornia Civil Code §1798.100 et seq. 1
+[5] Sungmin Cha, Sungjun Cho, Dasol Hwang, Honglak Lee, Tae-
+sup Moon, and Moontae Lee. Learning to unlearn: Instance-
+wise unlearning for pre-trained classifiers. In Proceedings of
+the AAAI conference on artificial intelligence, pages 11186–
+11194, 2024. 2
+[6] Min Chen, Weizhuo Gao, Gaoyang Liu, Kai Peng, and Chen
+Wang. Boundary unlearning: Rapid forgetting of deep net-
+works via shifting the decision boundary. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2023. 6, 8, 1
+[7] Vishwaraj S. Chundawat, Ayush K. Tarun, Murari Mandal,
+and Mohan Kankanhalli. Can bad teaching induce forgetting?
+unlearning in deep networks using an incompetent teacher.
+In AAAI Conference on Artificial Intelligence (AAAI), pages
+7210–7217, 2023. 8, 1
+[8] Vishwaraj S. Chundawat, Ayush K. Tarun, Murari Mandal,
+and Mohan S. Kankanhalli. Zero-shot machine unlearning.
+IEEE Transactions on Information Forensics and Security,
+18:2345–2354, 2023. 1, 8
+[9] Marco Cotogni, Jacopo Bonato, Luigi Sabetta, Francesco
+Pelosin, and Alessandro Nicolosi.
+Duck:
+Distance-
+based unlearning via centroid kinematics. arXiv preprint
+arXiv:2312.02052, 2023. 6
+[10] Huy Dang, Zhenyu Yang, Qinghua He, Jiadong Wang, Taiji
+Wei, Zhizheng Li, Chenliang Gong, Shuaiwen Hu, and Ying-
+bin Liang. Neural collapse for cross-entropy class-imbalanced
+regime. In Proceedings of the 41st International Conference
+on Machine Learning (ICML), 2024. 4
+[11] Cong Fang, Hangfeng He, Qi Long, and Weijie J. Su. Explor-
+ing deep neural networks via layer-peeled model: Minority
+collapse in imbalanced training. Proceedings of the National
+Academy of Sciences, 118(43):e2103091118, 2021. 4
+[12] GDPR. Regulation (eu) 2016/679 of the european parliament
+and of the council of 27 april 2016 (general data protection
+regulation), 2016. Official Journal of the European Union, L
+119, 1-88. 1
+[13] Aditya Golatkar, Alessandro Achille, and Stefano Soatto.
+Eternal sunshine of the spotless net: Selective forgetting in
+deep networks. In IEEE/CVF Conference on Computer Vision
+and Pattern Recognition (CVPR), pages 9301–9309, 2020. 1,
+8
+[14] Aditya Golatkar, Alessandro Achille, and Stefano Soatto. For-
+getting outside the box: Scrubbing deep networks of informa-
+tion accessible from input-output observations. In European
+Conference on Computer Vision (ECCV), pages 383–398,
+2020. 1, 8
+[15] Laura Graves, Vineel Nagisetty, and Vijay Ganesh. Amnesiac
+machine learning. In Proceedings of the AAAI Conference on
+Artificial Intelligence, pages 11516–11524, 2021. 6, 8, 1
+[16] Chuan Guo, Tom Goldstein, Awni Y. Hannun, and Laurens
+van der Maaten. Certified data removal from machine learning
+models. arXiv preprint arXiv:1911.03030, 2019. 8, 1
+[17] X. Y. Han, Vardan Papyan, and David L. Donoho. Neural
+collapse under mse loss: Proximity to and dynamics on the
+central path. In International Conference on Learning Repre-
+sentations (ICLR), 2022. 4
+[18] Geoffrey Hinton, Oriol Vinyals, and Jeff Dean.
+Distill-
+ing the knowledge in a neural network.
+arXiv preprint
+arXiv:1503.02531, 2015. 5
+[19] Weihao Hong and Shuyang Ling. Neural collapse for un-
+constrained feature model under class-imbalanced regime.
+Journal of Machine Learning Research, 25, 2024. 4
+[20] Arthur Jacot, Peter S´uken´ık, Zihan Wang, and Marco Mon-
+delli. Wide neural networks trained with weight decay prov-
+ably exhibit neural collapse, 2024. 4
+[21] Yongwoo Kim, Sungmin Cha, and Donghyun Kim. Are we
+truly forgetting? a critical re-examination of machine unlearn-
+ing evaluation protocols. arXiv preprint arXiv:2503.06991,
+2025. 1, 2
+[22] Sangamesh Kodge, Gobinda Saha, and Kaushik Roy. Deep
+unlearning: Fast and efficient gradient-free class forgetting.
+Transactions on Machine Learning Research (TMLR), 2024.
+to appear. 2, 8, 1
+[23] Simon Kornblith, Mohammad Norouzi, Honglak Lee, and
+Geoffrey Hinton. Similarity of neural network representations
+revisited. In International conference on machine learning,
+pages 3519–3529. PMlR, 2019. 3
+[24] Alexey Kravets and Vinay P. Namboodiri. Zero-shot class
+unlearning in CLIP with synthetic samples. In IEEE/CVF Win-
+ter Conference on Applications of Computer Vision (WACV),
+2025. 1
+[25] Na Li, Chunyi Zhou, Yansong Gao, Hui Chen, Zhi Zhang,
+Boyu Kuang, and Anmin Fu. Machine unlearning: Taxonomy,
+metrics, applications, challenges, and prospects. IEEE Trans-
+actions on Neural Networks and Learning Systems, 2025.
+6
+[26] Jianfeng Lu and Stefan Steinerberger. Neural collapse under
+cross-entropy loss. Applied and Computational Harmonic
+Analysis, 59:224–241, 2022. 4
+[27] Vardan Papyan, X.Y. Han, and David L. Donoho. Prevalence
+of neural collapse during the terminal phase of deep learning
+training. Proceedings of the National Academy of Sciences
+(PNAS), 117(40):24652–24663, 2020. 1, 3, 8, 4
+[28] PIPL. Personal information protection law of the people’s
+republic of china, 2021. Adopted at the 30th Meeting of
+the Standing Committee of the Thirteenth National People’s
+Congress. 1
+9
+
+[29] Prabhav Sanga, Jaskaran Singh, and Arun Kumar Dubey.
+Train once, forget precisely: Anchored optimization for effi-
+cient post-hoc unlearning. arXiv preprint arXiv:2506.14515,
+2025. 8, 1
+[30] Aditi Sekhari, Jayadev Acharya, Gautam Kamath, and
+Abhradeep Thakurta Suresh. Remember what you want to
+forget: Algorithms for machine unlearning. In Advances
+in Neural Information Processing Systems (NeurIPS), pages
+18075–18086, 2021. 8, 1
+[31] Ayush K Tarun, Vikram S Chundawat, Murari Mandal, and
+Mohan Kankanhalli. Fast yet effective machine unlearning.
+IEEE Transactions on Neural Networks and Learning Sys-
+tems, 35(9):13046–13055, 2023. 8, 1
+[32] Heng Xu, Tianqing Zhu, Lefeng Zhang, Wanlei Zhou, and
+Philip S. Yu. Machine unlearning: A survey, 2023. 1
+[33] Hongren Yan, Yuhua Qian, Furong Peng, Jiachen Luo, Zhe-
+qing Zhu, and Feijiang Li. Neural collapse to multiple centers
+for imbalanced data. In Advances in Neural Information
+Processing Systems (NeurIPS), 2024. 4
+[34] Jiancheng Yang, Rui Shi, Donglai Wei, Zequan Liu, Lin Zhao,
+Bilian Ke, Hanspeter Pfister, and Bingbing Ni. Medmnist v2-
+a large-scale lightweight benchmark for 2d and 3d biomedical
+image classification. Scientific Data, 10(1):41, 2023. 6
+[35] Tianyu Yang, Lisen Dai, Xiangqi Wang, Minhao Cheng,
+Yapeng Tian, and Xiangliang Zhang. CLIPErase: Efficient
+unlearning of visual-textual associations in CLIP. In Annual
+Meeting of the Association for Computational Linguistics
+(ACL), 2025. 1
+[36] Yufan Zhang, Chenyang Si, Jianfeng Zhang, Yingcong Chen,
+and Wayne Wu. Forget-me-not: Learning to forget in text-to-
+image diffusion models. In Advances in Neural Information
+Processing Systems (NeurIPS), 2024. 1
+[37] Yu Zhou, Dian Zheng, Qijie Mo, Renjie Lu, Kun-Yu Lin, and
+Wei-Shi Zheng. Decoupled distillation to erase: A general
+unlearning method for any class-centric tasks. In Proceedings
+of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2025. 1, 2, 6, 8
+[38] Zhihui Zhu, Tianyu Ding, Jinxin Zhou, Xiao Li, Chong You,
+Jeremias Sulam, and Qing Qu. A geometric analysis of neural
+collapse with unconstrained features. In Advances in Neural
+Information Processing Systems (NeurIPS), 2021. 4
+10
+
+POUR: A Provably Optimal Method for Unlearning Representations via Neural
+Collapse
+Supplementary Material
+Appendix Table of Contents
+0. Related Work
+1. Additional Justifications
+1.1. Proof on Decomposition of K-Bound
+1.2. Justification on CKA USage
+2. Neural Collapse
+2.1. Training Assumptions
+2.2. Neural Collapse Statements
+3. ETF Implies Bayes Optimality
+3.1. Geometric Optimality of the Simplex ETF
+3.2. Bayes-Optimal Nearest Class Mean Rule
+4. Proof of Main Theorem
+4.1. Closure of Projection
+4.2. Optimality of Projection
+0. More Related Work
+Machine Unlearning.
+The problem of removing specific
+training data from a model, often motivated by privacy reg-
+ulations such as the “right to be forgotten,” was first for-
+malized in the systems security community [3]. The semi-
+nal work of Bourtoule et al. [1] introduced the SISA frame-
+work, partitioning training data across multiple shards so that
+forgetting can be achieved by retraining only the affected
+shards. Subsequent work developed more fine-grained meth-
+ods that avoid full retraining. For linear models, Guo et al.
+[16] proposed certified removal via influence-based updates.
+Sekhari et al. [30] provided theoretical guarantees for ap-
+proximate unlearning in general models. For deep networks,
+approaches include amnesiac unlearning [15], which inverts
+stored gradients, and Fisher information–based scrubbing
+[13, 14], which perturbs weights along sensitive directions.
+Other efficient methods use adversarial weight perturbations
+[31], incompetent teachers [7], or zero-shot synthetic forget
+data [8]. Most recently, anchored fine-tuning methods such
+as FAMR [29] enforce uniform predictions on forget sets
+while constraining the model to remain close to its origi-
+nal parameters. Kodge et al. [22] proposed a gradient-free
+method that explicitly computes class-specific subspaces via
+singular value decomposition and suppresses discriminatory
+directions associated with the forget class. Boundary Shrink
+and Boundary Expand [6] perform local decision-boundary
+adjustments for forgetting, while maintaining model utility
+through margin control. DELETE [37] formulates unlearn-
+ing as a decoupled distillation problem, erasing class-specific
+information via probability decoupling.
+unlearned class
+Figure 1. Grad-CAM visualization on PathMNIST before and
+after unlearning. Each row shows a tissue class. Only after POUR
+unlearning, the Grad-CAM signal vanishes.
+Geometrically grounded forgetting.
+Several methods ex-
+ploit the geometry of learned representations. Kodge et al.
+[22] proposed a gradient-free method that explicitly com-
+putes class-specific subspaces via singular value decomposi-
+tion and suppresses discriminatory directions associated with
+the forget class. Yet, none of the previous approaches con-
+nects to the phenomenon of Neural Collapse [27], wherein
+class features converge to a simplex equiangular tight frame.
+Concept-level and multimodal unlearning.
+Beyond class
+forgetting, recent research has explored erasing visual con-
+cepts and multimodal associations. In generative models,
+concept erasure can be achieved by regularizing style fea-
+tures or Gram matrices [36]. In multimodal settings, Yang
+et al. [35] proposed CLIPErase, which disentangles forget-
+ting, retention, and consistency modules to remove specific
+visual-textual alignments in CLIP. Kravets and Namboodiri
+[24] introduced a zero-shot unlearning method for CLIP that
+generates synthetic forget samples via gradient ascent.
+1. Additional Justifications
+1.1. Proof on Decomposition of K-Bound
+Let Z denote the feature space and P(Z) the set of prob-
+ability measures on it.
+Fix a symmetric function class
+F ⊆{φ : Z →R} (i.e., φ ∈F ⇒−φ ∈F). For an
+Integral Probability Metric (IPM) defined as
+K(P, Q) = sup
+φ∈F
+Ez∼P [φ(z)]−Ez∼Q[φ(z)]
+, P, Q ∈P(Z),
+the following property holds.
+1
+
+Proposition 1.1 (Decomposition of K Bound). Fix a forgetting class u, and by the law of total probability, express the feature
+distributions as
+Pz = α Pu + (1 −α) P¬u,
+Qz = β Qu + (1 −β) Q¬u,
+where α := P(y=u) and β := Q(y=u) denote the class probabilities, and P¬u, Q¬u are the retained-class feature
+distributions. Let ∆c = K(Pu, P¬u) denote the prior class separation in the original model. Then the discrepancy between the
+unlearned and reference feature distributions is bounded as
+ β K(Pu, Qu) −(1 −β) K(P¬u, Q¬u)
+ −| α −β | ∆c
+≤K(Pz, Qz)
+≤
+| α −β | ∆c
+|
+{z
+}
+prior class separation
++
+β K(Pu, Qu)
+|
+{z
+}
+forgotten-class alignment
++ (1 −β) K(P¬u, Q¬u)
+|
+{z
+}
+retained-class alignment
+.
+Proof. For any φ ∈F, substituting in the decomposition, we have
+EPz[φ] −EQz[φ] = α EPu[φ] + (1 −α) EP¬u[φ] −β EQu[φ] −(1 −β) EQ¬u[φ]
+(1)
+= (α −β)
+ EPu[φ] −EP¬u[φ]
+
++ β
+ EPu[φ] −EQu[φ]
+
++ (1 −β)
+ EP¬u[φ] −EQ¬u[φ]
+
+.
+(2)
+Taking absolute values and applying the triangle inequality yields
+EPz[φ] −EQz[φ]
+ ≤|α −β|
+EPu[φ] −EP¬u[φ]
+ + β
+EPu[φ] −EQu[φ]
+ + (1 −β)
+EP¬u[φ] −EQ¬u[φ]
+.
+Now take the supremum over φ ∈F on both sides. Since F is symmetric, each term inside the absolute value corresponds
+exactly to the IPM definition, i.e.,
+sup
+φ∈F
+EPu[φ] −EP¬u[φ]
+ = ∆c,
+sup
+φ∈F
+EPu[φ] −EQu[φ]
+ = K(Pu, Qu),
+sup
+φ∈F
+EP¬u[φ] −EQ¬u[φ]
+ = K(P¬u, Q¬u).
+Hence,
+K(Pz, Qz) = sup
+φ∈F
+EPz[φ] −EQz[φ]
+ ≤|α −β| ∆c + β K(Pu, Qu) + (1 −β) K(P¬u, Q¬u).
+For the lower bound, apply the reverse triangle inequality to Equation 2. Let
+x := (α −β)
+ EPu[φ] −EP¬u[φ]
+
+,
+y := β
+ EPu[φ] −EQu[φ]
+
+,
+z := (1 −β)
+ EP¬u[φ] −EQ¬u[φ]
+
+.
+(3)
+Then
+EPz[φ] −EQz[φ]
+ ≥
+y + z
+ −|x|.
+(4)
+and by symmetry of F and the definition of ∆c,
+|x| ≤|α −β| sup
+φ∈F
+EPu[φ] −EP¬u[φ]
+ = |α −β|∆c.
+(5)
+Apply reverse triangle inequality again:
+|y + z| ≥
+ β(EPu[φ] −EQu[φ]) −(1 −β)(EP¬u[φ] −EQ¬u[φ])
+.
+(6)
+Taking supremum over φ ∈F and using symmetry:
+sup
+φ∈F
+|y + z| ≥
+ β K(Pu, Qu) −(1 −β) K(P¬u, Q¬u)
+.
+(7)
+Combining equation 4, equation 5 and equation 7, we have
+K(Pz, Qz) = sup
+φ∈F
+EPz[φ] −EQz[φ]
+ ≥
+β K(Pu, Qu) −(1 −β) K(P¬u, Q¬u)
+ −|α −β| ∆c.
+This completes the proof.
+2
+
+1.2. Justification on CKA Usage
+We formalize the invariance properties of CKA that justify
+its use as a stable estimator of representation similarity in
+the presence of training randomness. Throughout, X, Y ∈
+Rn×d denote feature matrices extracted from two neural
+networks on the same n samples, and
+CKA(X, Y ) =
+⟨XX⊤, Y Y ⊤⟩F
+∥XX⊤∥F ∥Y Y ⊤∥F
+.
+Proposition 1.2 (CKA is invariant to isotropic scaling). For
+any scalar c > 0,
+CKA(X, cX) = 1.
+Proof. We compute
+CKA(X, cX) =
+⟨XX⊤, c2XX⊤⟩F
+∥XX⊤∥F ∥c2XX⊤∥F
+= c2∥XX⊤∥2
+F
+|c2|∥XX⊤∥2
+F
+= 1.
+Thus isotropic rescaling of all features leaves CKA un-
+changed.
+This property ensures that CKA is stable under global
+norm changes arising from SGD noise, learning-rate sched-
+ules, BatchNorm scaling, or unlearning updates that shrink
+or expand feature magnitudes uniformly.
+Proposition 1.3 (CKA is invariant to orthogonal basis rota-
+tions). Let R ∈Rd×d be any orthogonal matrix (R⊤R = I).
+Then
+CKA(X, XR) = 1.
+Proof. If Y = XR, then
+Y Y ⊤= XRR⊤X⊤= XX⊤.
+Thus the numerator and denominator of CKA coincide:
+CKA(X, XR) =
+⟨XX⊤, XX⊤⟩F
+∥XX⊤∥F ∥XX⊤∥F
+= 1.
+Orthogonal invariance is critical because independently
+trained networks often learn equivalent representations that
+differ only by a rotation of the feature basis, especially when
+trained with different seeds.
+Lemma 1.4 (CKA is stable under mild anisotropic dis-
+tortions). Let D = diag(d1, . . . , dd) with di > 0.
+If
+maxi di/ mini di ≤1 + ε, then
+ CKA(X, XD) −1
+ = O(ε).
+Proof. We observe
+XD(XD)⊤= XD2X⊤.
+Since D2 = I + E with ∥E∥2 = O(ε), it follows that
+XD(XD)⊤= XX⊤+ XEX⊤.
+The Frobenius norms in the CKA numerator and denomina-
+tor can be expanded via perturbation bounds:
+∥XX⊤+ XEX⊤∥F = ∥XX⊤∥F (1 + O(ε)),
+and the inner product perturbation satisfies
+⟨XX⊤, XX⊤+ XEX⊤⟩F = ∥XX⊤∥2
+F (1 + O(ε)).
+Substituting into the CKA ratio yields the claimed bound.
+This shows that CKA is robust even to moderate channel-
+wise stretching commonly introduced by BatchNorm, layer
+scaling, or local unlearning updates.
+Proposition 1.5 (CKA depends only on pairwise sample
+geometry). If two feature matrices X and Y satisfy
+XX⊤= Y Y ⊤,
+then
+CKA(X, Y ) = 1.
+Proof. Direct substitution into the definition of CKA yields
+CKA(X, Y ) =
+⟨XX⊤, XX⊤⟩F
+∥XX⊤∥F ∥XX⊤∥F
+= 1.
+Because XX⊤encodes pairwise sample similarities,
+which are far more stable across random seeds than the raw
+coordinates of X, this proposition explains CKA’s reliability
+as a measure of representation equivalence.
+Conclusion
+Together, Propositions 1.2–1.5 establish that CKA is invari-
+ant to the dominant sources of randomness in neural repre-
+sentation learning, including global rescaling, orthogonal
+transformations, channel permutations, and mild anisotropic
+distortions. Since retraining on the retain set produces mod-
+els that differ primarily through such randomness, CKA
+provides a stable and reliable estimator of representation
+similarity for evaluating representation-level weak unlearn-
+ing.
+3
+
+2. Neural Collapse
+2.1. Training and modeling assumptions.
+Below are the standard Neural Collapse (NC) assumptions:
+• (A1) Interpolation / TPT: The network is trained to near-
+zero training error and then further optimized in the termi-
+nal phase of training (TPT) under standard protocols such
+as SGD or Adam with decays [27].
+• (A2) Overparameterization: The model has sufficient
+capacity to realize class-wise linear separability in the
+penultimate features, often corresponding to large width
+or deep linear heads [20].
+• (A3) Loss and regularization: Cross-entropy loss with
+weight decay (or L2 regularization) is used. In simplified
+unconstrained-feature or layer-peeled models, global min-
+imizers are simplex ETFs and all other critical points are
+strict saddles [11, 26, 38]. Empirically and theoretically,
+MSE loss also exhibits NC [17].
+• (A4) Balanced classes: Unless otherwise stated, class
+priors are assumed to be balanced. With class imbalance,
+NC persists in modified forms such as non-equiangular
+means or multiple centers [10, 11, 19, 33].
+• (A5) Feature dimension: The penultimate feature dimen-
+sion satisfies d ≥C −1, which ensures the existence of a
+simplex embedding [26].
+2.2. Neural Collapse Statements
+Under assumptions (A1)–(A5), the following NC properties
+can be observed [27]:
+• (NC1) Within-class collapse: For each class i, the learned
+feature representation takes the form zθ(x) = α(x) vi,
+where zθ(x) denotes the feature extractor θ applied to
+input x, α(x) > 0 is a class-dependent scaling factor, and
+vi ∈Rd is a unit direction.
+• (NC2) Simplex ETF means: The set of class directions
+{vi}C
+i=1 lies in a (C−1)-dimensional subspace and forms
+a simplex Equiangular Tight Frame (ETF). Specifically,
+they satisfy ∥vi∥= 1 for all i, v⊤
+i vj = −
+1
+C−1 for i ̸= j,
+and PC
+i=1 vi = 0.
+• (NC3) Classifier alignment: The final-layer classifier
+weights (w) are aligned with the class directions. Specifi-
+cally, there exists a constant κ > 0 such that wi = κvi for
+every class i.
+• (NC4) Nearest-class-mean rule: Classification reduces to
+a nearest-class-mean decision rule, equivalently assigning
+each sample to the nearest ETF vertex.
+These properties jointly imply that, for balanced classes,
+the geometry of class representations forms a centered reg-
+ular simplex in RC−1, which is maximally separated and
+symmetric in the space.
+3. ETF Implies Bayes Optimality
+We present a formal statement and proof of Proposition 3.1.
+First, we show that the simplex Equiangular Tight Frame
+(ETF) configuration is geometrically optimal: it maximizes
+the minimum pairwise angle among class means and there-
+fore maximizes the multiclass angular margin of the Nearest
+Class Mean (NCM) classifier. Second, under homoscedastic
+Gaussian class-conditionals, we show that the NCM rule
+coincides exactly with the Bayes-optimal classifier.
+3.1. Geometric Optimality of the Simplex ETF
+Setup.
+Let {vc}C
+c=1 be unit vectors in Rd (with d ≥C −1)
+representing class means of an NCM classifier. Define the
+minimum pairwise inner product
+γ := min
+c̸=c′ v⊤
+c vc′.
+Equivalently, maximizing the minimum pairwise angle
+minc̸=c′ ∠(vc, vc′) is equivalent to minimizing γ.
+Proposition 3.1 (Geometric optimality of the simplex ETF).
+Among all sets of C unit vectors in Rd, d ≥C −1, the
+centered simplex ETF uniquely maximizes the minimum pair-
+wise angle:
+(i) (Maximal angle) The Welch/simplex bound implies
+γ ≤−
+1
+C −1.
+Equality holds if and only if
+v⊤
+c vc′ =
+(
+1,
+c = c′,
+−
+1
+C−1,
+c ̸= c′,
+C
+X
+c=1
+vc = 0,
+i.e. {vc} forms a centered simplex ETF. The maximizer
+is unique up to rotation/reflection.
+(ii) (Maximal angular NCM margin) For unit-norm vec-
+tors, the worst-case angular margin of the NCM clas-
+sifier is a monotone function of minc̸=c′ ∠(vc, vc′).
+Because the simplex ETF maximizes this angle by (i),
+it also maximizes the multiclass angular margin of the
+NCM classifier.
+Proof. (i) The Welch bound states that any C unit vectors in
+Rd satisfy minc̸=c′ v⊤
+c vc′ ≤−1/(C −1). Equality requires
+that the Gram matrix has the simplex ETF structure given
+above and is unique up to orthogonal transformation.
+(ii) For unit vectors, the NCM decision boundary be-
+tween classes c and c′ is the hyperplane ⟨x, vc −vc′⟩= 0,
+whose angular separation is controlled solely by the an-
+gle ∠(vc, vc′). The worst-case multiclass angular margin
+is therefore a monotone function of the minimum such angle,
+and the simplex ETF maximizes it by (i).
+4
+
+3.2. Bayes-Optimal Nearest Class Mean Rule
+We now consider the probabilistic setting underlying NC
+analyses. There are C classes with equal prior Pr(y = c) =
+1/C. Conditioned on class c, features follow a homoscedas-
+tic Gaussian distribution:
+x | y = c ∼N(µc, Σ),
+Σ ≻0.
+We assume the class means form a centered simplex ETF in
+the Mahalanobis geometry:
+C
+X
+c=1
+µc = 0,
+∥µc∥Σ−1 = ∥µc′∥Σ−1
+∀c, c′.
+Proposition 3.2 (ETF geometry implies Bayes-optimal
+NCM classification). Under the model above, the Bayes-
+optimal classifier is
+h⋆(x) = arg max
+c
+µ⊤
+c Σ−1x,
+which is a zero-bias linear classifier with weights wc =
+Σ−1µc. Moreover:
+(i) If Σ = σ2I, then h⋆reduces to the Euclidean NCM
+rule,
+h⋆(x) = arg min
+c
+∥x −µc∥2.
+(ii) If x and µc are normalized, this is equivalent to cosine-
+similarity classification: h⋆(x) = arg maxc⟨x, µc⟩.
+(iii) In the NC/TPT limit, classifier weights satisfy wc ∥
+µc and ∥wc∥→∞, so the induced linear classifier
+matches h⋆exactly.
+Proof. With equal priors,
+h⋆(x) = arg max
+c
+p(x | y = c) = arg min
+c
+∥x −µc∥2
+Σ−1,
+since p(x | y = c) ∝exp
+ −1
+2∥x −µc∥2
+Σ−1
+
+.
+Expanding the Mahalanobis distance,
+∥x −µc∥2
+Σ−1 = ∥x∥2
+Σ−1 −2µ⊤
+c Σ−1x + ∥µc∥2
+Σ−1.
+The first term is independent of c, and under the ETF assump-
+tion, the third term is also constant across classes. Therefore,
+h⋆(x) = arg max
+c
+µ⊤
+c Σ−1x.
+(⋆)
+Define wc = Σ−1µc. Because the class means are cen-
+tered, P
+c µc = 0, it follows that P
+c wc = 0, so the discrim-
+inant scores {w⊤
+c x} have zero mean across classes. Hence,
+(⋆) is a zero-bias linear decision rule.
+When Σ = σ2I, the rule in (⋆) reduces to minimizing the
+Euclidean distance ∥x−µc∥2, corresponding to the classical
+NCM classifier. If all vectors are further normalized, this
+becomes equivalent to cosine-similarity classification.
+In the NC/TPT regime, the classifier weights satisfy
+wc ∥µc and ∥wc∥→∞, so the induced linear classifier
+arg maxc⟨wc, x⟩coincides with the cosine classifier above,
+and therefore matches the Bayes rule in (⋆).
+Thus, the simplex ETF configuration of class means
+yields the Bayes-optimal NCM classifier.
+5
+
+4. Proof of Main Theorem
+4.1. Closure of Projection
+Note that a simplex ETF {vi}C
+i=1 ⊂RC−1 satisfies
+∥vi∥= 1,
+v⊤
+i vj = −
+1
+C −1 (i ̸= j),
+C
+X
+i=1
+vi = 0.
+Equivalently, its Gram matrix has 1 on the diagonal and constant off-diagonal entries −1/(C −1).
+Theorem 4.1 (Projection of a Simplex ETF). Let {vi}C
+i=1 ⊂RC−1 be a simplex ETF. Fix v1 and let P = I −v1v⊤
+1 be
+the orthogonal projector onto v⊥
+1 . For i = 2, . . . , C, define ui = Pvi and wi = ui/∥ui∥. Then {wi}C
+i=2 ⊂v⊥
+1 ∼= RC−2
+is again a simplex ETF:
+∥wi∥= 1,
+w⊤
+i wj = −
+1
+C −2 (i ̸= j),
+C
+X
+i=2
+wi = 0.
+Proof. Write β := −
+1
+C−1. For i ≥2,
+ui = Pvi = vi −(v⊤
+1 vi)v1 = vi −βv1.
+Equal norms. Using ∥vi∥= ∥v1∥= 1 and v⊤
+i v1 = β,
+∥ui∥2 = ∥vi∥2 −2β v⊤
+i v1 + β2∥v1∥2 = 1 −2β2 + β2 = 1 −β2 = 1 −
+1
+(C −1)2 = C(C −2)
+(C −1)2 .
+Thus all ∥ui∥are equal.
+Equal pairwise inner products. For i ̸= j with i, j ≥2,
+u⊤
+i uj = v⊤
+i vj −βv⊤
+i v1 −βv⊤
+1 vj + β2 = β −β2 −β2 + β2 = β −β2 = −
+C
+(C −1)2 .
+Hence, after normalization,
+u⊤
+i uj
+∥ui∥∥uj∥=
+−C/(C −1)2
+C(C −2)/(C −1)2 = −
+1
+C −2,
+so w⊤
+i wj = −
+1
+C−2.
+Zero sum. Since PC
+i=1 vi = 0,
+C
+X
+i=2
+ui =
+C
+X
+i=2
+(vi −βv1) =
+
+C
+X
+i=2
+vi
+
+−(C −1)βv1 = (−v1) −(C −1)
+
+−
+1
+C−1
+
+v1 = 0.
+All ∥ui∥are equal, so common normalization preserves the zero sum: PC
+i=2 wi = 0. The vectors {wi} lie in v⊥
+1
+(dimension C −2), have unit norm, constant off-diagonal inner product −1/(C −2), and zero mean; hence they form a
+simplex ETF.
+Remark 4.2. This result is specific to the simplex ETF (the NC configuration). It does not generally hold for arbitrary
+ETFs.
+6
+
+4.2. Optimality of Projection
+We now establish the optimality of our projection operator
+under the definition of representation-level weak unlearn-
+ing (Def. 2.1). The central idea is that projecting onto the
+orthogonal complement of the forgotten class removes its
+contribution while preserving the Bayes-optimal ETF geom-
+etry of the retained classes.
+Theorem 4.3 (ETF projection preserves optimality and for-
+gets the target class). Assume (A1)–(A5) and Neural Col-
+lapse (NC1)–(NC4) hold pre-unlearning, and suppose the
+following statistical model for the penultimate features:
+1. (Balanced classes) class priors are uniform: Pr(y = i) =
+1/C for i ∈Y.
+2. (Isotropic Gaussian conditionals) conditional on class i,
+θ(x) | (y = i) ∼N(µi, σ2Id),
+with ∥µi∥= 1 and {µi}C
+i=1 coinciding with the ETF
+directions {vi} from NC (i.e. µi = vi).
+Fix a class u ∈Y and define
+P = I −vuv⊤
+u ,
+˜vi =
+Pvi
+∥Pvi∥
+(i ̸= u),
+so that by Proposition 3.2 the vectors {˜vi}i̸=u form a sim-
+plex ETF in the subspace v⊥
+u . Let the projected features be
+θ′(x) = P θ(x) and let the post-projection classifier weights
+satisfy w′
+i = κ′˜vi for i ̸= u. Then:
+(a) (Retained-class Bayes optimality) For the retained
+classes Y¬u, the classifier that assigns x to the nearest
+projected class mean ˜vi is Bayes-optimal under the
+Gaussian model above. Equivalently, the projected
+model (θ′, {w′
+i}i̸=u) attains the Bayes decision rule
+on Y¬u.
+(b) (Complete forgetting in the low-noise / NC limit) Under
+projection, the forget-class conditional mean is mapped
+to zero: Pµu = 0. Consequently, for x ∼Df,
+θ′(x) | (y = u) ∼N(0, σ2P).
+In the limit σ2 →0 (equivalently, in the NC/TPT limit
+where within-class variance vanishes, or as the classi-
+fier scale κ′ →∞appropriately), the projected features
+for the forget class concentrate at the origin, yielding
+logits w′
+i
+⊤θ′(x) →0 for all i ̸= u. Hence the predic-
+tive distribution over retained classes approaches the
+uniform distribution U¬u, i.e. the forget class is com-
+pletely forgotten in the sense that the model expresses
+no informative preference among retained classes.
+Consequently, ETF projection simultaneously (i) pre-
+serves Bayes-optimal classification on the retained classes
+and (ii) erases class-specific information for the forgotten
+class (in the stated asymptotic / low-noise sense).
+We first provide a proof sketch. The formal proof is
+included on the next page.
+Proof sketch. For part (a), under the Gaussian ETF model
+with means {µi = vi}, Proposition 3.2 shows that the nearest-
+class-mean rule is Bayes-optimal. By Proposition 3.2, the
+projected means {˜vi}i̸=u form a simplex ETF in v⊥
+u , so the
+same argument implies that the nearest-mean classifier on
+{˜vi} is Bayes-optimal for the retained classes Y¬u.
+For part (b), note that Pvu = 0 implies that the pro-
+jected forget-class distribution satisfies θ′(x) | (y = u) ∼
+N(0, σ2P). For any retained class i ̸= u,
+E[w′
+i
+⊤θ′(x) | y = u] = w′
+i
+⊤Pµu = 0,
+and as σ2 →0 the distribution of θ′(x) for the forgotten
+class concentrates at the origin. Thus the logits w′
+i
+⊤θ′(x)
+converge to 0 for all i ̸= u, and the induced softmax over
+retained classes converges to the uniform distribution U¬u.
+This formalizes the notion that the projected model has no
+discriminative information about the forgotten class in the
+low-noise / NC limit.
+7
+
+Formal Proof. (a) Retained-class Bayes optimality. Under the assumptions of the theorem, pre-unlearning we have
+θ(x) | (y = i) ∼N(vi, σ2Id),
+Pr(y = i) = 1/C,
+with the means {vi} forming a centered simplex ETF in Rd. By Proposition 3.2, the Bayes-optimal classifier for this
+model is the nearest-class-mean rule (equivalently, a scaled linear classifier aligned with {vi}).
+Fix a forget class u and apply the projection P = I −vuv⊤
+u . For any retained class i ̸= u,
+θ′(x) | (y = i) = Pθ(x) | (y = i) ∼N(Pvi, σ2P),
+since P is a linear operator and θ(x) is Gaussian with mean vi and covariance σ2Id. Thus, conditioned on y ∈Y¬u, the
+projected features follow a homoscedastic Gaussian model in the subspace v⊥
+u with:
+means µ′
+i = Pvi,
+common covariance Σ′ = σ2P.
+By Proposition 3.2, the normalized means ˜vi = µ′
+i/∥µ′
+i∥form a centered simplex ETF in v⊥
+u . Since P acts as the
+identity on v⊥
+u and is zero on span(vu), Σ′ is proportional to the identity on v⊥
+u (and vanishes on vu), so within v⊥
+u the
+conditionals are isotropic Gaussians with means ˜vi up to a global scale.
+Applying Proposition 3.2 to this reduced (C −1)-class ETF in v⊥
+u , we obtain that the Bayes-optimal classifier among the
+retained classes is the nearest-class-mean rule with respect to the means {˜vi}i̸=u (equivalently, a scaled linear classifier
+with weights w′
+i = κ′˜vi). This is precisely the classifier implemented by the projected model (θ′, {w′
+i}i̸=u), establishing
+Bayes optimality on Y¬u.
+(b) Complete forgetting in the low-noise / NC limit. For the forgotten class u, we have µu = vu and
+θ(x) | (y = u) ∼N(vu, σ2Id).
+Applying P and using Pvu = 0, we obtain
+θ′(x) | (y = u) = Pθ(x) | (y = u) ∼N(Pvu, σ2P) = N(0, σ2P).
+Thus the projected features for class u are mean-zero Gaussian supported in v⊥
+u with covariance σ2P.
+For any retained class i ̸= u, the corresponding logit is
+si(x) := w′
+i
+⊤θ′(x) = κ′ ˜v⊤
+i θ′(x),
+where ˜vi ∈v⊥
+u and w′
+i ∈v⊥
+u because they are constructed from Pvi. Since θ′(x) | (y = u) is mean-zero,
+E[si(x) | y = u] = w′
+i
+⊤E[θ′(x) | y = u] = w′
+i
+⊤0 = 0.
+Moreover, as σ2 →0, the Gaussian N(0, σ2P) converges in probability (and almost surely for any fixed sample) to the
+point mass at 0. Therefore
+θ′(x) | (y = u) −−−−→
+σ2→0 0
+in probability,
+and hence
+si(x) = w′
+i
+⊤θ′(x) −−−−→
+σ2→0 0
+in probability, for all i ̸= u.
+The predictive distribution over retained classes is
+q¬u(i | x) =
+exp(si(x))
+P
+j̸=u exp(sj(x)).
+For any fixed vector s ∈Rm (with m = C −1), if s →0 then softmax(s) →U¬u, the uniform distribution on m
+classes. By continuity of the softmax map and convergence of s(x) = [si(x)]i̸=u to the zero vector, we obtain
+q¬u(· | x) = softmax(s(x)) −−−−→
+σ2→0 U¬u
+in probability under x ∼Df.
+Thus, in the low-noise / NC limit, the projected model makes asymptotically uniform predictions over retained classes
+for any sample from the forgotten class, which formalizes the notion that it has no informative class preference for
+y = u.
+8

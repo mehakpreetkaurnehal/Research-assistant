@@ -1,0 +1,1615 @@
+Growing with the Generator: Self-paced GRPO for Video Generation
+Rui Li1*, Yuanzhi Liang3†, Ziqi Ni2, Haibing Huang3, Chi Zhang3, Xuelong Li3‡
+1University of Science and Technology of China
+2Southeast University,
+3Institute of Artificial Intelligence (TeleAI), China Telecom
+rui.li@mail.ustc.edu.cn, liangyzh18@outlook.com, xuelong li@ieee.org
+Abstract
+Group
+Relative
+Policy
+Optimization
+(GRPO)
+has
+emerged as a powerful reinforcement learning paradigm
+for post-training video generation models. However, exist-
+ing GRPO pipelines rely on static, fixed-capacity reward
+models whose evaluation behavior is frozen during train-
+ing. Such rigid rewards introduce distributional bias, sat-
+urate quickly as the generator improves, and ultimately
+limit the stability and effectiveness of reinforcement-based
+alignment. We propose Self-Paced GRPO, a competence-
+aware GRPO framework in which reward feedback co-
+evolves with the generator. Our method introduces a pro-
+gressive reward mechanism that automatically shifts its em-
+phasis from coarse visual fidelity to temporal coherence and
+fine-grained text–video semantic alignment as generation
+quality increases. This self-paced curriculum alleviates re-
+ward–policy mismatch, mitigates reward exploitation, and
+yields more stable optimization. Experiments on VBench
+across multiple video generation backbones demonstrate
+consistent improvements in both visual quality and semantic
+alignment over GRPO baselines with static rewards, vali-
+dating the effectiveness and generality of Self-Paced GRPO.
+1. Introduction
+Video generation with reinforcement learning (RL) has re-
+cently attracted growing attention for its ability to align gen-
+erative models with perceptual and semantic preferences.
+Different from reconstruction-based methods, RL intro-
+duces feedback-driven optimization rather than supervised
+reconstruction objectives.
+Among various formulations,
+Group Relative Policy Optimization (GRPO) has shown
+strong potential in this domain [19, 34], offering stable opti-
+mization and preference-oriented gradients through group-
+*Equal contribution.
+†Equal contribution.
+‡Corresponding author.
+Rigid reward 3.0
+Rigid reward
+Evolving reward
+Evolving reward: 3.0
+Rigid reward: 9.0
+Rigid reward: 9.0
+Model Competence
+Reward
+Evolving reward: 8.6
+Evolving reward:7.8
+Figure 1. As video quality improves, scores of static reward mod-
+els may flatten and fail to capture group-level discrimination. In
+contrast, evolving rewards adapt to the generation competence and
+remain sensitive to quality gains throughout training.
+wise comparisons. Building on this foundation, recent stud-
+ies have explored improved scheduling, reward shaping,
+and multimodal feedback strategies [4, 8, 16]. These ef-
+forts highlight a consistent finding: the reward model is the
+central factor in GRPO-based visual generation. It evaluates
+generation quality and encodes human-aligned preferences,
+thereby determining overall effectiveness.
+Current reward modeling approaches generally follow
+two paradigms [15, 20, 33]. The first employs lightweight
+perceptual or image/video-quality assessment (IQA) mod-
+els adapted from aesthetic or technical benchmarks. These
+models are efficient but often shallow, encouraging gen-
+erators to exploit low-level cues.
+The second leverages
+visual–language models (VLMs) fine-tuned with human-
+preference data via RLHF, such as VideoAlign based eval-
+uators. While demonstrating improvements in certain as-
+pects, such models unavoidably inherit distributional biases
+from training data, over-rewarding specific prompt cate-
+gories, which can destabilize optimization and lead to re-
+ward exploitation during training. Despite their differences,
+both paradigms share a fundamental limitation: they are
+static and ability-fixed.
+Once trained, these rewards re-
+main unchanged throughout optimization, providing iden-
+tical evaluation signals regardless of the generator’s compe-
+tence. This rigidity creates a mismatch between reward dif-
+arXiv:2511.19356v1  [cs.CV]  24 Nov 2025
+
+0.03
+0.972
+0.552
+0.794
+0.693
+0.766
+Sport videos
+Human videos
+Object videos
+Mean reward
+Qwen2.5VL-72B
+VideoAlign
+Figure 2. Illustration of reward model bias. VideoAlign shows
+content-specific preference, often assigning higher scores to cer-
+tain video categories.
+ficulty and model ability—weak models are over-penalized
+by strong gradients, whereas strong ones quickly saturate
+and gain diminishing effective guidance. These observa-
+tions suggest that the core issue lies in the lack of adapt-
+ability in current reward modeling. Then a natural question
+arises: why not allow the reward itself to grow with the
+generative model, enabling it to provide increasingly chal-
+lenging and meaningful feedback as the model improves?
+In this paper, we propose Self-Paced GRPO for video
+generation. As shown in Fig. 1, the core concept is that
+reward supervision should evolve alongside the generator’s
+competence rather than remain static during training. We
+design a co-evolving reward mechanism that dynamically
+adjusts evaluation difficulty as generation quality improves,
+encouraging the model to progress through increasingly
+challenging objectives while maintaining stable optimiza-
+tion. Grounded in principles of hierarchical and adaptive
+learning [3, 7, 14, 28], our approach treats reward adapta-
+tion as an implicit curriculum. Specifically, we introduce
+a three-stage reward structure: the first stage emphasizes
+coarse visual fidelity and aesthetic appeal, the second incor-
+porates temporal consistency and motion coherence, and the
+final stage enforces text–video alignment to ensure semantic
+accuracy and realistic dynamics. This hierarchical supervi-
+sion enables the generator and reward model to co-evolve,
+mitigating bias, reducing capacity mismatch, and stabiliz-
+ing policy optimization across training stages.
+Our main contributions are summarized as follows:
+Self-Paced GRPO for Video Generation. We present a
+GRPO framework that adaptively scales reward signals ac-
+cording to the generator’s competence, reducing generator-
+reward mismatch and bias in existing RL-based generation
+pipelines.
+Co-Evolving Reward Mechanism. We propose a pro-
+gressive, three-stage reward model that evolves from coarse
+visual supervision to fine-grained temporal and semantic
+alignment, enabling structured and stable learning.
+Improved Preference Alignment.
+Extensive experi-
+ments demonstrate consistent gains in visual quality, tem-
+poral coherence, and text alignment compared with exsiting
+baselines.
+2. Related Work
+Post Training of Visual Synthesis. Early efforts in opti-
+mizing visual synthesis primarily relied on Proximal Pol-
+icy Optimization (PPO) [6]. These methods first trained
+a value network to capture specific human preferences,
+then used the trained reward model to score the gener-
+ated videos, and performed preference fine-tuning based
+on these scores. However, PPO-based approaches require
+maintaining a value network, which leads to low train-
+ing efficiency.
+Building upon this idea, Group Relative
+Policy Optimization [19, 29, 34] extends preference opti-
+mization to multi-modal generative tasks. By leveraging
+group-based relative comparisons rather than single-sample
+rewards, GRPO can capture richer preference signals and
+achieve more robust alignment in visual synthesis models.
+Multi-Stage Approaches.
+Multi-stage optimization has
+been widely adopted to progressively refine generative
+models across spatial, temporal, and semantic dimensions.
+For example, Spatial-then-temporal [17] first enhance spa-
+tial and appearance features using static images, and then
+incorporate temporal information through video reconstruc-
+tion with a distillation loss to preserve spatial representa-
+tions.
+TTC [21] improve spatial quality via masked re-
+gion restoration and subsequently enhance temporal consis-
+tency with a three-frame sampling strategy and an auxiliary
+branch. Enhance-A-Video [22] further enhance temporal
+consistency by emphasizing off-diagonal elements in the
+temporal attention map and scaling cross-frame attention
+values. These studies highlight the potential of multi-stage
+design in post-training for video generation. They inspire
+us to structure training into distinct stages, each targeting a
+specific dimension.
+Reward Models. Recent studies [6, 10] have introduced
+IQA models and VLMs as reward functions, enabling se-
+mantically grounded reinforcement learning for visual gen-
+eration. For instance, VILA [18] has been applied to con-
+struct preference pairs for human alignment [36], while
+VideoAlign [23] is employed to enhance both visual qual-
+ity and motion quality in text-to-video generation [34].As
+shown in Fig. 2, such VLMs inevitably inherit biases from
+the training data, leading to preferences for certain types of
+video content. Similarly, InFLVG [4] leverages frame-wise
+consistency and CLIP-based similarity to facilitate coher-
+ent long-form video generation. Despite these advances,
+they implicitly assume that the generator and the reward
+model are well matched in capability. In practice, how-
+ever, the supervision strength of a fixed reward model is
+often misaligned, either too weak or overly strong, resulting
+in unstable training. Moreover, relying on a single reward
+model renders these methods vulnerable to reward hacking.
+To mitigate this, VRG [24] leverage diverse reward models
+(e.g., CLIP [25], HPSv2 [32], and other vision-language or
+video representation models [1, 5, 27, 30]) to jointly opti-
+
+mize semantic alignment, perceptual quality, and temporal
+coherence. Nevertheless, jointly employing multiple reward
+models may lead to conflicts among them, and balancing the
+supervision strength across different reward models also re-
+mains challenging.
+3. Preliminary
+SDE Sampling. In ODE sampling, the sampling process is
+deterministic, formulated as
+dxt = vt dt,
+(1)
+where vt denotes the control variable at time t, without any
+stochastic component.
+However, since reinforcement learning requires stochas-
+ticity to encourage exploration, such a deterministic model
+is not sufficiently flexible for exploration in GRPO. Unlike
+ODE sampling, which follows a single deterministic trajec-
+tory, SDE sampling introduces stochastic perturbations that
+encourage exploration and prevent collapse to suboptimal
+modes. It incorporates both a drift term and a diffusion
+term.
+dxt =
+
+vt(xt) −σ2
+2 ∇log pt(xt)
+
+|
+{z
+}
+drift term
+dt +
+σt dw
+| {z }
+diffusion term
+,
+(2)
+where the drift term governs the deterministic dynamics of
+the process, while the diffusion term introduces stochastic
+perturbations through Brownian motion, thereby enhancing
+exploration.
+Coefficient of Variation. The coefficient of variation κ is a
+normalized measure of dispersion, defined as the ratio of the
+standard deviation to the mean of a dataset. Unlike raw vari-
+ance or standard deviation, κ provides a scale-independent
+metric, making it suitable for comparing variability across
+datasets with different units or magnitudes. A lower κ indi-
+cates that the data points are relatively consistent around the
+mean, while a higher κ suggests greater relative variability.
+κ is widely used in statistics and experimental analysis to
+assess stability, reliability, and the degree of heterogeneity
+in observations.
+Formally, suppose the dataset is partitioned into clusters,
+where sij denotes the score of the j-th video in the i-th clus-
+ter, and each cluster contains N videos. The mean, standard
+deviation, and coefficient of variation κ for the i-th cluster
+are computed as:
+κi =
+
+1
+N
+PN
+j=1(sij −µi)21/2
+1
+N
+PN
+j=1 sij
+× 100%.
+(3)
+4. Method
+In reinforcement-based video generation, static reward
+models often fail to capture group-level discrimination, los-
+ing effectiveness once the generator surpasses their reward
+capacity, leading to reward saturation and unstable opti-
+mization. To address this issue, the proposed Self-Paced
+GRPO framework integrates a Co-Evolving Reward Mech-
+anism (CERM) into the Group Relative Policy Optimization
+paradigm. The reward evolves jointly with the generator’s
+competence, defined as its ability to produce high-quality
+samples under the current reward. This formulation creates
+a continuous curriculum of learning signals, ensuring adapt-
+ability and robustness across diverse data distributions.
+4.1. Co-Evolving Reward
+Let vi = {f i
+t}T
+t=1 denote a sampled video with T frames.
+For optimization, we consider groups of size G. A collec-
+tion of latent reward terms {φj(·)}K
+j=1 is defined, each cap-
+turing a distinct aspect of generation quality. For term j, the
+scalar reward is
+ri
+j = φj(vi),
+rj = (r1
+j, r2
+j, . . . , rG
+j ).
+(4)
+The overall reward is modeled as a competence-dependent
+mixture of these terms:
+˜ri =
+K
+X
+j=1
+wjri
+j,
+K
+X
+j=1
+wj = 1,
+wj ∈[0, 1],
+(5)
+where c denotes the generator’s current competence level.
+The weighting function employs a soft selection strategy,
+wj =
+exp(α gj(c, rj))
+PK
+ℓ=1 exp(α gℓ(c, rℓ))
+,
+(6)
+where gj(·) indicates the contribution of each reward term
+and α controls transition sharpness. This continuous for-
+mulation removes discrete stage boundaries and allows the
+reward to evolve smoothly with model improvement, align-
+ing supervision difficulty with the generator’s competence.
+4.2. Competence-Aware Reward Adaptation
+Competence is estimated from group-relative reward statis-
+tics. For each reward term, the mean reward is
+¯rj = 1
+G
+G
+X
+i=1
+ri
+j,
+(7)
+and a reward sparsity is measured using the Hoyer index [9]:
+SHoyer(rj) =
+√
+G −∥rj∥1
+∥rj∥2
+√
+G −1
+,
+SHoyer(rj) ∈[0, 1].
+(8)
+A high sparsity value indicates reward saturation, imply-
+ing that most samples receive similar scores. The transition
+function coupling competence and sparsity is defined as
+gj(c, rj) = h(¯rj−τj)+β[SHoyer(rj−1)−SHoyer(rj)], (9)
+
+Reward Adaptation
+Self-Paced GRPO
+Evolve
+Evolve
+Evolve
+Model Competence
+Reward Capacity
+Co-Evolving Reward
+Figure 3. Pipeline of the proposed Self-Paced GRPO. The generator produces candidate outputs, which are evaluated by a progressive
+co-evolving reward mechanism. Rewards are aggregated and gated through a competence-aware adaptation strategy, enabling adaptive
+stage-wise aggregation. The normalized reward feedbacks are then used to compute advantages that guide gradient-based fine-tuning of
+the generator.
+where h(·) is a smooth activation (sigmoid), τj is a com-
+petence threshold, and β balances sparsity modulation. A
+higher mean reward and stronger sparsity signal that the
+current reward term is saturated, prompting a gradual tran-
+sition toward more advanced reward terms.
+This adap-
+tive weighting process parallels curriculum and self-paced
+learning, enabling the generator to progress from coarse to
+fine-grained supervision in a stable and continuous manner.
+4.3. Self-Paced GRPO
+The generalized mechanism can be instantiated with three
+reward terms of increasing abstraction. The first emphasizes
+structural regularity and visual coherence. The second in-
+corporates temporal dependency, promoting smooth motion
+evolution. The third enforces semantic alignment between
+generated content and conditioning signals. During train-
+ing, the thresholds {τj} are calibrated empirically, and all
+reward terms are precomputed once per group to ensure un-
+biased comparison. This hierarchical progression follows
+the principles of progressive representation learning, sup-
+porting a smooth transition from low-level regularities to
+structured temporal and semantic reasoning.
+Reward Normalization and Advantage Computation.
+To ensure stability and comparability across groups, the
+evolving reward is standardized before policy optimization:
+ACERM
+i
+= ˜ri −mean(˜r)
+std(˜r)
+.
+(10)
+Normalization enforces scale invariance and prevents ex-
+treme samples from dominating optimization. The normal-
+ized advantage provides a consistent and stable signal for
+policy improvement under evolving reward supervision.
+Training Objective. The final optimization objective ex-
+tends standard GRPO by incorporating the co-evolving re-
+ward:
+J (θ) = E{oi}G
+i=1∼πθold(·|c)
+at,i∼πθold(·|st,i)
+[ 1
+G
+G
+X
+i=1
+1
+T
+T
+X
+t=1
+min(ρt,iACERM
+i
+, clip
+ ρt,i, 1 −ϵ, 1 + ϵ)ACERM
+i
+
+],
+(11)
+where ρt,i =
+πθ(at,i|st,i)
+πθold(at,i|st,i) is the importance ratio be-
+tween the updated and reference policies. Unlike standard
+GRPO, where the advantage is computed from a fixed re-
+ward model, this formulation derives it from a continuously
+evolving mixture of reward terms. The policy thus receives
+feedback adapted to its learning stage, producing a smooth
+curriculum of optimization steps. This adaptive design en-
+hances convergence stability and mitigates reward exploita-
+tion.
+The Self-Paced GRPO framework unifies self-paced
+learning, adaptive reward adaptation, and group-relative op-
+timization within a single formulation.
+By continuously
+aligning reward difficulty with model competence, it alle-
+viates the saturation and instability of static rewards. The
+adaptive weighting of reward terms establishes a natural
+curriculum that sustains consistent learning dynamics. This
+formulation offers a general paradigm for evolving reward
+structures in generative policy optimization and provides a
+
+foundation for scalable reinforcement alignment in high-
+dimensional generative tasks.
+5. Experiment
+5.1. Setup
+We conduct experiments on Wan2.1-T2V with 1.3B and
+14B variants [31], as well as HunyuanVideo [13]. Frozen
+Qwen2.5VL-7B and Qwen2.5VL-72B are employed as re-
+ward models. We compare against pretrained Wan2.1, Hun-
+yuan backbones, and DanceGRPO as baselines.
+Datasets. Our training is conducted on the 50k dataset re-
+leased by DanceGRPO. For ablation studies, we randomly
+sampled 1.4k prompts from the iStock dataset [12] as our
+test set.
+Evaluation Metrics. For quantitative evaluation, we adopt
+VBench [11], which assesses sixteen complementary di-
+mensions to provide a comprehensive understanding of gen-
+erative model performance. For ablation studies, we report
+four representative metrics, including VideoAlign, where
+VQ measures visual quality, MQ measures motion quality,
+and TA measures text alignment. In addition, we employ
+LAION [27] to evaluate video aesthetics.
+5.2. Implementation details
+Wan2.1-T2V-1.3B. Videos are sampled at 480 × 832 × 53
+frames at 15 fps. Reward gate thresholds are set to τI =
+τII = 0.75, with a learning rate of 5 × 10−6 and group size
+G = 16. Training is performed for 150 steps on 8 H100
+GPUs.
+Wan2.1-T2V-14B. Videos are sampled at 240 × 416 × 53
+frames at 15 fps. Reward gate thresholds are set to τI =
+0.75, τII = 0.73, with a learning rate of 5×10−6 and group
+size G = 16. Training is performed for 220 steps on 16
+H100 GPUs.
+HunyuanVideo-T2V. Videos are sampled at 240×416×53
+frames at 15 fps. Reward gate thresholds are set to τI =
+0.70, τII = 0.68, with a learning rate of 2×10−6 and group
+size G = 16. Training is performed for 100 steps on 16
+H100 GPUs.
+Self-Pace of Reward Model. We instantiate our progres-
+sive co-evolving design as a three-stage reward framework.
+Stage I optimizes visual quality, Stage II jointly optimizes
+visual quality and temporal consistency, and Stage III fur-
+ther incorporates text–video alignment. Following recent
+surveys on prompt engineering [2, 20, 35], we adopt pro-
+gressive prompt design to gradually strengthen the reward
+capacity of Qwen models, akin to curriculum learning. De-
+tailed prompt configurations are provided in the supplemen-
+tary material.
+Quantitative Evaluation and Ablation Study. We con-
+figure the sampling steps to 50 for Wan2.1-T2V-1.3B and
+Wan2.1-T2V-14B, with a resolution of 480 × 832 × 53. For
+0
+0.5
+1
+A
+B
+C
+D
+E
+F
+G
+H
+I
+J
+K
+L
+M
+N
+O
+P
+Q
+R
+S
+T
+VideoAlign
+Qwen2.5-VL-72B
+Mean Rewar
+Figure 4. Reward preference analysis. We partition 2,000 real
+videos into 20 semantic categories, evaluate them using different
+reward models, and report the coefficient of variation of the mean
+scores across categories.
+HunyuanVideo-T2V, we adopt 30 sampling steps under the
+same resolution setting.
+Reward Model Preference Analyses. We randomly sam-
+pled 2k real-world videos with captions from the iS-
+tock dataset, grouped them into 10–20 clusters using the
+UMT5 [26] encoder, and scored each video with both
+VideoAlign and Qwen2.5VL-72B. Then, we computed the
+mean score and coefficient of variation κ within each cluster
+to quantify evaluation consistency.
+5.3. Quantitative evaluation
+Preference of Reward Model. As shown in Fig. 4, we
+compare the intra-cluster reward consistency of VideoAlign
+and Qwen2.5VL-72B across 20 semantic clusters. Since
+the evaluation is conducted on real-world videos, we natu-
+rally expect the visual quality between each semantic cate-
+gory to be comparable. VideoAlign, however, exhibits large
+variations in reward means across clusters and yields a co-
+efficient of variation as high as 55.84, reflecting its inher-
+ent preference toward certain types of semantic content in
+videos. In contrast, Qwen2.5VL-72B produces more con-
+sistent scores within each class and maintains a much lower
+coefficient of variation of 3.4 across all cluster sizes, indi-
+cating stable and content-invariant evaluations. The anal-
+ysis indicates that VideoAlign introduces category-specific
+bias in visual quality assessment, assigning disproportion-
+ate scores to semantically different videos of similar qual-
+ity. Benefiting from stronger generalization capacity, larger
+models such as Qwen2.5VL-72B provide more consistent
+and unbiased reward feedbacks.
+Wan2.1-1.3B-T2V. Table 1 presents the VBench evaluation
+of Wan1.3B. We compare our method with the untrained
+Wan1.3B and DanceGRPO as baselines. On the video qual-
+ity side, our method achieves the best overall score, im-
+proving over the baseline in aesthetic quality, image qual-
+ity, and dynamic degree. DanceGRPO, while competitive
+in dynamic degree and color , shows regressions in aesthetic
+and image quality, leading to a slightly lower quality score.
+On the semantic side, the benefits of larger reward mod-
+eling are more pronounced. Qwen2.5-VL-7B already im-
+
+Table 1. Quantitative VBench results for Wan2.1-T2V-1.3B and Wan2.1-T2V-14B. For the 1.3B setting, we compare Wan and DanceGRPO
+(VideoAlign reward) with our Self-Paced GRPO using Qwen2.5VL-7B and Qwen2.5VL-72B rewards. For the 14B setting, we employ
+Qwen2.5VL-72B as the reward model, pretrainde Wan14B as the baseline. The best score for each metric is shown in bold.
+Metric
+Wan1.3B
+DanceGRPO
+Ours
+Ours
+Wan14B
+Ours
+Qwen2.5VL-7B
+Qwen2.5VL-72B
+Qwen2.5VL-72B
+Aesthetic quality
+60.92
+58.99
+60.97
+62.64
+65.33
+60.68
+Appearance style
+20.41
+20.70
+20.45
+20.48
+21.35
+21.62
+Background consistency
+96.80
+96.83
+96.83
+96.49
+98.36
+98.74
+Color
+84.15
+90.05
+86.00
+84.96
+87.98
+89.68
+Dynamic degree
+56.94
+58.33
+55.56
+58.33
+52.78
+56.94
+Human action
+74.00
+73.00
+76.00
+76.00
+77.00
+80.00
+Image quality
+67.65
+66.61
+67.63
+68.49
+68.03
+68.91
+Motion smoothness
+98.32
+98.15
+98.28
+98.23
+98.35
+98.30
+Multiple objects
+59.14
+57.54
+58.46
+63.49
+70.27
+69.81
+Object class
+74.84
+77.68
+77.93
+74.21
+81.72
+82.19
+Overall consistency
+23.63
+23.68
+23.76
+23.67
+25.08
+25.17
+Scene
+22.38
+25.79
+20.49
+25.94
+32.12
+30.67
+Spatial relationship
+68.08
+62.89
+72.78
+72.00
+74.97
+79.06
+Subject consistency
+95.19
+95.55
+95.10
+95.19
+96.49
+96.63
+Temporal flickering
+99.38
+99.42
+99.37
+99.35
+99.11
+99.01
+Temporal style
+23.29
+23.47
+23.11
+23.15
+24.05
+23.98
+Quality score
+83.15
+82.81
+83.02
+83.53
+84.03
+84.59
+Semantic score
+65.31
+66.06
+66.26
+66.94
+71.18
+72.08
+Total score
+79.58
+79.46
+79.67
+80.22
+81.46
+82.09
+proves object class by 77.93, color fidelity by 86.00, and
+spatial relationships by 72.78.
+Qwen2.5-VL-72B further
+enhances multiple-object handling 63.49 and scene align-
+ment by 25.94, yielding the highest semantic score of 66.94.
+DanceGRPO, in contrast, excels in certain isolated metrics
+such as and scene alignment, but its gains are inconsistent
+and often accompanied by regressions in other semantic di-
+mensions.
+The results indicate that large-scale VLM reward mod-
+els deliver more fine-grained perceptual supervision. Our
+method achieves this improvement by eliminating the need
+for fine-tuning on manually labeled datasets, thereby avoid-
+ing semantic bias toward specific video categories. Con-
+sequently, they provide more precise and unbiased reward
+signals. In addition, compared to smaller models such as
+Qwen2.5VL-7B, the larger Qwen2.5VL-72B benefits from
+greater parameter capacity and improved generalization.
+This results in more accurate reward signals and conse-
+quently more effective and stable training.
+Wan2.1-14B-T2V.
+As shown in Table 1, our method consistently surpasses
+the baseline across both quality and semantic dimensions
+on VBench. On the video quality side, it achieves clear
+gains in aesthetic quality, image fidelity, and dynamic de-
+gree, while also improving background and subject consis-
+tency. Although motion smoothness and temporal flicker-
+ing show only marginal improvements, the overall quality
+score increases, reflecting more stable and visually pleas-
+ing generations. On the semantic side, our method demon-
+strates stronger alignment with textual conditions, achiev-
+ing higher accuracy in object class, human action, color fi-
+delity, and spatial relationships. Consequently, the semantic
+score improves, indicating better content faithfulness. De-
+spite slight declines in multiple-object handling and scene
+consistency, the overall total score advances.
+We attribute these improvements to the progressive co-
+evolving reward mechanism.
+Unlike fixed reward mod-
+els such as DanceGRPO with VideoAlign, our framework
+scales reward capacity with generation competence, provid-
+ing stable and continuous feedback that supports sustain-
+able training.
+HunyuanVideo-T2V. As shown in Table 2, our method
+achieves consistent improvements over HunyuanVideo
+across a wide range of evaluation dimensions. On the vi-
+sual side, it enhances appearance style, background con-
+sistency, and overall image fidelity, leading to generations
+that are more coherent and aesthetically pleasing. It also
+strengthens motion smoothness and reduces temporal flick-
+ering, contributing to stable dynamics and improved tempo-
+ral quality. Beyond visual fidelity, our method demonstrates
+stronger handling of complex scenarios, including multiple-
+object interactions and spatial relationships, while main-
+taining subject consistency across frames. These gains col-
+lectively highlight the robustness of our Self-Paced GRPO
+
+51.14
+57.21 59.77
+54.69
+60.36 59.12
+68.1
+57.67 60.44 66.23
+55.84
+2.83
+2.92
+2.59
+3.89
+3.17
+3.41
+3.71
+3.55
+3.98
+3.83
+3.4
+0
+10
+20
+30
+40
+50
+60
+70
+80
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+Coefficient of Variation(%)
+Number of Clusters
+VideoAlign
+Qwen2.5-VL-72B
+Figure 5. Ablation study: we further grouped 2,000 iStock [12]
+videos into 10–20 semantic clusters, using VideoAlign [20] and
+Qwen2.5VL-72B to evaluate them, and compute the coefficient
+of variation of the mean reward scores within each cluster.
+framework.
+The results confirm that the proposed re-
+ward mechanism generalizes effectively, yielding reliable
+improvements when applied to different video generation
+backbones and ensuring balanced progress across both vi-
+sual and semantic aspects of evaluation.
+Table 2. Quantitative results on VBench for HunyuanVideo. We
+compare the Hunyuanvideo with our Self-Paced GRPO using
+Qwen-2.5VL-72B as reward model.
+The best performance for
+each metric is highlighted in bold.
+Metric
+Hunyuan
+Ours+Hunyuan
+Appearance style
+19.95
+20.26
+Background consistency
+96.45
+96.85
+Image quality
+64.61
+68.83
+Motion smoothness
+98.87
+99.33
+Multiple objects
+69.51
+71.42
+Spatial relationship
+67.55
+69.84
+Subject consistency
+95.92
+96.54
+Temporal flickering
+99.12
+99.43
+Temporal style
+24.18
+24.24
+5.4. Ablation Study
+(1) Comparison with Fewer Training Stages. To inves-
+tigate whether our proposed progressive co-evolving re-
+ward mechanism outperforms simple one-stage and two-
+stage reward schemes, we conducted ablation experiments
+on Wan2.1-1.3B-T2V. As shown in Table 3, single-stage
+training, optimizing visual quality only, improves visual
+quality (VQ) and motion quality (MQ) but fails to substan-
+tially enhance text alignment (TA). Two-stage training (op-
+timizing both visual quality and temporal consistency) fur-
+ther improves both VQ and MQ, yet still struggles to re-
+fine TA. In contrast, our method effectively mitigates this
+issue, achieving notable improvements in VQ, MQ, and TA,
+while also attaining the highest LAION score. We attribute
+Table 3. Ablation study on Wan2.1-T2V-1.3B. We compare joint
+training, one-stage, and two-stage strategies with our method. Re-
+sults are reported on VideoAlign metrics VQ, MQ, and TA, as well
+as the LAION aesthetic score.
+Method
+VideoAlign
+LAION
+VQ↑
+MQ↑
+TA↑
+Score↑
+Wan2.1-1.3B-T2V
+3.448
+0.2911
+-1.914
+5.224
+Joint train
+3.366
+0.3011
+-1.077
+5.222
+One stage
+3.481
+0.3096
+-1.502
+5.249
+Two stage
+3.493
+0.2973
+-1.502
+5.233
+Ours
+3.501
+0.3090
+-0.7114
+5.252
+this improvement to the increased reward capacity enabled
+by multi-stage design. By progressively expanding the re-
+ward model, our framework delivers feedback that is harder
+to be hacked, resulting in more robust and effective train-
+ing. These results highlight the importance of progressive
+multi-stage reward feedback for balanced gains across vi-
+sual, temporal, and semantic dimensions.
+(2) Comparison with Direct Joint-training. To assess the
+effectiveness of our co-evolving reward design, we con-
+duct ablation experiments comparing direct joint-training
+with our progressive approach. In the joint training set-
+ting, the three reward signals are aggregated into a single
+score, which is then used for advantage estimation and loss
+optimization. While this method improves over the base-
+line (e.g., VQ 3.481 vs. 3.448, MQ 0.3011 vs. 0.2911,
+TA −1.077 vs. −1.914), it consistently underperforms our
+progressive design (VQ 3.501, MQ 0.3090, TA −0.7114,
+Laion 5.252).
+We attribute this gap to conflicting opti-
+mization directions among different rewards, which cause
+gradients to deviate from enhancing overall video quality.
+These results highlight that progressive reward mechanism
+provides more stable and effective optimization than simply
+aggregating reward scores in a joint single stage.
+Cluster-wise Reward Preference Analysis. To further in-
+vestigate the robustness of reward feedback across seman-
+tic categories, we conduct an ablation study by partition-
+ing 2k videos into 10-20 clusters and measuring the coef-
+ficient of variation κ for each model. As shown in Fig. 5,
+VideoAlign exhibits substantial fluctuations in κ, ranging
+from 51.14% to 68.10%, indicating a strong bias toward
+specific video types and inconsistent reward behavior across
+clusters. In contrast, our Qwen2.5-VL-72B reward model
+maintains remarkably stable κ values between 2.59% and
+3.98%, demonstrating consistent reward assignment regard-
+less of clustering granularity. The ablation results indicate
+that VideoAlign exhibits a preference for specific content
+videos, and this bias does not disappear with changes in the
+number of video clusters.
+
+Prompt: A couple in formal evening wear going home get caught in a heavy downpour with 
+, racking focus
+umbrellas
+Prompt: Vibrant urban street food scene, colorful hot dog cart with mascot sign. 
+ 
+grilling hot dogs, 
+assistant serving condiments, customers lining up. Close-up of hot dogs with mustard, ketchup, onions. 
+Warm golden sunlight, lively crowd atmosphere.
+Vendor in chef’s hat 
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Ours
+Ours
+Prompt: 
+ sailing leisurely along the Seine River with the Eiffel Tower in background by Hokusai.
+A boat
+Ours
+Figure 6. Qualitative comparison between Wan2.1-T2V-14B and our fine-tuned model. Top: baseline Wan2.1-T2V-14B results. Bottom:
+outputs from our fine-tuned model.
+5.5. Qualitative Research
+Visual Comparison. To complement the quantitative re-
+sults, we conduct qualitative case studies to provide intu-
+itive evidence of our method’s advantages.
+By visually
+comparing generated samples under different settings, we
+highlight improvements in visual fidelity, temporal coher-
+ence, and semantic alignment, qualities not always fully
+captured by numerical metrics.
+As shown in Fig. 6, in
+case (1), our method prevents incorrect umbrella genera-
+tion and achieves better image composition. In case (2), it
+produces higher visual quality with more vivid colors. In
+case (3), it generates the correct visual theme, demonstrat-
+ing improved semantic consistency. Overall, the qualitative
+analysis demonstrates enhanced visual fidelity and stronger
+semantic alignment with the text.
+6. Conclusion
+In
+this
+paper,
+we
+introduced
+Self-Paced
+GRPO,
+a
+competence-aware extension of GRPO that progressively
+adapts reward feedback to generation ability. Self-Paced
+GRPO consistently outperforms static reward baselines
+across diverse video generation backbones, achieving bal-
+anced improvements in visual quality, temporal coherence,
+and text–video alignment.
+Beyond empirical gains, our
+framework establishes a paradigm that integrates adaptive
+rewards with reinforcement learning. We believe this work
+opens new directions for post-training optimization in gen-
+erative video models and will inspire future research on
+curriculum-based reward design, multi-modal alignment,
+and scalable reinforcement learning for high-dimensional
+generation tasks.
+
+References
+[1] Mido Assran, Adrien Bardes, David Fan, Quentin Garrido,
+Russell Howes, Matthew Muckley, Ammar Rizvi, Claire
+Roberts, Koustuv Sinha, Artem Zholus, et al. V-jepa 2: Self-
+supervised video models enable understanding, prediction
+and planning. arXiv preprint arXiv:2506.09985, 2025. 2
+[2] Huilin Deng, Ding Zou, Rui Ma, Hongchen Luo, Yang Cao,
+and Yu Kang.
+Boosting the generalization and reasoning
+of vision language models with curriculum reinforcement
+learning. arXiv preprint arXiv:2503.07065, 2025. 5, 1
+[3] Kenji Doya. Reinforcement learning in continuous time and
+space. Neural computation, 12(1):219–245, 2000. 2
+[4] Xueji Fang, Liyuan Ma, Zhiyang Chen, Mingyuan Zhou,
+and Guo-jun Qi.
+Inflvg: Reinforce inference-time con-
+sistent long video generation with grpo.
+arXiv preprint
+arXiv:2505.17574, 2025. 1, 2
+[5] Yuxin Fang, Bencheng Liao, Xinggang Wang, Jiemin Fang,
+Jiyang Qi, Rui Wu, Jianwei Niu, and Wenyu Liu.
+You
+only look at one sequence: Rethinking transformer in vision
+through object detection. Advances in Neural Information
+Processing Systems, 34:26183–26197, 2021. 2
+[6] Hiroki Furuta, Heiga Zen, Dale Schuurmans, Aleksandra
+Faust, Yutaka Matsuo, Percy Liang, and Sherry Yang. Im-
+proving dynamic object interactions in text-to-video gener-
+ation with ai feedback.
+arXiv preprint arXiv:2412.02617,
+2024. 2
+[7] Uri Hasson, Janice Chen, and Christopher J Honey. Hierar-
+chical process memory: memory as an integral component
+of information processing. Trends in cognitive sciences, 19
+(6):304–313, 2015. 2
+[8] Xiaoxuan He, Siming Fu, Yuke Zhao, Wanli Li, Jian Yang,
+Dacheng Yin, Fengyun Rao, and Bo Zhang. Tempflow-grpo:
+When timing matters for grpo in flow models. arXiv preprint
+arXiv:2508.04324, 2025. 1
+[9] Patrik O Hoyer.
+Non-negative matrix factorization with
+sparseness constraints.
+Journal of machine learning re-
+search, 5(Nov):1457–1469, 2004. 3
+[10] Panwen Hu, Nan Xiao, Feifei Li, Yongquan Chen, and Rui
+Huang.
+A reinforcement learning-based automatic video
+editing method using pre-trained vision-language model. In
+Proceedings of the 31st ACM International Conference on
+Multimedia, pages 6441–6450, 2023. 2
+[11] Ziqi Huang, Yinan He, Jiashuo Yu, Fan Zhang, Chenyang Si,
+Yuming Jiang, Yuanhan Zhang, Tianxing Wu, Qingyang Jin,
+Nattapol Chanpaisit, et al. Vbench: Comprehensive bench-
+mark suite for video generative models. In Proceedings of
+the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 21807–21818, 2024. 5
+[12] iStock.
+istock video dataset.
+https : / / www .
+istockphoto.com/videos, 2025. Accessed: Oct. 17,
+2025. 5, 7
+[13] Weijie Kong, Qi Tian, Zijian Zhang, Rox Min, Zuozhuo Dai,
+Jin Zhou, Jiangfeng Xiong, Xin Li, Bo Wu, Jianwei Zhang,
+et al. Hunyuanvideo: A systematic framework for large video
+generative models. arXiv preprint arXiv:2412.03603, 2024.
+5
+[14] Patricia K Kuhl. Early language acquisition: cracking the
+speech code. Nature reviews neuroscience, 5(11):831–843,
+2004. 2
+[15] Jiachen Li, Qian Long, Jian Zheng, Xiaofeng Gao, Robinson
+Piramuthu, Wenhu Chen, and William Yang Wang.
+T2v-
+turbo-v2: Enhancing video generation model post-training
+through data, reward, and conditional guidance design. arXiv
+preprint arXiv:2410.05677, 2024. 1
+[16] Junzhe Li, Yutao Cui, Tao Huang, Yinping Ma, Chun Fan,
+Miles Yang, and Zhao Zhong. Mixgrpo: Unlocking flow-
+based grpo efficiency with mixed ode-sde. arXiv preprint
+arXiv:2507.21802, 2025. 1
+[17] Rui Li and Dong Liu. Spatial-then-temporal self-supervised
+learning for video correspondence.
+In Proceedings of the
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, pages 2279–2288, 2023. 2
+[18] Ji Lin, Hongxu Yin, Wei Ping, Pavlo Molchanov, Moham-
+mad Shoeybi, and Song Han. Vila: On pre-training for vi-
+sual language models. In Proceedings of the IEEE/CVF con-
+ference on computer vision and pattern recognition, pages
+26689–26699, 2024. 2
+[19] Jie Liu, Gongye Liu, Jiajun Liang, Yangguang Li, Jiaheng
+Liu, Xintao Wang, Pengfei Wan, Di Zhang, and Wanli
+Ouyang. Flow-grpo: Training flow matching models via on-
+line rl. arXiv preprint arXiv:2505.05470, 2025. 1, 2
+[20] Jie Liu, Gongye Liu, Jiajun Liang, Ziyang Yuan, Xiaokun
+Liu, Mingwu Zheng, Xiele Wu, Qiulin Wang, Menghan Xia,
+Xintao Wang, et al. Improving video generation with human
+feedback. arXiv preprint arXiv:2501.13918, 2025. 1, 5, 7
+[21] Yang Liu, Qianqian Xu, Peisong Wen, Siran Dai, and Qing-
+ming Huang. When the future becomes the past: Taming
+temporal correspondence for self-supervised video represen-
+tation learning. In Proceedings of the Computer Vision and
+Pattern Recognition Conference, pages 24033–24044, 2025.
+2
+[22] Yang Luo, Xuanlei Zhao, Mengzhao Chen, Kaipeng Zhang,
+Wenqi Shao, Kai Wang, Zhangyang Wang, and Yang You.
+Enhance-a-video: Better generated video for free.
+arXiv
+preprint arXiv:2502.07508, 2025. 2
+[23] Yecheng Jason Ma, Vikash Kumar, Amy Zhang, Osbert Bas-
+tani, and Dinesh Jayaraman. Liv: Language-image represen-
+tations and rewards for robotic control. In International Con-
+ference on Machine Learning, pages 23301–23320. PMLR,
+2023. 2
+[24] Mihir Prabhudesai, Russell Mendonca, Zheyang Qin, Kate-
+rina Fragkiadaki, and Deepak Pathak. Video diffusion align-
+ment via reward gradients. arXiv preprint arXiv:2407.08737,
+2024. 2
+[25] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning
+transferable visual models from natural language supervi-
+sion. In International conference on machine learning, pages
+8748–8763. PmLR, 2021. 2
+[26] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine
+Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li,
+and Peter J. Liu.
+Exploring the limits of transfer learn-
+
+ing with a unified text-to-text transformer. arXiv preprint
+arXiv:1910.10683, 2020. 5
+[27] Christoph Schuhmann, Romain Beaumont, Richard Vencu,
+Cade Gordon,
+Ross Wightman,
+Mehdi Cherti,
+Theo
+Coombes, Aarush Katta, Clayton Mullis, Mitchell Worts-
+man, et al. Laion-5b: An open large-scale dataset for training
+next generation image-text models. Advances in neural in-
+formation processing systems, 35:25278–25294, 2022. 2, 5
+[28] Wolfram Schultz. Predictive reward signal of dopamine neu-
+rons. Journal of neurophysiology, 1998. 2
+[29] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao
+Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang, YK Li,
+Yang Wu, et al. Deepseekmath: Pushing the limits of math-
+ematical reasoning in open language models. arXiv preprint
+arXiv:2402.03300, 2024. 2
+[30] Zhan Tong, Yibing Song, Jue Wang, and Limin Wang.
+Videomae: Masked autoencoders are data-efficient learners
+for self-supervised video pre-training. Advances in neural
+information processing systems, 35:10078–10093, 2022. 2
+[31] Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao,
+Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao, Jianx-
+iao Yang, et al. Wan: Open and advanced large-scale video
+generative models. arXiv preprint arXiv:2503.20314, 2025.
+5
+[32] Xiaoshi Wu, Yiming Hao, Keqiang Sun, Yixiong Chen, Feng
+Zhu, Rui Zhao, and Hongsheng Li. Human preference score
+v2: A solid benchmark for evaluating human preferences of
+text-to-image synthesis. arXiv preprint arXiv:2306.09341,
+2023. 2
+[33] Jiazheng Xu, Yu Huang, Jiale Cheng, Yuanming Yang, Jiajun
+Xu, Yuan Wang, Wenbo Duan, Shen Yang, Qunlin Jin, Shu-
+run Li, et al. Visionreward: Fine-grained multi-dimensional
+human preference learning for image and video generation.
+arXiv preprint arXiv:2412.21059, 2024. 1
+[34] Zeyue Xue, Jie Wu, Yu Gao, Fangyuan Kong, Lingting
+Zhu, Mengzhao Chen, Zhiheng Liu, Wei Liu, Qiushan Guo,
+Weilin Huang, et al. Dancegrpo: Unleashing grpo on visual
+generation. arXiv preprint arXiv:2505.07818, 2025. 1, 2
+[35] Hongji Yang, Yucheng Zhou, Wencheng Han, and Jianbing
+Shen. Self-rewarding large vision-language models for opti-
+mizing prompts in text-to-image generation. arXiv preprint
+arXiv:2505.16763, 2025. 5, 1
+[36] Xiaomeng Yang, Zhiyu Tan, and Hao Li.
+Ipo: Iterative
+preference optimization for text-to-video generation. arXiv
+preprint arXiv:2502.02088, 2025. 2
+
+Growing with the Generator: Self-paced GRPO for Video Generation
+Supplementary Material
+Due to space limitations in the main paper, this supple-
+mentary document provides additional details and analysis.
+The contents are organized as follows:
+• Training Details. We first describe the training config-
+urations and hyperparameters used in our experiments in
+Sec. A.
+• VLM Preference Analysis. We provide further analysis
+on the content-specific biases exhibited by VLM-based
+reward models. Additionally, we present the input tem-
+plate used for reward evaluation in Sec. B.
+• Extended Qualitative Comparisons. We include more
+qualitative examples comparing Wan2.1-T2V-14B and
+Self-Paced GRPO, highlighting the superior performance
+of our proposed method in terms of semantic fidelity and
+visual quality in Sec. C.
+A. Training Details.
+Experimental Setup.
+A batch size of 8 is adopted for
+Wan2.1-T2V-1.3B and 16 for Wan2.1-T2V-14B, with gradi-
+ent accumulation set to 4. The optimizer is configured with
+a learning rate weight decay of 0.0001 and a maximum gra-
+dient norm of 1.0, without warmup. SDE sampling is con-
+ducted with 16 steps, using a noise strength parameter of
+η = 0.5 and a sampling time step shift of 5.0. Each iteration
+produces 16 samples under a best-of-n = 8 strategy. The
+overall configuration further employs a training timestep
+fraction of 0.6 to ensure effectiveness, consistent noise ini-
+tialization, a clipping range of 1 × 10−4 for the importance
+ratio ρt,i, and an adversarial clipping maximum of 5.0. In
+addition, gradient checkpointing, sequential classifier-free
+guidance (CFG), and bf16 mixed-precision training are uti-
+lized to improve memory efficiency and training stability.
+Self-Pace for Reward Model. Several recent studies pro-
+vide strong evidence that imposing stricter and more struc-
+tured prompts enhances the supervisory capacity of large
+VLMs such as Qwen2.5-VL-72B when used as reward
+models. [20, 35] show that prompt optimization directly im-
+proves the reliability of reward signals in text-to-image gen-
+eration. The VideoGen-RewardBench benchmark further
+indicates that fine-grained and multi-stage prompts enable
+VLM-based reward models to capture subtle quality dif-
+ferences in generated videos, thereby improving alignment
+with human preferences. In addition, curriculum learning
+approaches for reward modeling [2] confirm that gradu-
+ally increasing prompt complexity strengthens the discrim-
+inative power of reward models, allowing them to deliver
+more stable and informative supervision. Collectively, these
+findings support the design choice: progressively stricter
+7.239
+6.722
+4.662
+StageI
+StageII
+StageIII
+Mean Reward
+Figure 7. Self-paced Reward Model: Different stages of VLMs
+are employed to evaluate the outputs of SDE sampling. The re-
+sults indicate that more complex prompts enable the VLM-based
+reward model to provide stronger supervisory signals.
+prompts allow VLMs to serve as a more effective self-paced
+reward model, providing higher-quality guidance during
+GRPO training.
+In addition to the reported results, 1k videos were sam-
+pled using the same SDE strategy as employed during train-
+ing. Each video was evaluated under the three designed
+stages. The average scores were then computed, as shown
+in Fig. 7. With increasing prompt complexity, Qwen2.5-
+VL-72B was able to produce more rigorous evaluations.
+This analysis demonstrates that stricter prompts enhance the
+model’s ability to deliver consistent and discriminative su-
+pervision.
+Stage Threshold.
+In the self-paced GRPO framework,
+stage thresholds are critical for weighting different phases.
+Thresholds selected purely by heuristics are considered in-
+appropriate, as they may introduce bias and instability. To
+obtain reliable values, Stage I, Stage II, and Stage III were
+separately trained for 50 steps each, and the corresponding
+reward improvements were recorded. The thresholds were
+then set to 0.7 times the observed increased reward. This
+design ensures that the thresholds are grounded in empirical
+evidence and provide balanced supervision across stages.
+Reward cruves. To validate the effectiveness of the re-
+inforcement learning method, the reward curve of Stage
+I during training is presented. Following DanceGRPO, a
+smoothing window was applied to plot the curve. As shown
+in Fig. 10, the reward exhibits a stable upward trend, indi-
+cating the effectiveness of the training process.
+Input Template of Reward Model.
+As illustrated in
+Fig. 14, the Reward Model’s Input Template is presented in
+detail. It is structured into three stages, Visual Quality, Tem-
+poral Smoothness, and Text Alignment—each comprising
+multiple sub-dimensions. Together, these elements consti-
+tute the complete input template.
+
+51.14
+57.21
+59.77
+54.69
+60.36 59.12
+68.1
+57.67 60.44
+66.23
+55.84
+2.83
+2.92
+2.59
+3.89
+3.41
+3.71
+3.55
+3.98
+3.83
+3.4
+36.34
+34.78 35.86
+45.47 39.97 44.69
+40.17 42.9
+38.37
+48.01
+41.79
+9.2
+10.03
+9.47
+12.85 11.64
+11.73
+11.52
+12.89 15.84
+11.73 13.47
+0
+10
+20
+30
+40
+50
+60
+70
+80
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+Coefficient of Variation(%)
+VideoAlign
+Qwen2.5-VL-72B
+VisionReward
+Videoscore
+Figure 8. Bias of Other VLMs on Real-World videos. The results
+suggest that other VLM-based Reward Models are biased toward
+certain types of video content.
+92.73
+106.4
+118.8
+105.5
+110.51
+106.51
+157.8
+111.1
+136.7
+120.3
+116.5
+3.26
+3.22
+2.84
+4.1
+4.34
+4.33
+3.74
+3.75
+3.73
+3.88
+17.89
+17.84 16.32
+24.19
+19.42 22.23 22.18
+22.71
+25.6
+20.31 22.59
+43.31 50.27 51.04
+55.34 54.39
+51.82 57.69
+57
+56.13
+59.11 48.74
+0
+20
+40
+60
+80
+100
+120
+140
+160
+180
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+Coefficient of Variation(%)
+VideoAlign
+Qwen2.5-VL-72B
+VisionReward
+Videoscore
+Figure 9. Bias of Other VLMs on Generated Videos. The results
+show that VLM-based Reward Models also exhibit specific con-
+tent preferences with generating videos. Moreover, VLM-based
+Reward Models reveal stronger content bias on generated videos
+than real-world videos.
+B. Preference of VLMs-based Reward Models.
+Bias of VLMs on Real-world Videos.
+To investi-
+gate whether VLM-based reward models exhibit content-
+specific preferences beyond VideoAlign, an empirical study
+was conducted. In particular, VideoAlign, VisionReward,
+VideoScore, and Qwen2.5-VL-72B were compared to an-
+alyze potential biases across different types of generated
+videos. The results, summarized in Fig. 8, reveal distinct
+preference patterns among these models, underscoring the
+importance of model choice in reward-based evaluation.
+Bias of VLMs on Generated Videos. To examine whether
+VLM-based reward models exhibit similar content prefer-
+ences in generated videos, experiments were conducted on
+a set of 2k generated samples. As shown in Fig. 9, more
+pronounced content biases were observed across four dif-
+ferent VLMs compared to real-world videos.
+7.3
+7.4
+7.5
+7.6
+7.7
+7.8
+7.9
+8
+8.1
+0
+15
+30
+45
+60
+75
+90
+105
+120
+135
+150
+Reward
+Step
+Figure 10. Reward curves. The steadily increasing trend during
+training indicates that our reinforcement learning procedure is sta-
+ble and effective.
+C. Additional Qualitative Study.
+Additional qualitative comparisons are provided to high-
+light the advantages of the proposed approach.
+Less Structural Inconsistencies. As shown in Fig. 11, in
+case A, our model successfully generates the correct facial
+features of a sheep, whereas Wan2.1-T2V-14B fails to pro-
+duce them. In case B, our model generates a sliced lemon,
+which is consistent with real-world constraints, since lemon
+juice cannot be extracted without cutting. In cases C and D,
+our model produces anatomically correct yoga poses, while
+Wan fails to generate valid limb structures.
+Better Visual Quailty As shown in Fig. 12, in case E, the
+seaside environment surrounding the woman appears more
+aesthetically pleasing, with refined composition. In case F,
+the boy’s umbrella exhibits richer details and more intricate
+patterns. In case G, the cutting board contains additional
+objects, and the presence of green leaves makes the scene
+more vivid and colorful.
+In case H, the woman’s back-
+ground becomes less monotonous and shows more dynamic
+variation.
+Better Alignment with Reality As shown in Fig. 13, in
+case H, our model generates the scientist and computer with
+accurate relative positioning, while Wan produces a per-
+son operating an invisible computer, which violates phys-
+ical plausibility. In case I, our model avoids abrupt color
+changes of the balls, whereas Wan generates a transition
+from one blue and one red ball to two red balls.
+Better Text Alignment. As shown in Fig. 13, in case J, our
+model produces correct text alignment with a single man
+as specified in the prompt, while Wan incorrectly generates
+two men. In case K, the prompt requires two dogs riding an
+electric scooter. Our model correctly generates dogs riding
+the scooter, whereas Wan produces a human rider.
+
+A
+B
+C
+D
+Prompt: A sheep walking on the grass, peacefully. 
+Prompt: Squeezing zesty lemon into water.
+Prompt: a woman is performing leg exercises on a yoga mat in a brightly lit studio.
+Prompt: a woman is practicing yoga in a spacious room with large windows.
+Wan2.1-14B-T2V
+Ours
+Ours
+Ours
+Ours
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Figure 11. Examples of generated results with fewer structural inconsistencies.
+
+E
+F
+G
+H
+Prompt: a woman in a pink dress walks along a sandy beach during sunset.
+Prompt:  A whimsical illustration in a vintage comic book style, a purple umbrella with intricate floral patterns 
+and metallic accents, standing alone on a cobblestone street at sunset………..
+Prompt: a butter knife smears peanut butter on a slice of bread.
+Prompt: a woman is walking along the sea.
+Ours
+Ours
+Ours
+Ours
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Figure 12. Examples of generated results with better visual quality.
+
+Prompt: a focused office worker operates a computer in a modern tech environment.
+Prompt: a red ball and a blue ball fall from a height hits the ground and bounces back up.
+Prompt: 
+ is standing on an elliptical machine, reading some papers while occasionally looking up and
+speaking into a microphone.
+a man
+Prompt: 
+ are riding on motorized skateboards in an open area.
+two dogs
+H
+J
+K
+I
+Ours
+Ours
+Ours
+Ours
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Wan2.1-14B-T2V
+Figure 13. Examples of generated results with better real-world alignment and text alignment.
+
+StageI: Assess how well the video matches the textual prompt across the following sub-dimensions:
+**Visual Quality**
+**Visual Quality:**
+ 
+Evaluate the overall visual quality of the video, with a focus on static factors. The following sub-
+dimensions should be considered:
+ 
+- **Reasonableness:** The video should not contain any significant biological or logical errors, such as 
+abnormal body structures or nonsensical environmental setups.
+ 
+- **Clarity:** Evaluate the sharpness and visibility of the video. The image should be clear and easy to 
+interpret, with no blurring or indistinct areas.
+ 
+- **Detail Richness:** Consider the level of detail in textures, materials, lighting, and other visual 
+elements (e.g., hair, clothing, shadows).
+ 
+- **Aesthetic and Creativity:** Assess the artistic aspects of the video, including the color 
+scheme, composition, atmosphere, depth of field, and the overall creative appeal. The scene should convey a sense 
+of harmony and balance.
+ 
+- **Safety:** The video should not contain harmful or inappropriate content, such as political, violent, or 
+adult material. If such content is present, the image quality and satisfaction score should be the lowest possible.
+StageII: Assess how well the video matches the textual prompt across the following sub-dimensions:
+**Temporal Smoothness**, while also take into account **Visual Quality** .
+** Temporal Smoothness :**
+      Assess the dynamic aspects of the video, with a focus on dynamic factors. Consider the following sub-
+dimensions:
+      - **Stability:** Evaluate the continuity and stability between frames. There should be no sudden, unnatural 
+jumps, and the video should maintain stable attributes (e.g., no fluctuating colors, textures, or missing body parts).
+      - **Naturalness:** The movement should align with physical laws and be realistic. For example, clothing 
+should flow naturally with motion, and facial expressions should change appropriately (e.g., blinking, mouth 
+movements).
+      - **Aesthetic Quality:** The movement should be smooth and fluid. The transitions between different 
+motions or camera angles should be seamless, and the overall dynamic feel should be visually pleasing.
+      - **Fusion:** Ensure that elements in motion (e.g., edges of the subject, hair, clothing) blend naturally with 
+the background, without obvious artifacts or the feeling of cut-and-paste effects.
+      - **Clarity of Motion:** The video should be clear and smooth in motion. Pay ow score for motion quality. 
+attention to any areas where the video might have blurry or unsteady sections that hinder visual continuity.
+      - **Amplitude:** If the video is largely static or has little movement, assign a low score for motion quality.
+StageIII: Assess how well the video matches the textual prompt across the following sub-dimensions:
+        **Text Alignment*, while also take into account **Visual Quality** and **Temporal Smoothness**.
+**Text Alignment:** - **Subject Relevance** Evaluate how accurately the subject(s) in the video (e.g., person, 
+animal, object) align with the textual description. The subject should match the description in terms of number, 
+appearance, and behavior.
+    - **Motion Relevance:** Evaluate if the dynamic actions (e.g., gestures, posture, facial expressions like talking 
+or blinking) align with the described prompt. The motion should match the prompt in terms of type, scale, and 
+direction.
+    - **Environment Relevance:** Assess whether the background and scene fit the prompt. This includes 
+checking if real-world locations or scenes are accurately represented, though some stylistic adaptation is 
+acceptable.
+    - **Style Relevance:** If the prompt specifies a particular artistic or stylistic style, evaluate how well the video 
+adheres to this style.
+    - **Camera Movement Relevance:** Check if the camera movements (e.g., following the subject, focus shifts) 
+are consistent with the expected behavior from the prompt.
+[VIDEO] You are an expert in judging {evaluation dims} of AI-generated videos.
+    
+Here is the caption of the video:
+    
+"{text_prompt}"
+    
+please watch the frames of a given video and see the text prompt for generating the video,
+      then give scores based on its {evaluation dims}.
+      Output a float number from 1.0 to 10.0 for this dimension,
+      the higher the number is, the better the video performs in that sub-score,
+      the lowest 1.0 means Bad, the highest 10.0 means Perfect/Real (the video is like a real video)
+Output only ONE float number between 1.00 and 10.00 (e.g., 5.80) that represents the stage score.
+Input Template for Reward Model
+Figure 14. Detailed illustration of input template of reward model.

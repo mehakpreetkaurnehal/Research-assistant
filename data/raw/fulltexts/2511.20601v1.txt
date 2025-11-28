@@ -1,0 +1,848 @@
+The Driver-Blindness Phenomenon: Why
+Deep Sequence Models Default to
+Autocorrelation in Blood Glucose
+Forecasting ⋆
+Heman Shakeri ∗
+∗School of Data Science and Center for Diabetes Technology
+University of Virginia, USA (e-mail: hs9hd@virginia.edu)
+Abstract: Deep sequence models for blood glucose forecasting consistently fail to leverage
+clinically informative drivers—insulin, meals, and activity—despite well-understood physiolog-
+ical mechanisms. We term this Driver-Blindness and formalize it via ∆drivers, the performance
+gain of multivariate models over matched univariate baselines. Across the literature, ∆drivers
+is typically near zero. We attribute this to three interacting factors: architectural biases
+favoring autocorrelation (C1), data fidelity gaps that render drivers noisy and confounded (C2),
+and physiological heterogeneity that undermines population-level models (C3). We synthesize
+strategies that partially mitigate Driver-Blindness—including physiological feature encoders,
+causal regularization, and personalization—and recommend that future work routinely report
+∆drivers to prevent driver-blind models from being considered state-of-the-art.
+Keywords: Blood glucose forecasting; Time series prediction; Deep learning; Multivariate
+modeling; Causal inference; Diabetes management.
+1. INTRODUCTION
+Modern deep learning architectures should, in principle, be
+well suited to multivariate time series forecasting. Trans-
+formers, recurrent networks, and state-space models can
+represent long-range dependencies, attend across channels,
+and integrate heterogeneous signals in high-dimensional
+latent spaces. In practice, however, recent analyses show
+that many of these models behave as sophisticated univari-
+ate forecasters: prediction performance is dominated by
+intra-variable autocorrelation and improves little, if at all,
+when exogenous covariates are added Chen et al. (2025).
+Large-scale benchmarks in generic time series forecasting
+reach a similar conclusion: carefully tuned linear models
+and channel-independent residual modules often match
+or outperform Transformer architectures, suggesting that
+much of the apparent gain comes from learning deep auto-
+correlation rather than consistently exploiting multivariate
+structure (Zeng et al., 2023; Das et al., 2023).
+Blood glucose forecasting for people with Type 1 diabetes
+provides a particularly sharp instance of this broader phe-
+nomenon. In contrast to many application domains where
+the causal role of potential drivers is ambiguous, glu-
+cose dynamics are governed by well-established pharma-
+cokinetic and pharmacodynamic mechanisms (Bergman
+et al., 1981; Man et al., 2014). Rapid-acting insulin has a
+characteristic onset, peak, and tail; meal absorption pro-
+duces stereotyped increases in blood glucose over 60–120
+minutes (Dalla Man et al., 2007); physical activity tran-
+⋆Submitted to the IFAC World Congress 2026. This work was
+partially supported by The LaunchPad for Diabetes program and
+Capital One.
+siently changes insulin sensitivity (Kemmer, 1992); circa-
+dian rhythms modulate insulin sensitivity over the day
+(Egi et al., 2007; Poll´e et al., 2022); menstrual cycles affect
+glucose control in a subset of individuals, though with
+substantial heterogeneity (Trout et al., 2007; Gamarra
+and Trimboli, 2023). From a modeling perspective, insulin
+doses, carbohydrate intake, and activity should be highly
+informative drivers that enable forecasts beyond what
+continuous glucose monitoring (CGM) history alone can
+provide (Woldaregay et al., 2019).
+Algorithmically, the glucose forecasting literature has fol-
+lowed the broader evolution of time-series modeling. Early
+work relied on linear autoregressive models and Kalman-
+filter–type estimators, often coupled to simplified compart-
+mental physiology (Palerm et al., 2005; Turksoy et al.,
+2013). Subsequent studies introduced nonlinear machine-
+learning predictors and hybrid schemes that encode in-
+sulin and meal information into physiologically meaningful
+features such as insulin-on-board (IOB), carbs-on-board
+(COB), and glucose rate-of-appearance curves before feed-
+ing them to neural networks (Bertachi et al., 2018; Zecchin
+et al., 2012). More recent approaches adopt deep sequence
+architectures, including CNNs and LSTMs (Mu˜noz Or-
+ganero, 2020; Armandpour et al., 2021; Li et al., 2020),
+probabilistic and quantile-based forecasters (Eberle et al.,
+2023), Temporal Fusion Transformers and related atten-
+tion models (Zhu et al., 2023; Sergazinov et al., 2023),
+and personalized or pre-trained variants that learn pa-
+tient embeddings or shared representations across cohorts
+(Daniels et al., 2022; Deng et al., 2024). Across these
+algorithmic families, reported errors at standard horizons
+arXiv:2511.20601v1  [cs.LG]  25 Nov 2025
+
+have steadily decreased, suggesting substantial progress on
+the forecasting task.
+Empirical results tell a different story when we ask how
+much these models actually gain from driver information.
+We define “Driver-Blindness” through the metric
+∆drivers = E
+
+L(funi) −L(fmulti)
+
+,
+(1)
+where L is a loss function such as RMSE, funi is a model
+using only CGM history, and fmulti is a model from the
+same architectural family that also receives exogenous
+inputs. Clinically meaningful multivariate models should
+achieve ∆drivers ≫0, indicating that driver information
+substantially improves forecasts relative to strong univari-
+ate baselines.
+Across the glucose forecasting literature, this is rarely
+observed. Studies spanning Gaussian processes, recurrent
+networks, dilated CNNs, and Transformer-style models
+(Bertachi et al., 2018; Mu˜noz Organero, 2020; Li et al.,
+2020; Armandpour et al., 2021; Eberle et al., 2023; Sergazi-
+nov et al., 2023; Zhu et al., 2023) consistently report
+modest or negligible gains over strong CGM-only base-
+lines when insulin and meal channels are added. Borle et
+al. (Borle et al., 2021) used Gaussian process ensembles
+on forty-seven individuals with detailed diabetes diaries.
+The multivariate model achieved a mean absolute error of
+48.65 mg/dL compared with 52 mg/dL for a trivial baseline
+that predicts each patient’s mean glucose, corresponding
+to ∆drivers of only a few milligrams per deciliter, which the
+authors described as “unexpectedly poor.” Zhu et al. (Zhu
+et al., 2023) studied the OhioT1DM dataset with a Tempo-
+ral Fusion Transformer. They found that CGM and time-
+of-day accounted for over ninety percent of the learned
+feature importance; removing all driver channels (meals,
+insulin, exercise) improved RMSE by about 0.3 mg/dL, i.e.
+∆drivers < 0. A synthesis of results across diverse archi-
+tectures reveals that, expressed as a percentage reduction
+in RMSE relative to the univariate baseline, ∆drivers is
+typically between five and ten percent at thirty minutes,
+and between ten and twenty percent by sixty minutes.
+Given the strength of physiological priors, these numbers
+are alarmingly small.
+Driver-Blindness is not only a missed opportunity. It also
+reflects a deeper causal inference failure. Most real-world
+diabetes datasets are generated under a behavior policy,
+where patients actively adjust insulin and meals in re-
+sponse to anticipated or observed glucose levels. Insulin
+doses are often administered immediately before or after
+meals; correction boluses are given in response to hyper-
+glycemia; exercise is scheduled in ways that correlate with
+these patterns. Flexible models trained purely to minimize
+predictive loss on such observational data can fit these
+behavior-induced correlations without learning the true
+delayed causal effects of treatments on glucose. This flexi-
+bility–causality tradeoff is now visible in hybrid and Neural
+ODE architectures. Zou et al. (Zou et al., 2024) showed
+that when hybrid neural ODE models are trained solely
+on forecast RMSE, the neural component can override
+known mechanistic constraints. In synthetic and real-data
+experiments, they observed models that inferred insulin in-
+creases glucose (or that carbohydrates decrease it) because
+treatment doses almost always coincided with high glucose
+states in the training data. When asked to rank treat-
+ment interventions, many flexible models produced error
+rates statistically indistinguishable from random guessing
+while maintaining strong predictive accuracy. Lee et al.
+(2024) demonstrated a related “forecast–control” paradox:
+an LSTM forecaster achieved substantially lower RMSE
+than a rule-based Loop controller, yet when used to drive
+closed-loop insulin delivery, it produced markedly worse
+time-in-range. In both cases, the models were well adapted
+to the behavior policy that generated the data but poorly
+grounded in the physiology that should govern interven-
+tions.
+In this paper we focus on explaining why deep multivariate
+models collapse into effectively univariate, autocorrelation-
+dominated behavior in this setting and on what design
+principles can mitigate this collapse. We first present an in-
+ferential framework based on the balance between internal
+dynamics and external evidence, describe how gradient-
+based optimization naturally leads to low-arousal, driver-
+blind regimes when training on noisy, confounded data
+(Valle-Perez et al., 2018), and then structure the resulting
+failure modes into three interacting challenges: architec-
+tural bias (C1), fidelity gap (C2), and personalization gap
+(C3). We then discuss implications for model and bench-
+mark design, synthesize current mitigation strategies, and
+highlight remaining gaps and recommendations.
+2. WHY MODELS COLLAPSE INTO DEEP
+AUTOCORRELATION
+2.1 Arousal, internal dynamics, and external evidence
+To understand why Driver-Blindness is such a stable out-
+come, it is helpful to view deep forecasting models as
+dynamical systems that balance internal state evolution
+against external evidence (Rao and Ballard, 1999). A con-
+venient formalism for this balance is variational free energy
+from predictive processing accounts of perception (Friston,
+2010). We draw on this framework as a conceptual analogy
+rather than a formal derivation; the precise mapping to
+deep network dynamics remains an open question. In one
+common approximation, free energy can be written as
+F ≈1
+α Eprior + Elike,
+(2)
+where Eprior is an energy term associated with maintaining
+internally consistent trajectories, Elike measures misfit be-
+tween predictions and sensory evidence, and α acts as an
+arousal or inverse temperature parameter that scales the
+influence of internal dynamics relative to external input.
+In glucose forecasting, the analogy is natural. The internal
+dynamics correspond to the strong short-term autocorre-
+lation in CGM: at five-minute intervals, glucose tends to
+change slowly, and persistence alone can explain much of
+the variance, especially at short horizons. External evi-
+dence corresponds to insulin, carbohydrate, and activity
+signals that perturb this trajectory through delayed, dose-
+dependent mechanisms. The parameter α can be viewed
+as the effective trust the model places in drivers relative
+to its own extrapolation from recent glucose history.
+When a deep model is trained by gradient descent on a
+loss function dominated by short-horizon prediction errors,
+several forces push it toward a low-α regime in which
+internal dynamics dominate. At fifteen to thirty minutes,
+
+the prior term associated with autocorrelation is highly
+predictive; many datasets and objective functions weight
+these horizons most heavily. Meanwhile, the likelihood
+term associated with drivers is noisy and inconsistent due
+to timing errors, missing logs, and hidden confounders such
+as stress, sleep, illness, and menstrual cycles that modu-
+late responses without being explicitly observed. Finally,
+modern architectures with residual connections and multi-
+head self-attention provide low-resistance pathways for
+the glucose channel to dominate computations, allowing
+the network to achieve low loss by extrapolating trends
+without ever learning precise driver–response mappings.
+In this regime, the gradient signal that would push the
+model to engage with drivers is comparatively weak.
+The resulting behavior resembles inattentional blindness
+in human perception (Simons and Chabris, 1999). The
+network maintains a coherent internal trajectory driven
+by autocorrelation and becomes functionally insensitive
+to exogenous signals that are not consistently predictive.
+Once parameters move into such a low-arousal attractor,
+where the prior term in (2) yields low loss and the marginal
+benefit of incorporating noisy drivers is small or negative,
+it is difficult for training to escape. This manifests at the
+level of ∆drivers: even complex multivariate architectures
+behave as “deep autocorrelation models,” with ∆drivers
+close to zero or negative.
+A second useful concept is that an external signal must
+be syntactically and temporally aligned with the patterns
+a system expects in order to be integrated. We borrow
+the term conspecificity from biological sensory processing
+(Bjoring and Meliza, 2021; Le et al., 2025) to describe this
+necessary alignment. Inputs that are scrambled, irregularly
+sampled, or misaligned relative to internal timescales are
+treated as noise and suppressed. In glucose forecasting,
+driver channels are often non-conspecific with the learned
+internal model. Bolus and meal logs are sparse impulses
+measured on a fifteen-minute grid or worse; their true
+physiological impact unfolds over hours. Their timing is
+noisy; their magnitudes are estimated with substantial
+error; their effects are heavily modulated by unobserved
+factors. To a model trained to extrapolate smooth five-
+minute CGM sequences, such inputs appear as erratic,
+low signal-to-noise perturbations. In the language of the
+arousal–conspecificity framework, Driver-Blindness cor-
+responds to a regime of low effective arousal and low
+conspecificity, in which internal dynamics dominate and
+drivers are ignored.
+Figure 1 summarizes this view. The horizontal axis
+represents effective arousal α, interpolating from prior-
+dominated to likelihood-dominated regimes. The vertical
+axis represents conspecificity of driver signals, from scram-
+bled to well aligned. The desired regime for clinical deci-
+sion support is high arousal and high conspecificity, where
+driver events are trusted and strongly influence forecasts.
+In practice, architectural shortcuts (C1) and data fidelity
+gaps (C2) push training trajectories toward regimes with
+low arousal and low perceived conspecificity, so that typ-
+ical optimization runs collapse into a driver-blind corner
+of the space. We note that while effective arousal α can in
+principle be estimated from the relative weighting of loss
+terms or attention allocated to driver versus CGM chan-
+nels, conspecificity is more difficult to quantify directly.
+Operationally, we treat conspecificity as high when driver
+signals are temporally aligned, smoothly varying, and
+statistically consistent with outcome changes—conditions
+approximated by physiological encoders such as IOB/COB
+curves—and low when drivers appear as sparse, noisy im-
+pulses with inconsistent relationships to glucose responses.
+2.2 Challenge C1: Architectural bias and representation
+limits
+The first source of collapse is architectural or the model’s
+ontological commitment (Shakeri, 2025). Standard deep
+forecasting architectures provide many ways to model
+short-range trends and local autocorrelation but rela-
+tively few inductive biases that encourage learning long-
+delayed, heterogeneous driver effects. CGM provides a
+dense, smooth five-minute signal. Driver channels appear
+as sparse impulses with magnitudes that vary over or-
+ders of magnitude across and within individuals. When
+such heteroskedastic inputs are concatenated and passed
+through shared layers, gradient flow and attention weights
+tend to favor the high-variance, densely sampled channel,
+i.e. glucose.
+Temporal encoding machinery also plays a role. Sinusoidal
+or learned positional encodings assume relatively smooth
+temporal structure (Vaswani et al., 2017), but physiologi-
+cally relevant glucose responses depend on specific lags and
+convolutions: a bolus at time t affects glucose over several
+hours with a characteristic impulse response; a meal’s
+effect depends on gastric emptying and gut absorption;
+circadian effects modulate insulin sensitivity over the day
+Egi et al. (2007). Without explicit temporal kernels or
+architectures designed to represent these convolutions, it is
+easier for the optimizer to treat driver events as nuisances
+and rely on extrapolating recent CGM trajectories.
+Residual connections and skip pathways compound this by
+enabling information from the glucose channel to bypass
+fusion layers He et al. (2016). If a model can achieve
+competitive loss by projecting CGM through a series of
+autoregressive or convolutional layers, then the capacity
+devoted to fusion with drivers may never be fully used.
+This is particularly true when the training objective is
+dominated by short horizons where history alone is already
+extremely predictive. Attention mechanisms can in princi-
+ple overcome this, but in practice softmax attention over
+heterogeneous inputs is numerically fragile. When logits
+differ in scale because of differences in variance or sampling
+frequency, attention distributions can saturate, leading to
+effective rank collapse of attention maps (Dong et al.,
+2021; Liang, 2024). Recent work on numerically stabilized
+and channel-aware attention for time-series forecasting
+mitigates some of these issues by rescaling heterogeneous
+inputs and preventing softmax saturation (Liang, 2024;
+Zhu et al., 2023). In practice, models that combine such
+stabilized attention blocks with driver-specific encoders
+report more balanced attributions across CGM, temporal,
+and treatment channels, and achieve modest but non-zero
+∆drivers.
+Flexible hybrid architectures, such as neural ODEs cou-
+pled to mechanistic compartments, do not automatically
+fix this problem. Instead, they widen the space of functions
+that can be fitted to confounded observational data. Zou
+
+Effective arousal α (Prior →Likelihood)
+Conspecificity
+of drivers
+Driver-Blind
+Low α,
+low conspecificity
+(deep
+autocorrelation)
+Unstable /
+noise-reactive
+High α,
+low conspecificity
+Under-utilized
+drivers
+Low α,
+high conspecificity
+Driver-engaged
+regime (desired)
+High α,
+high conspecificity
+training ideal
+typical outcome
+Forces:
+C1: Architectural
+shortcuts favor
+autocorrelation
+C2: Fidelity gaps
+make drivers
+non-conspecific
+Training path
+typically collapses
+to driver-blind
+Fig. 1. Arousal–conspecificity framework. The horizontal axis (α) controls the balance between internal dynamics
+(Prior/autocorrelation) and external evidence (Likelihood/drivers). The vertical axis represents conspecificity of
+driver signals. The desired state is a driver-engaged regime with high arousal and high conspecificity. However,
+Challenge C1 (architectural shortcuts, blue) pushes models toward low α, while C2 (fidelity gaps, red) reduces
+perceived driver reliability. Training trajectories (purple dashed) therefore tend to collapse into a driver-blind
+regime where forecasts rely almost exclusively on autocorrelation.
+et al. (Zou et al., 2024) showed that hybrid models trained
+solely on predictive loss can override monotonicity and
+sign constraints that physiologists would consider non-
+negotiable. In our framework, such models inhabit regions
+of parameter space where internal dynamics are expres-
+sive but poorly grounded in the true roles of drivers, a
+particularly dangerous form of C1.
+2.3 Challenge C2: Fidelity gap and behavioral confounding
+The second source of collapse lies in the data. Real-world
+logs contain temporal misalignment, magnitude noise,
+missing events, and unobserved confounders that system-
+atically erode the signal-to-noise ratio of driver channels.
+Meal times in diaries are often off by fifteen to thirty min-
+utes; carbohydrate estimates can be wrong by twenty to
+forty percent (Brazeau et al., 2013); snacks and corrections
+are frequently omitted. Activity is reduced to coarse step
+counts or binary flags that do not distinguish intensity
+or modality (Kemmer, 1992). Physiologically important
+modulators such as stress hormones, sleep quality, acute
+illness, and menstrual phase are rarely recorded (Gonder-
+Frederick et al., 2016).
+From the model’s point of view, this means that the
+conditional distribution of future glucose given observed
+drivers is broad and sometimes multi-modal. Probabilis-
+tic architectures such as quantile forecasters and mixture
+models make this explicit: Zhu et al. (Zhu et al., 2023)
+and Eberle et al. (Eberle et al., 2023) used quantile losses
+to model uncertainty, while Sergazinov et al. (Sergazinov
+et al., 2023) employed an infinite mixture model to capture
+multi-modality. These approaches acknowledge C2, but
+they also illustrate why deterministic models might ratio-
+nally choose to downweight drivers. When driver channels
+appear unreliable, the expected improvement in pointwise
+loss from using them may be small or negative.
+Behavioral confounding exacerbates this. Because patients
+administer insulin in response to anticipated meals and
+hyperglycemia, and because many studies train only on
+observational trajectories, the joint distribution of inputs
+and outputs under the behavior policy may not contain
+enough variation to identify treatment effects. In such
+settings, flexible networks minimize predictive loss by
+exploiting correlations between glucose and interventions
+that arise from shared dependence on latent factors such
+as physician guidance and self-management habits, rather
+than from the downstream physiological pathways that
+matter for counterfactual evaluation. In our terminology,
+fidelity gaps reduce conspecificity: drivers do not look
+like clean, well-timed inputs to the internal dynamical
+system but rather like noisy reflections of unmodeled
+processes. Under those conditions, a low-α, driver-blind
+regime is again a locally optimal behavior for a risk-neutral
+optimizer.
+2.4 Challenge C3: Personalization gap and non-stationarity
+The third challenge is physiological heterogeneity. Insulin
+sensitivity varies across individuals by an order of magni-
+tude; insulin-to-carbohydrate ratios can differ by factors
+of three or four (Man et al., 2014); basal patterns, dawn
+phenomenon, and other metabolic traits define distinct re-
+sponse phenotypes (Porcellati et al., 2013). Within individ-
+uals, insulin sensitivity is non-stationary: it exhibits strong
+circadian modulation (Egi et al., 2007), varies across men-
+strual cycles (Trout et al., 2007), and is affected by exercise
+and illness (Kemmer, 1992; Gonder-Frederick et al., 2016).
+A fixed set of weights cannot simultaneously represent
+all these regimes without either very large capacity or
+mechanisms for rapid on-line adaptation.
+If a model is trained on pooled data without adequate per-
+sonalization, it tends to learn averages that do not match
+anyone well. Mu˜noz-Organero (Mu˜noz Organero, 2020)
+showed that models trained on one individual generalize
+poorly to another, with cross-subject RMSE more than
+four times higher than within-subject RMSE. Personal-
+
+ized architectures with patient embeddings (Armandpour
+et al., 2021; Sergazinov et al., 2023; Deng et al., 2024) and
+multitask setups with patient-specific heads (Daniels et al.,
+2022) address C3 by giving the model subject-specific
+latent context. Nevertheless, when such personalization is
+absent or insufficient, drivers become even harder to inter-
+pret: what looks like a 10-unit insulin bolus may have very
+different consequences across individuals and across days,
+further lowering the perceived value of driver channels and
+reinforcing the tendency toward deep autocorrelation.
+Taken together, C1, C2, and C3 explain why many mul-
+tivariate forecasting models trained on CGM plus drivers
+converge to behavior where ∆drivers is negligible. Architec-
+tures make it easy to achieve low loss using only CGM;
+data make driver channels noisy and confounded; het-
+erogeneity makes driver effects highly context-dependent.
+In the arousal–conspecificity plane, these pressures push
+training trajectories away from the driver-engaged regime
+and into the driver-blind corner.
+3. DISCUSSION: IMPLICATIONS, PARTIAL
+SOLUTIONS, AND RECOMMENDATIONS
+The Driver-Blindness phenomenon has several important
+implications for how the community should design models,
+evaluate them, and report results. From the perspective
+of the broader time-series forecasting literature, blood
+glucose prediction in Type 1 diabetes can be viewed as an
+adversarial stress test: if generic benchmarks already re-
+veal a tendency for modern architectures to fall back onto
+linear trends and deep autocorrelation (Zeng et al., 2023;
+Chen et al., 2025), it is unsurprising that the same biases
+manifest more sharply in CGM forecasting, where clini-
+cally meaningful gains require extracting delayed, dose-
+dependent effects of insulin and meals from noisy obser-
+vational logs. It also highlights patterns in existing work
+that mitigate collapse, along with gaps that remain.
+A first implication is that the mere inclusion of driver
+variables in the input does not guarantee the model has
+learned to use them. Reported improvements in RMSE
+or mean absolute error can often be attributed entirely
+to architectural changes, regularization, or training tricks
+that also benefit CGM-only baselines. Without an explicit
+comparison between a multivariate model and a matched
+univariate model from the same architectural family, using
+the same training and evaluation protocol, it is impossible
+to know whether the drivers are contributing meaningfully.
+This motivates a reporting standard in which ∆drivers from
+(1) is routinely measured at clinically relevant horizons
+and presented alongside conventional error metrics.
+A second implication is that architectures must be co-
+designed with representations that make drivers conspe-
+cific with internal dynamics. The most successful ap-
+proaches in the literature make driver events look like
+slowly varying physiological state variables before they
+are presented to generic deep networks. Bertachi et al.
+(Bertachi et al., 2018) transform discrete insulin and meal
+logs into continuous insulin-on-board and carbs-on-board
+curves (IOB/COB) using fixed pharmacokinetic models;
+Zecchin et al. (Zecchin et al., 2012) feed glucose rate-
+of-appearance (RaG) signals derived from compartmental
+models; Mu˜noz-Organero (Mu˜noz Organero, 2020) uses
+separate recurrent branches for insulin, carbohydrate, and
+glucose subsystems. In all these cases, the fusion prob-
+lem presented to the neural network is simplified: instead
+of learning highly heterogeneous, delayed responses from
+sparse impulses, the network sees smooth, aligned state
+trajectories that are easier to integrate. Dilated convolu-
+tions and carefully chosen dilation schedules (Li et al.,
+2020; Eberle et al., 2023) complement this by ensuring
+that receptive fields cover the relevant lag structure.
+A third implication concerns probabilistic forecasting and
+robustness. Architectures such as E-TFT (Zhu et al., 2023)
+and the quantile-based TFT variant in (Eberle et al., 2023)
+acknowledge that uncertainty from C2 cannot be elimi-
+nated and therefore predict multiple quantiles rather than
+single points. Gluformer (Sergazinov et al., 2023) goes fur-
+ther by modeling the entire conditional distribution using
+an infinite mixture model. Robust training strategies, such
+as minimizing the lower quantile of batch losses (Armand-
+pour et al., 2021), deliberately ignore the worst outliers
+that often arise from logging errors. These probabilistic
+and robust methods do not directly increase ∆drivers by
+themselves, but they do produce models that are better
+calibrated for risk and more honest about the information
+content of inputs. They also supply additional diagnostic
+tools: if the posterior distribution of forecasts is essentially
+unchanged when drivers are perturbed within realistic
+bounds, this is another signature of Driver-Blindness.
+A fourth implication is that causal structure must be rein-
+troduced, explicitly, into training objectives when working
+with flexible architectures and confounded observational
+data. H2NCM (Zou et al., 2024) provides a concrete ex-
+ample. By augmenting the predictive loss with a causal
+ranking loss that penalizes violations of known treatment-
+ordering constraints, they steer optimization away from
+spurious regions of parameter space that fit the behavior
+policy but violate basic pharmacological intuition. Their
+results indicate that it is possible to maintain state-of-
+the-art predictive performance while reducing causal er-
+ror dramatically. More generally, the glucose forecasting
+community could adopt domain-specific regularizers that
+enforce monotonicity (for example, more insulin should
+not increase glucose all else equal), non-negativity of cer-
+tain impulse responses, or consistency with simple com-
+partmental models. These constraints effectively raise the
+“arousal” parameter α in (2) for driver channels: they
+force the model to move beyond deep autocorrelation when
+doing so is necessary to satisfy causal priors.
+Personalization strategies address C3 and have their own
+implications. Learned patient embeddings (Armandpour
+et al., 2021; Sergazinov et al., 2023; Deng et al., 2024) allow
+shared networks to adapt to individual baselines and sen-
+sitivities; multitask recurrent architectures with patient-
+specific heads (Daniels et al., 2022) help separate common
+patterns from idiosyncratic ones. These approaches reduce
+the mismatch between the population-averaged effect of a
+driver and its effect on a given individual, increasing con-
+specificity. However, many studies still report performance
+on pooled test sets without separating within-subject from
+cross-subject error, and few explore the speed and stability
+with which models adapt to distribution shifts induced by
+changes in therapy, lifestyle, or hormonal state. Incorpo-
+rating systematic personalization experiments—for exam-
+
+ple, few-shot fine-tuning curves or held-out subject evalu-
+ations—into standard benchmarks would clarify where C3
+remains a limiting factor.
+Despite these partial successes, important gaps remain.
+Many promising architectural ideas, including patch-based
+Transformers for event-level representations (Karagoz
+et al., 2025), multimodal cross-attention designs (Isaac
+et al., 2025a), and state-space models tailored to long-
+context physiological signals (Isaac et al., 2025b), have
+not yet been evaluated under a standardized Driver-
+Blindness protocol. Even when ∆drivers is positive, few
+studies systematically test robustness under perturbations
+that mimic realistic logging errors, such as time jitter,
+missing events, and dose misreporting. Causal validity is
+almost never directly assessed; exceptions such as (Zou
+et al., 2024) remain rare. There is also a structural bias
+in widely used benchmarks: when datasets and metrics
+primarily reward short-horizon error reduction, they im-
+plicitly valorize deep autocorrelation models and make it
+harder to justify the complexity of driver-engaging archi-
+tectures.
+Based on this analysis, several recommendations follow.
+First, future work on multivariate glucose forecasting
+should always report ∆drivers for matched pairs of uni-
+variate and multivariate models at multiple horizons,
+along with confidence intervals. This simple addition
+would make Driver-Blindness visible rather than implicit.
+Second, authors should prefer representations in which
+drivers are transformed into physiologically meaningful,
+continuous state variables before being passed to generic
+deep networks, as in IOB/COB/RaG encoders (Bertachi
+et al., 2018; Zecchin et al., 2012). Third, when using
+highly flexible models on observational data, training ob-
+jectives should include causal regularization terms that
+encode basic domain knowledge, following the spirit of
+H2NCM. Fourth, evaluation protocols should incorporate
+robustness and counterfactual tests: for example, isolated
+insulin-only and carb-only scenarios in simulators such
+as UVA/Padova (Man et al., 2014), where the correct
+direction and timing of responses is known, and stress tests
+where logging noise is systematically varied. Finally, per-
+sonalization should be treated as a first-class design objec-
+tive, with explicit reporting of cross-subject generalization
+and adaptation behavior. We acknowledge that several of
+the proposed mitigations incur additional computational
+costs relative to simple autoregressive baselines. However,
+given that glucose forecasting models are typically trained
+offline and deployed on edge devices or cloud infrastructure
+with modest inference budgets, we expect training-time
+overhead to be acceptable in most practical settings. The
+key constraint is often data availability and quality rather
+than compute.
+Glucose forecasting in Type 1 diabetes is an ideal bench-
+mark for multivariate time series with sparse, delayed
+exogenous signals because the underlying physiology is
+relatively well understood, high-fidelity simulators exist,
+and the stakes for decision support are high. The same
+design and evaluation principles, however, apply more
+broadly to multivariate time series with sparse exogenous
+drivers, from other biomedical time series to climate and
+macroeconomic forecasting. Addressing Driver-Blindness
+in this concrete domain can therefore serve as a stepping
+stone toward a more general science of deep learning for
+dynamical systems driven by intermittent interventions.
+REFERENCES
+Armandpour, M., Kidd, B., Du, Y., and Huang, J.Z.
+(2021).
+Deep personalized glucose level forecasting
+using attention-based recurrent neural networks.
+In
+2021 International Joint Conference on Neural Net-
+works (IJCNN), 1–8. IEEE.
+Bergman, R.N., Phillips, L.S., Cobelli, C., et al. (1981).
+Physiologic evaluation of factors controlling glucose tol-
+erance in man: measurement of insulin sensitivity and
+beta-cell glucose sensitivity from the response to intra-
+venous glucose.
+The Journal of clinical investigation,
+68(6), 1456–1467.
+Bertachi, A., Biagi, L., Contreras, I., Luo, N., and Veh´ı, J.
+(2018). Prediction of blood glucose levels and nocturnal
+hypoglycemia using physiological models and artificial
+neural networks. In Proceedings of the 3rd International
+Workshop on Knowledge Discovery in Healthcare Data,
+64–68. CEUR-WS.org.
+Bjoring, M.C. and Meliza, C.D. (2021). The zebra finch
+auditory cortex reconstructs occluded syllables in con-
+specific song. bioRxiv, 2021–07.
+Borle, N.C., Ryan, E.A., and Greiner, R. (2021). The chal-
+lenge of predicting blood glucose concentration changes
+in patients with type i diabetes.
+Health Informatics
+Journal, 27(1), 1460458220977584.
+Brazeau, A.S., Mircescu, H., Desjardins, K., Leroux, C.,
+Strychar, I., Eko´e, J., and Rabasa-Lhoret, R. (2013).
+Carbohydrate counting accuracy and blood glucose vari-
+ability in adults with type 1 diabetes. Diabetes research
+and clinical practice, 99(1), 19–23.
+Chen, Y., C´espedes, N., and Barnaghi, P. (2025).
+A
+closer look at transformers for time series forecasting:
+Understanding why they work and where they struggle.
+In Forty-second International Conference on Machine
+Learning.
+Dalla Man, C., Rizza, R.A., and Cobelli, C. (2007). Meal
+simulation model of the glucose-insulin system. IEEE
+Transactions on biomedical engineering, 54(10), 1740–
+1749.
+Daniels, J., Shuvo, S.B., Li, K., Herrero, P., and Georgiou,
+P. (2022). A multitask learning approach to personalised
+blood glucose prediction. IEEE Journal of Biomedical
+and Health Informatics, 26(10), 5101–5112.
+Das, A., Kong, W., Leach, A., Mathur, S., Sen, R., and Yu,
+R. (2023). Long-term forecasting with tide: Time-series
+dense encoder. arXiv preprint arXiv:2304.08424.
+Deng, P., Wang, Y., Huang, Y., Wang, F., Li, H., and
+Chen, L. (2024). A pretrained transformer model for
+decoding individual glucose dynamics from continuous
+glucose monitoring data.
+National Science Review,
+11(8), nwaf039.
+Dong, Y., Cordonnier, J.B., and Loukas, A. (2021). Atten-
+tion is not all you need: Pure attention loses rank doubly
+exponentially with depth. In International conference
+on machine learning, 2793–2803. PMLR.
+Eberle, F., Laimighofer, J., L´opez-Garc´ıa, P., Auzinger,
+T., Schreiner, M., Kless, K., H¨ollig, J., Freckmann, G.,
+Wold, A., B¨ohm, B.O., et al. (2023).
+Blood glucose
+forecasting from temporal and static information in
+children with t1d. Frontiers in Pediatrics, 11, 1296904.
+
+Egi, M., Bellomo, R., Stachowski, E., French, C.J., and
+Hart, G.K. (2007). Circadian variation of glucose lev-
+els: Biology or timing of measurements? Critical care
+medicine, 35(7), 1801–1802.
+Friston, K. (2010).
+The free-energy principle: a unified
+brain theory? Nature reviews neuroscience, 11(2), 127–
+138.
+Gamarra, E. and Trimboli, P. (2023).
+Menstrual cycle,
+glucose control and insulin sensitivity in type 1 diabetes:
+A systematic review. Journal of Personalized Medicine,
+13(2), 374.
+Gonder-Frederick, L.A., Shepard, J.A., Grabman, J.H.,
+and Ritterband, L.M. (2016).
+Psychology, technol-
+ogy, and diabetes management. American Psychologist,
+71(7), 577.
+He, K., Zhang, X., Ren, S., and Sun, J. (2016).
+Deep
+residual learning for image recognition. In Proceedings
+of the IEEE conference on computer vision and pattern
+recognition, 770–778.
+Isaac, S., Collin, Y., and Patel, C. (2025a). Attengluco:
+Multimodal transformer-based blood glucose forecasting
+on ai-readi dataset. arXiv preprint arXiv:2502.09919.
+Accessed from arXiv.
+Isaac, S., Collin, Y., and Patel, C. (2025b). Ssm-cgm: In-
+terpretable state-space forecasting model of continuous
+glucose monitoring for personalized diabetes manage-
+ment. arXiv preprint arXiv:2510.04386. Accessed from
+arXiv.
+Karagoz, M.A., Breton, M.D., and El Fathi, A. (2025).
+A comparative study of transformer-based models for
+multi-horizon blood glucose prediction. arXiv preprint
+arXiv:2505.08821.
+Kemmer, F.W. (1992). Prevention of hypoglycemia during
+exercise in type i diabetes. Diabetes Care, 15(11), 1732–
+1735.
+Le, B., Bjoring, M.C., and Meliza, C.D. (2025). The zebra
+finch auditory cortex reconstructs occluded syllables in
+conspecific song. Nature Communications, 16(1), 8452.
+Lee, J.M., Pop-Busui, R., Lee, J.M., Fleischer, J., and
+Wiens, J. (2024).
+Shortcomings in the evaluation
+of blood glucose forecasting.
+IEEE Transactions on
+Biomedical Engineering.
+Li, K., Liu, C., Zhu, T., Herrero, P., and Georgiou, P.
+(2020). Glunet: A deep learning framework for accurate
+glucose forecasting.
+IEEE Journal of Biomedical and
+Health Informatics, 24(2), 414–423.
+Liang, D. (2024).
+Lseattention is all you need for time
+series forecasting. arXiv preprint arXiv:2410.23749.
+Man, C.D., Micheletto, F., Lv, D., Breton, M., Kovatchev,
+B., and Cobelli, C. (2014).
+The uva/padova type 1
+diabetes simulator: new features.
+Journal of diabetes
+science and technology, 8(1), 26–34.
+Mu˜noz Organero, M. (2020).
+Deep physiological model
+for blood glucose prediction in t1dm patients. Sensors,
+20(14), 3896.
+Palerm, C.C., Willis, J.P., Desemone, J., and Bequette,
+B.W. (2005).
+Hypoglycemia prediction and detection
+using optimal estimation. Diabetes technology & thera-
+peutics, 7(1), 3–14.
+Poll´e, O.G., Delfosse, A., Martin, M., Louis, J., Gies, I.,
+Den Brinker, M., Seret, N., Lebrethon, M.C., Mouraux,
+T., Gatto, L., et al. (2022). Glycemic variability pat-
+terns strongly correlate with partial remission status in
+children with newly diagnosed type 1 diabetes. Diabetes
+care, 45(10), 2360–2368.
+Porcellati, F., Lucidi, P., Bolli, G.B., and Fanelli, C.G.
+(2013).
+Thirty years of research on the dawn phe-
+nomenon: lessons to optimize blood glucose control in
+diabetes. Diabetes care, 36(12), 3860.
+Rao, R.P. and Ballard, D.H. (1999).
+Predictive cod-
+ing in the visual cortex: a functional interpretation of
+some extra-classical receptive-field effects. Nature neu-
+roscience, 2(1), 79–87.
+Sergazinov, R., Armandpour, M., and Gaynanova, I.
+(2023). Gluformer: Transformer-based personalized glu-
+cose forecasting with uncertainty quantification.
+In
+ICASSP 2023-2023 IEEE International Conference on
+Acoustics, Speech and Signal Processing (ICASSP), 1–5.
+IEEE.
+Shakeri, H. (2025). The metaphysics we train: A heideg-
+gerian reading of machine learning.
+ArXiv preprint,
+submitted.
+Simons, D.J. and Chabris, C.F. (1999).
+Gorillas in our
+midst: Sustained inattentional blindness for dynamic
+events. perception, 28(9), 1059–1074.
+Trout, K.K., Rickels, M.R., Schutta, M.H., Petrova, M.,
+Freeman, E.W., Tkacs, N.C., and Teff, K.L. (2007).
+Menstrual cycle effects on insulin sensitivity in women
+with type 1 diabetes: a pilot study. Diabetes Technology
+& Therapeutics, 9(2), 176–182.
+Turksoy, K., Quinn, L., Littlejohn, E., and Cinar, A.
+(2013). Multivariable adaptive identification and control
+for artificial pancreas systems. IEEE Transactions on
+Biomedical Engineering, 61(3), 883–891.
+Valle-Perez, G., Camargo, C.Q., and Louis, A.A. (2018).
+Deep
+learning
+generalizes
+because
+the
+parameter-
+function map is biased towards simple functions. arXiv
+preprint arXiv:1805.08522.
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones,
+L., Gomez, A.N., Kaiser,  L., and Polosukhin, I. (2017).
+Attention is all you need. Advances in neural informa-
+tion processing systems, 30.
+Woldaregay, A.Z., ˚Arsand, E., Walderhaug, S., Albers, D.,
+Mamykina, L., Botsis, T., and Hartvigsen, G. (2019).
+Data-driven modeling and prediction of blood glucose
+dynamics: Machine learning applications in type 1 dia-
+betes. Artificial intelligence in medicine, 98, 109–134.
+Zecchin, C., Facchinetti, A., Sparacino, G., De Nicolao,
+G., and Cobelli, C. (2012). Neural network incorporat-
+ing meal information improves accuracy of short-time
+prediction of glucose concentration. IEEE Transactions
+on Biomedical Engineering, 59(6), 1550–1560.
+Zeng, A., Chen, M., Zhang, L., and Xu, Q. (2023). Are
+transformers effective for time series forecasting?
+In
+Proceedings of the AAAI conference on artificial intelli-
+gence, volume 37, 11121–11128.
+Zhu, T., Chen, T., Kuang, L., Zeng, J., Li, K., and Geor-
+giou, P. (2023). Edge-based temporal fusion transformer
+for multi-horizon blood glucose prediction.
+In 2023
+IEEE International Symposium on Circuits and Systems
+(ISCAS), 1–5. IEEE.
+Zou, B.J., Levine, M.E., Zaharieva, D.P., Johari, R., and
+Fox, E.B. (2024). Hybrid2 neural ode causal modeling
+and an application to glycemic response. arXiv preprint
+arXiv:2402.17233.

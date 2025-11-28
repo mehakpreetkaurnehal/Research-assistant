@@ -1,0 +1,1955 @@
+Enhancing Conformal Prediction via Class Similarity
+Ariel Fargion
+Bar-Ilan University, Israel
+arielfar77@gmail.com
+Lahav Dabah
+Bar-Ilan University, Israel
+lahavdabah@gmail.com
+Tom Tirer
+Bar-Ilan University, Israel
+tirer.tom@gmail.com
+Abstract
+Conformal Prediction (CP) has emerged as a powerful sta-
+tistical framework for high-stakes classification applica-
+tions. Instead of predicting a single class, CP generates
+a prediction set, guaranteed to include the true label with
+a pre-specified probability. The performance of different
+CP methods is typically assessed by their average predic-
+tion set size.
+In setups where the classes can be parti-
+tioned into semantic groups, e.g., diseases that require simi-
+lar treatment, users can benefit from prediction sets that are
+not only small on average, but also contain a small num-
+ber of semantically different groups. This paper begins by
+addressing this problem and ultimately offers a widely ap-
+plicable tool for boosting any CP method on any dataset.
+First, given a class partition, we propose augmenting the
+CP score function with a term that penalizes predictions
+with “out-of-group” errors. We theoretically analyze this
+strategy and prove its advantages for group-related met-
+rics. Surprisingly, we show mathematically that, for com-
+mon class partitions, it can also reduce the average set size
+of any CP score function. Our analysis reveals the class
+similarity factors behind this improvement and motivates us
+to propose a model-specific variant, which does not require
+any human semantic partition and can further reduce the
+prediction set size. Finally, we present an extensive empir-
+ical study, encompassing prominent CP methods, multiple
+models, and several datasets, which demonstrates that our
+class-similarity-based approach consistently enhances CP
+methods.
+1. Introduction
+Conformal Prediction (CP) [23, 24] has emerged as a pow-
+erful statistical framework for high-stakes classification ap-
+plications, such as medical diagnoses [12] and autonomous
+vehicle decision-making [13]. Rather than predicting a sin-
+gle label, the CP framework outputs a set of candidate labels
+with a formal guarantee of marginal coverage: under ex-
+changeability of the calibration and test samples, the predic-
+tion set will include the correct label with a user-specified
+probability. This property makes CP particularly valuable
+in safety-critical domains, where missing the correct label
+can have severe consequences. A key metric for compar-
+ing different CP methods is the average size of their predic-
+tion sets, commonly referred to in the literature as efficiency
+[2, 4, 10, 18].
+In many practical scenarios, classes can be grouped into
+semantic categories, and users can benefit from prediction
+sets that are not only small on average but also contain se-
+mantically similar classes. For example, consider a medical
+imaging application where a classifier needs to recognize
+diseases. A classifier that mostly outputs prediction sets
+with diseases that require similar treatment, is expected to
+be more practically useful than one that does not, given that
+both have the same coverage rate and efficiency. However,
+while current CP approaches ensure that the true label is
+included in the prediction set with the pre-specified prob-
+ability, they do not account for the semantic coherence of
+labels within the prediction set.
+This paper addresses this gap and extends beyond it, ul-
+timately offering a general tool for improving the efficiency
+of any CP method on any dataset. First, assuming a known
+partition of classes into groups, we propose augmenting the
+CP score function with a binary regularization term that pe-
+nalizes predictions with “out-of-group” errors. We provide
+a theoretical analysis of this strategy and prove that it re-
+duces the expected number of unique groups appearing in a
+prediction set. Interestingly, our theory also reveals a sur-
+prising property: for common class partitions, applying this
+penalty can simultaneously decrease the average prediction
+set size, regardless of the underlying CP score function. Our
+analysis further identifies the class similarity factors behind
+this improvement.
+Motivated by these insights, we extend our approach and
+propose a model-specific variant, which does not require
+any human semantic partition. Specifically, we construct
+a class similarity matrix from the classifier’s embedding
+vectors, leveraging the model’s own perception of similar
+classes. This enables regularization that can further reduce
+the prediction set size and does not require any external
+knowledge of class groups, making it applicable for general
+1
+arXiv:2511.19359v1  [cs.LG]  24 Nov 2025
+
+Figure 1. Illustration of prediction sets for an example before and after applying our proposed regularization. Each circle corresponds to
+a class, with colors indicating superclasses. Filled circles denote classes included in the prediction set, and circle size reflects the softmax
+value. In this example, the prediction set size decreases from 4 to 3, and the number of superclasses represented decreases from 3 to 2. We
+show that our regularization reduces the average prediction set size, regardless of the baseline score function.
+datasets.
+Finally, we present an extensive empirical study evalu-
+ating the performance of both variants, the one that uses
+a known, Model-Agnostic (MA), class partition, and the
+one that relies on Model-Specific (MS) class similarities.
+Our experiments encompass multiple datasets, models, and
+prominent CP score functions: LAC [18], RAPS [2], and
+SAPS [10]. We show that our class-similarity-based ap-
+proach consistently enhances each of these diverse CP
+methods, providing a flexible and widely applicable tool
+for improving both the coherence and efficiency of predic-
+tion sets. To the best of our knowledge, no previous post-
+training approach has consistently outperformed the stan-
+dard LAC in terms of average prediction set size.
+Our contributions. Our main contributions can be sum-
+marized as follows.
+• We propose an “out-of-group” penalty approach, inde-
+pendent of the original CP score function, which im-
+proves both the semantic coherence of prediction sets and
+their average size.
+• We provide a theoretical analysis of the proposed binary
+penalty, proving not only its effectiveness in reducing the
+expected number of unique groups in the prediction set
+but also its non-intuitive ability to decrease the average
+set size for any score function.
+• We introduce a model-specific variant for the approach,
+which further reduces the prediction set size and does not
+require any known class structure.
+• We conduct an extensive empirical evaluation across mul-
+tiple dataset-model pairs, demonstrating that both our
+model-agnostic and model-specific variants consistently
+enhance prominent CP methods, outperforming their
+original versions in both semantic coherence and size of
+their prediction sets.
+2. Related Work
+Clustered and group-conditional coverage CP. Several
+works [3, 6, 22] aim to improve coverage across heteroge-
+neous label groups. These methods typically apply the CP
+procedure separately within each group, or cluster classes
+based on model scores, yielding prediction sets that have
+better group conditional coverage but larger prediction set
+size than their baselines.
+Hierarchical and structured CP. Other works incor-
+porate a known label hierarchy, such as a directed acyclic
+graph, into the conformal prediction framework. [9] and
+[26] share the objective of controlling the specificity of pre-
+diction sets (e.g., the number of leaf labels) alongside ef-
+ficiency. [14] introduce the notion of representation com-
+plexity, defined as the minimum number of nodes whose
+descendants cover the prediction set, and study its trade-off
+with efficiency.
+Hierarchical selective classification. When a hierarchi-
+cal structure of labels is available, with classes located at
+the leaves, Goren et al. [7] extend the conformal prediction
+framework to achieve hierarchical selective coverage. Their
+approach identifies a predicted node by starting from the
+predicted class (which is a leaf) and ascending the hierar-
+chy until a conformal threshold is met, in a manner similar
+to the APS procedure [17]. This method focuses on con-
+trolling the trade-off between predictive accuracy and the
+specificity of the hierarchical prediction.
+Summary. To our knowledge, no prior work directly
+addresses the objective of improving semantic coherence
+within prediction sets without compromising CP efficiency,
+let alone leveraging class structure to improve efficiency.
+Existing works in clustered, group-conditional, and hierar-
+chical CP focus on coverage within known groups or on rel-
+2
+
+atively uncommon notions of structure. Importantly, these
+approaches typically yield prediction sets that are larger
+than the baselines. In contrast, our approach reduces the
+number of semantically distinct groups, decreases the aver-
+age set size, and is applicable across datasets and CP score
+functions. Moreover, our model-specific approach does not
+require any prior knowledge of class structure.
+3. Preliminaries on Conformal Prediction
+Let us present notations that are used in the paper, followed
+by some preliminaries on CP. We consider a C-classes clas-
+sification task of the data (X, Y ) distributed on X × [C],
+where [C] := {1, . . . , C}. The task is addressed by a clas-
+sifier model (e.g., a trained deep neural network) that for
+each input sample x ∈X produces a post-softmax proba-
+bility vector ˆπ(x) ∈RC. The predicted class is given by
+ˆy(x) = argmaxi ˆπi(x).
+Conformal Prediction (CP) is a methodology for reliable
+classification, independent of the data distribution. Given
+a black-box classifier, predefined α ∈(0, 1), and a sample
+X, it generates a prediction set of classes, C(X), such that
+Y ∈Cα(X) with probability 1 −α, where Y is the true
+class associated with X [15, 23, 24]. The decision rule is
+based on a calibration set of labeled samples {xi, yi}n
+i=1.
+The only assumption in CP is that the random variables as-
+sociated with the calibration set and the test samples are
+exchangeable (e.g., the samples are i.i.d.).
+Let us state the general process of conformal prediction
+given the calibration set {xi, yi}n
+i=1 and its deployment for
+a new (test) sample xn+1 (for which yn+1 is unknown), as
+presented in [1]:
+1. Define a heuristic score function s(x, y) ∈R based on
+some output of the model. A higher score should encode
+a lower level of agreement between x and y.
+2. Compute ˆq as the ⌈(n + 1)(1 −α)⌉/n quantile of the
+scores {s(x1, y1), . . . , s(xn, yn)}.
+3. At deployment, create the prediction set of a test sample
+as C(xn+1) = {y : s(xn+1, y) ≤ˆq}.
+CP methods possess the following coverage guarantee.
+Theorem
+3.1
+(Theorem
+1
+in
+[1]).
+Suppose
+that
+{(Xi, Yi)}n
+i=1 and (Xn+1, Yn+1) are i.i.d., and define
+ˆq as in step 2 above and Cα(Xn+1) as in step 3 above.
+Then, P (Yn+1 ∈C(Xn+1)) ≥1 −α.
+The proof of this result is based on [23]. A proof of an
+upper bound of 1 −α + 1/(n + 1) also exists. Note that
+the coverage is marginal: the probability is taken over the
+entire distribution of (X, Y ) and there is no guarantee per
+value of Xn+1.
+Different CP methods typically differ by their choice
+of score function s(x, y), and a key property that they are
+judged according to is their average prediction set size,
+E[|C(X)|], often refers to as efficiency.
+4. Enhancing CP Using Class Similarity
+In this section, we explore the properties of CP when uti-
+lizing a known partition of the C classes into G groups.
+Let g : [C] →[G] denote the map of classes to groups.
+Namely, g(y) ∈[G] is the index of the group that contains
+class y ∈[C].
+As discussed in Section 1, we assume that the groups are
+superclasses with some semantic meaning. For example,
+the classes may be cities and the superclasses are geograph-
+ical location, or the classes are types of diseases and the
+superclasses group those that require a similar treatment. In
+this case, it is reasonable for a user to prefer C(X) whose
+classes belong only to a few groups, or ideally just to the
+group of the true label Y .
+Motivated by the above, let us set a “distance function”
+between classes based on their groups. Specifically, we con-
+sider the binary penalty function given by:
+d(y, y′) := I {g(y) ̸= g(y′)} ,
+(1)
+where I{·} is the indicator function. That is, d(y, y′) = 0 if
+y and y′ belong to the same group, and otherwise d(y, y′) =
+1. For brevity, we omit the explicit dependence of d(y, y′)
+on g.
+Given a sample x, all common CP methods preserve the
+ranking of the softmax vector ˆπ(x) and, in particular, in-
+clude the estimated class ˆy(x) in the prediction set before
+including any other class. Therefore, to reduce the num-
+ber of groups in C(X) we propose to penalize a given score
+function s(x, y) by d(y, ˆy(x)):
+sλ(x, y) := s(x, y) + λd(y, ˆy(x)),
+(2)
+where λ > 0 is a parameter. In words, the score of a candi-
+date y that is “semantically far” from ˆy(x) is penalized by a
+value of λ.
+We turn to theoretically explore the properties of CP with
+sλ(x, y). Let us denote by ˆqλ and Cλ(x) the CP threshold
+and prediction set when using λ > 0.
+The coverage property is maintained. This follows di-
+rectly from Theorem 3.1, as sλ is a valid score that pre-
+serves the exchangeability of the calibration and test sam-
+ples.
+The number of out-of-group labels in the prediction set
+cannot increase. To show that adding the penalty term to
+the score cannot increase the number of classes in Cλ(x)
+whose group is not g(ˆy(x)), we first establish the following
+lemma on the relation between ˆqλ and ˆq.
+Lemma 4.1. We have ˆq ≤ˆqλ ≤ˆq + λ.
+Proof. For any (xi, yi) in the calibration set we have
+s(xi, yi) ≤sλ(xi, yi) ≤s(xi, yi) + λ. The (1 −α) em-
+pirical quantile for {s(xi, yi)} is ˆq and for {s(xi, yi) + λ}
+is ˆq + λ.
+Therefore the (1 −α) empirical quantile for
+{sλ(xi, yi)} is in [ˆq, ˆq + λ].
+3
+
+We now present our result on the inclusion of out-of-
+group labels in the prediction set.
+Proposition 4.2. Let Y1(x) := {y : d(y, ˆy(x)) ̸= 0}. For
+any x and λ > 0 we have
+Cλ(x) ∩Y1(x) ⊆C(x) ∩Y1(x).
+Proof. For any y ∈Y1(x), we have d(y, ˆy(x)) = 1, so the
+inclusion in Cλ(x) implies satisfying s(x, y) + λ ≤ˆqλ ≤
+ˆq+λ, where the second inequality follows from Lemma 4.1.
+Therefore, s(x, y) ≤ˆq, which implies y ∈C(x).
+The proposition shows that the penalization cannot
+add any “far”/group-mismatched labels (w.r.t. ˆy(x)) that
+weren’t already in the unpenalized CP; it can only re-
+move them. This property naturally translates to decreasing
+the distance-weighted size. Specifically, define Sλ(x) :=
+XC
+y=1 d(y, ˆy(x))I {y ∈Cλ(x)}. We have Sλ(x) ≤S0(x)
+for any x, and thus also E[Sλ(X)] ≤E[S0(X)]. Similarly,
+eliminating the pathological case of empty C(x), the num-
+ber of groups cannot increase, as shown in the following
+corollary.
+Corollary 4.3. Let Gλ(x) and G(x) denote the groups rep-
+resented in Cλ(x) and C(x), respectively. For any x such
+that ˆy(x) ∈C(x) and λ > 0 we have Gλ(x) ⊆G(x).
+Proof. Formally, Gλ(x) = {g(y) : y ∈Cλ(x)} and G(x) =
+{g(y) : y ∈C(x)}. We already have in Proposition 4.2 that
+any y with g(y) ̸= g(ˆy(x)) cannot be added to Cλ(x). The
+assumption that ˆy(x) ∈C(x) eliminates the pathological
+case that sλ(x, ˆy(x)) ≤ˆqλ but s(x, ˆy(x)) > ˆq. So, g(ˆy(x))
+is already in both Gλ(x) and G(x).
+Since the corollary holds for any x, it reflects the rela-
+tion E[|Gλ(X)|] ≤E[|G(X)|]. This theory supports the em-
+pirical observation (in Section 6) that the empirical expec-
+tations obey ˆE[|Gλ(X)|] < ˆE[|G(X)|], with a substantial
+margin.
+Surprising behavior: The average prediction set size
+also decreases in practice. As will be shown in our ex-
+periments, with well-tuned λ (small enough), we observe
+ˆE[|Cλ(X)|] <
+ˆE[|C(X)|], in benchmark settings, even
+though the penalty does not imply it directly.
+Actually,
+while we reached a guarantee for decreasing the number of
+“out-of-group” labels, potentially, there can be an increase
+in “in-group” labels, since ˆq ≤ˆqλ but the score of y from
+the same group of ˆy(x) remains the same.
+We turn to establish a theory for reduction in the average
+prediction set size for small enough λ. To this end, let us
+start by some definitions.
+Definition 4.4. Given a sample x, we have the following
+definitions:
+1. “In-group” classes: Y0(x) := {y : d(y, ˆy(x)) = 0} and
+n0(x) := |Y0(x)|.
+2. “Out-of-group” classes: Y1(x) := {y : d(y, ˆy(x)) ̸= 0}
+and n1(x) := |Y1(x)|.
+3. Per-x conditional quasi-CDF:1 for z ∈{0, 1}, ˆF x
+z (t) :=
+1
+nz(x)
+X
+y∈Yz(x)
+I{s(x, y) ≤t}.
+We also make the following definitions related to the
+marginal distribution:
+4. Average number of “in-group” classes:
+n0
+:=
+E[n0(X)].
+5. Average number of “out-of-group” classes:
+n1
+:=
+E[n1(X)].
+6. Probability of “in-group” true label: p0 = P(Y
+∈
+Y0(X)).
+7. Probability of “out-of-group” true label: p1 = P(Y ∈
+Y1(X)) = 1 −p0.
+8. Conditional CDFs:
+for z
+∈
+{0, 1}, Fz(t)
+:=
+P(s(X, Y ) ≤t|Y ∈Yz(X)).
+Next, let us state the assumptions that will be used in our
+theorem.
+Assumption 1. For small λ
+≥
+0, the prediction set
+Cλ(X) is based on the statistical quantile qλ of the CDF
+of sλ(X, Y ). That is, qλ obeys P(sλ(X, Y ) ≤qλ) = 1 −α.
+Assumption 2. For z ∈{0, 1}, the CDF Fz(t) is absolutely
+continuous, so fz(t) = F ′
+z(t) is well-defined.
+Assumption 3. For z ∈{0, 1}, the “size-biased” quasi-
+CDF ˜Fz(t) :=
+1
+nz
+E[nz(X) ˆF X
+z (t)] is absolutely continu-
+ous, so ˜fz(t) = ˜F ′
+z(t) is well-defined.
+Assumptions 1-3 are required for making the analysis
+tractable, ensuring that E[|Cλ(X)|] is differentiable with re-
+spect to λ, and sparing cumbersome analysis of the effect
+of finite calibration sets on inclusion of a label in the pre-
+dictions sets. Note that Assumption 1 essentially reflects
+having a large calibration set. Now we present a theorem
+that characterizes the effect of the penalty with small λ on
+the efficiency.
+Theorem 4.5. Consider Definition 4.4. Under Assumptions
+1-3, we have
+sign
+ d
+dλE[|Cλ(X)|]
+
+λ=0
+
+= sign (ap1n0 −bp0n1) ,
+(3)
+where a := ˜f0(q0)f1(q0) and b := ˜f1(q0)f0(q0).
+1We name the object ˆF x
+z (t) “quasi-CDF” because it is not based on
+any random variable (such as Y |X = x) or its realization, but rather on
+the deterministic set Yz(x).
+4
+
+Proof. See Supp. Mat. A.1.
+The proof sketch is as fol-
+lows.
+We establish an expression for the score function
+CDF, Fλ(t) := P(sλ(X, Y ) ≤t) in terms of the condi-
+tional CDFs, F0(t) and F1(t). By Assumption 1, we have
+Fλ(qλ) = 1−α, on which we apply implicit differentiation
+and establish an expression for dqλ
+dλ . Based on the defini-
+tions we express E[|Cλ(X)|] using the “size-biased” quasi-
+CDF. Differentiating it and substituting dqλ
+dλ at λ = 0 leads
+to the advertised result.
+Discussion. Let us start by assuming that a ≈b. In this
+case, the theorem shows that the sign of d
+dλE[|Cλ(X)|]
+
+λ=0
+(where a negative value means that λ
+≈
+0+ reduces
+E[|Cλ(X)|]) equals the sign of the difference between:
+• p1 × n0: The probability of having the true label out of
+the group of the predicted class × the average number of
+classes in the group of the predicted class.
+• p0 × n1: The probability of having the true label in the
+group of the predicted class × the average number of
+classes out of the group of the predicted class.
+We can expect that p1n0 ≪p0n1 in most practical cases,
+since typically the number of classes in a group is much
+smaller than outside a group, i.e., n0 ≪n1, and modern
+classifiers are quite powerful so p0 is not small. There-
+fore, if a ≈b or even if b is not much smaller than a,
+then sign (ap1n0 −bp0n1) < 0.
+By Theorem 4.5, this
+implies that penalizing the score with small λ will reduce
+E[|Cλ(X)|].
+Let us discuss the relation between a and b. For sim-
+plification, assume that the C classes are partitioned to G
+groups of equal size K. In this case, we have constants
+n0(X) = K and n1(X) = (G −1)K. So, n0 = K and
+n1 = (G −1)K, as well. Recalling the definition of ˜Fz(t)
+in Assumption 3, we have
+˜Fz(t) = E[ ˆF X
+z (t)] = 1
+nz
+E
+
+
+X
+y∈Yz(X)
+I{s(X, y) ≤t}
+
+.
+Define pz(x) := P(Y ∈Yz(x)|X = x) and F x
+z (t) :=
+P(s(x, Y ) ≤t|Y ∈Yz(x), X = x). Observe that
+F x
+z (t) = P(s(x, Y ) ≤t, Y ∈Yz(x)|X = x)
+P(Y ∈Yz(x)|X = x)
+=
+P
+y∈Yz(x) P(Y = y|X = x)I{s(x, y) ≤t}
+pz(x)
+.
+Using the relation (see derivation in Supp. Mat. A.2):
+Fz(t) = 1
+pz
+E[pz(X)F X
+z (t)]
+(4)
+and substituting in it the expression derived above for
+F x
+z (t), we get
+Fz(t) = 1
+pz
+E[pz(X)F X
+z (t)]
+= 1
+pz
+E
+
+
+X
+y∈Yz(X)
+P(Y = y|X)I{s(X, y) ≤t}
+
+.
+Thus, if, per X = x, the labels Y ∈Yz(x) are distributed
+uniformly, then the factor that multiplies I{s(X, y) ≤t}
+is constant, and therefore ˜Fz(t) = Fz(t). This gives exact
+a = b (recall their definitions in Theorem 4.5), so the above
+arguments hold for having sign (ap1n0 −bp0n1) < 0. The
+fact that the theory includes integration over X and con-
+siders the densities only at q0, together with the empiri-
+cal fact that p1n0 ≪p0n1, teach us that there are many
+cases where sign (ap1n0 −bp0n1) < 0 even for non uni-
+form conditional label distributions.
+5. Extension to Model-Specific Class Similarity
+The original motivation for the penalized score in equation 2
+came from considering the potential preference of the user
+to reduce the number of “semantically far” classes in the
+prediction set. However, Theorem 4.5 reveals that, perhaps
+surprisingly, the proposed penalty has a beneficial effect on
+the prediction set size for any score function, provided that
+the penalty parameter λ is sufficiently small and p1n0 ≪
+p0n1 (omitting the effect of a and b in equation 3).
+This result actually tells us that, in terms of efficiency, we
+can gain more from partitions into groups that are as small
+as possible (low n0 and high n1), as long as the probability
+of making out-of-group mistakes (p1 = 1 −p0) is kept low.
+Nothing in this result requires a human-related semantic
+similarity between classes within a group. This motivates
+us to propose a model-specific extension of the method.
+Specifically, given a pretrained classifier, we suggest basing
+the penalty on the class similarity perceived by the model.
+An important advantage of this extension, which focuses on
+boosting efficiency rather than group-related metrics, is that
+it eliminates the need for a human-made semantic partition,
+which may not be available for some datasets.
+For a given classifier, the proposed extension requires
+computing a C×C class similarity matrix, which we denote
+by M (recall that C denotes the number of classes). The
+(c, c′) entry in M should reflect the similarity between class
+c and class c′, as perceived by the model. Similarity metrics
+are typically continuous, e.g., inner products and kernels.
+Binarization of such metrics will require tuning a threshold
+parameter. Hence, we propose to diverge slightly from the
+method in Section 4 by allowing the similarity metric to be
+“soft”, which also adds more flexibility to the method. For
+Mc,c′ ∈R, upper bounded by 1 as the maximum level of
+5
+
+similarity, we define the soft model-specific penalty func-
+tion:
+dMS(y, y′) := 1 −My,y′.
+(5)
+Substituting this penalty in equation 2 in lieu of the model-
+agnostic d, gives
+sMS
+λ
+(x, y) := s(x, y) + λdMS(y, ˆy(x)),
+(6)
+where λ > 0 is a parameter.
+Determining model-specific class similarity. There exist
+multiple potential strategies for constructing a class simi-
+larity matrix M given a model. Here, we propose one that
+consistently improves the efficiency results in our experi-
+ments. Future research may attempt to optimize this choice.
+We assume access to the labeled training samples. The last
+layer of a deep neural network-based classifier f(x) ∈RC,
+before the softmax operation, can be typically expressed
+as: f(x) = Whθ(x) + b, where hθ(·) : X −→Rp (with
+p ≥C) is the deepest feature mapping that is composed
+of all the hidden layers (with learnable parameters θ), and
+W ∈RC×p and b ∈RC are the weights and bias of the
+last classification layer.
+We determine the class similar-
+ity according to a similarity function (or kernel) between
+the means of different classes in the deepest feature space.
+This strategy is motivated by recent work on the neural col-
+lapse phenomenon [16], where the within-class samples of
+well-trained classifiers concentrate around their class mean
+in feature space, while inter-class means are well separated
+yet empirically still preserve relations that generalize to test
+data [20, 25]. Therefore, examining the relation between
+class means in feature space yields small effective groups
+without compromising on group-wise accuracy.
+Denote by {xc,i}, i ∈[nc], the training samples associ-
+ated with class c ∈[C]. Compute the class means and the
+global mean of the features:
+hc = 1
+nc
+nc
+X
+i=1
+hθ(xc,i),
+c ∈[C].
+hG = 1
+C
+C
+X
+c=1
+hc.
+We then set the entry Mc,c′ in the class similarity matrix
+M using the cosine similarity of the centered class means:
+Mc,c′ = ⟨hc −hG, hc′ −hG⟩
+∥hc −hG∥∥hc′ −hG∥.
+6. Experiments
+Datasets and models. We conduct experiments on three
+image classification benchmarks: CIFAR-100 [11], Living-
+17 from the BREEDS suite [19], and Mini-ImageNet [21],
+a subset of ImageNet [5] with 100 classes.
+Note that
+CIFAR-100 and Living-17 have official semantic superclass
+structures, i.e., partitions of the classes into coarse classes.
+Specifically, CIFAR-100 has 20 superclasses (e.g., aquatic
+mammals, fish, flowers, etc.), where each one groups 5
+classes (e.g., beaver, dolphin, otter, seal, and whale are
+grouped under aquatic mammals). Similarly, Living-17 has
+17 superclasses, where each one groups 4 classes. We use
+ResNet50 [8] as the classifier model. For CIFAR-100 we
+use ResNet34 as well. Details on the training of the models
+are provided in Supp. Mat. B.1. We split the validation sets
+of the datasets to 20% calibration and 80% test.
+CP score functions. We consider three prominent con-
+formal score functions s(x, y): (1) LAC [18], defined as one
+minus the classifier’s softmax value at index y; (2) RAPS
+[2], based on cumulating softmax entries up to the rank of y,
+like APS [17], but includes a regularization term that yields
+smaller prediction sets; and (3) SAPS [10], penalizes the
+maximal softmax entry according to the rank of y. Detailed
+definitions of these scores are provided in Supp. Mat. B.2.
+We conduct experiments using target coverage levels of
+α = {0.05, 0.1}, as common in the literature.
+Details of the CP methods evaluated. For each score
+function, we evaluate the following versions.
+• Standard: The CP algorithm with the original score func-
+tion and no modifications.
+• Clustered [6]: The algorithm extends and improves the
+efficiency of class-wise Mondrian CP [22] (which applies
+CP separately to each class) by grouping classes into M
+clusters based on the similarity of score distributions, and
+applying CP on each cluster.
+The algorithm has two parameters: γ, which controls the
+proportion of data used for clustering, and M, the num-
+ber of clusters. We set γ = 0.2 to match the proportion
+used in our methods. M is chosen following [6]. Further
+details can be found in Appendix B.4 of their paper.
+• AIR (Accumulating Inference Rule):
+Inspired by the
+Climbing Inference Rule [7], which climbs the hierar-
+chy from a predicted leaf node to its parent until reach-
+ing a conformalized threshold that guarantees coverage.
+The exact approach of [7] does not suit the two-level su-
+perclass structure of CIFAR-100 and Living-17, as it of-
+ten leads to the inclusion of all classes. To address this,
+we develop an improved variant. Instead of climbing to
+the parent, it accumulates mass onto the next superclass
+with the highest probability, effectively applying confor-
+mal prediction at the superclass level rather than the class
+level.
+• MA-CS (Model-Agnostic Class-Similarity): The stan-
+dard CP algorithm augmented with our binary regulariza-
+tion term, as described in Section 4.
+To select the regularization parameter λ, we split the cal-
+ibration set into two equal size sets: ˆq-calibration (used
+to compute ˆq), and λ-evaluation (used to evaluate perfor-
+mance for different λ values). We then iterate over a pre-
+defined set of λ values and choose the one that achieves
+the smallest set size on the λ-evaluation set.
+6
+
+Table 1. Performance comparison of various CP methods with α = 0.05.
+#Superclasses ↓
+Size ↓
+Method
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+m-ImageNet, RN50
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+LAC
+Standard
+2.27 (±0.276)
+2.41 (±0.274)
+1.26 (±0.068)
+4.73 (±0.767)
+3.68 (±0.759)
+3.82 (±0.707)
+1.77 (±0.205)
+Clustered
+2.28 (±0.248)
+2.34 (±0.200)
+1.24 (±0.035)
+4.50 (±0.823)
+3.70 (±0.676)
+3.62 (±0.485)
+1.69 (±0.101)
+AIR
+1.36 (±0.097)
+1.43 (±0.091)
+1.16 (±0.040)
+N/A
+6.80 (±0.101)
+7.15 (±0.089)
+5.80 (±0.061)
+MA-CS
+1.85 (±0.183)
+1.92 (±0.108)
+1.19 (±0.068)
+N/A
+3.17 (±0.424)
+3.51 (±0.749)
+1.71 (±0.183)
+MS-CS
+1.83 (±0.137)
+1.87 (±0.126)
+1.19 (±0.058)
+3.82 (±0.696)
+2.92 (±0.339)
+2.94 (±0.339)
+1.70 (±0.156)
+RAPS
+Standard
+2.49 (±0.145)
+3.40 (±0.112)
+1.35 (±0.052)
+8.67 (±2.398)
+3.83 (±0.276)
+5.79 (±0.223)
+1.98 (±0.167)
+Clustered
+2.42 (±0.103)
+3.32 (±0.115)
+1.33 (±0.027)
+8.19 (±2.224)
+3.67 (±0.200)
+5.62 (±0.232)
+1.90 (±0.090)
+AIR
+1.95 (±0.077)
+3.03 (±0.085)
+1.20 (±0.026)
+N/A
+9.75 (±0.121)
+15.15 (±0.095)
+6.00 (±0.051)
+MA-CS
+2.01 (±0.160)
+2.29 (±0.250)
+1.23 (±0.081)
+N/A
+3.50 (±0.305)
+4.52 (±0.501)
+1.97 (±0.295)
+MS-CS
+1.95 (±0.122)
+2.22 (±0.182)
+1.24 (±0.050)
+7.35 (±2.495)
+3.17 (±0.265)
+3.79 (±0.387)
+1.81 (±0.222)
+SAPS
+Standard
+2.33 (±0.242)
+2.39 (±0.17)
+1.32 (±0.048)
+5.93 (±1.480)
+3.45 (±0.458)
+3.57 (±0.342)
+1.94 (±0.164)
+Clustered
+2.55 (±0.293)
+2.62 (±0.276)
+1.31 (±0.045)
+8.03 (±2.173)
+3.86 (±0.547)
+4.02 (±0.521)
+2.01 (±0.172)
+AIR
+1.51 (±0.163)
+1.59 (±0.124)
+1.11 (±0.032)
+N/A
+7.55 (±0.324)
+7.95 (±0.274)
+5.55 (±0.062)
+MA-CS
+1.88 (±0.286)
+1.93 (±0.162)
+1.26 (±0.033)
+N/A
+3.14 (±0.464)
+3.32 (±0.271)
+1.94 (±0.147)
+MS-CS
+1.97 (±0.187)
+2.14 (±0.175)
+1.24 (±0.035)
+4.7 (±1.026)
+3.14 (±0.361)
+3.32 (±0.371)
+1.87 (±0.146)
+• MS-CS (Model-Specific Class-Similarity): The standard
+CP algorithm combined with our regularization term
+based on the model-specific similarity matrix, as detailed
+in Section 5. The regularization parameter λ is set using
+the same procedure as in MA-CS.
+Note that AIR and our MA-CS cannot be applied for Mini-
+ImageNet, which lacks a pre-specified superclass structure.
+On the other hand, our MS-CS is still applicable.
+Evaluation metrics. The evaluation metrics that we use
+are the average prediction set size, and for CIFAR-100 and
+Living-17 also the average number of superclasses in the
+prediction set. Note that for these metrics: the lower the
+better. The metrics are computed over the test set and we
+report their means and standard deviations based on 100 tri-
+als (random splits of 20% calibration set and 80% test set).
+We also compute the marginal coverage. The definitions of
+the metrics are stated in Supp. Mat. B.3.
+6.1. Results
+We begin with reporting the top-1 accuracy of each of
+the four dataset-model pairs: ResNet50 on Mini-ImageNet:
+80.38%; ResNet50 on CIFAR-100: 80.93%; ResNet34 on
+CIFAR-100: 78.92%; ResNet50 on Living-17: 84.68%.
+In Tables 3 and 4 in the supplementary, we report the
+marginal coverage of our MA-CS and MS-CS methods. The
+pre-specified coverage level is preserved. As expected, our
+proposed regularization does not affect this property, which
+is consistent with the CP theoretical guarantee. In the sup-
+plementary we report the marginal coverage of the other
+methods, which also satisfy the specified level.
+In Tables 1 and 2 we report the results for the average
+prediction set size and, when relevant, the average number
+of superclasses in the prediction set for coverage levels of
+{0.05, 0.1} respectively. Both tables contain similar find-
+ings. Let us discuss the results of Table 1.
+Comparison
+between
+our
+methods
+and
+Stan-
+dard/Clustered.
+Excluding
+AIR
+(discussed
+sepa-
+rately), our methods—MA-CS and MS-CS—consistently
+achieve the best performance on both metrics across all
+dataset–model pairs and all CP methods.
+For example,
+on CIFAR100–ResNet34 with RAPS score, MA-CS and
+MS-CS obtain average set size of 4.52 and 3.79, compared
+to 5.79 and 5.62 for Standard and Clustered, representing a
+reduction of more than 30%. Similarly, they achieve #Su-
+perclasses values of 2.29 and 2.22, whereas Standard and
+Clustered yield 3.40 and 3.32, corresponding to reductions
+of approximately 33%.
+Comparison between our methods and AIR. For the
+#Superclasses metric, performance varies across score func-
+tions and AIR often achieves lower values.
+For exam-
+ple, on CIFAR100–ResNet50 with the SAPS score, MA-CS
+and MS-CS achieve #Superclasses values of 1.88 and 1.97,
+compared to 1.51 for AIR.
+Yet, importantly, for the average size metric, our meth-
+ods consistently and significantly outperform AIR across all
+settings. For instance, on CIFAR100-ResNet50 with the
+RAPS score, MA-CS and MS-CS achieve values of 4.52
+and 3.79, compared to 15.15 for AIR, corresponding to a
+substantial reduction of approximately 75%. Similar reduc-
+tions are observed throughout the remaining results.
+Comparison between MA-CS and MS-CS. Although
+the two methods achieve similar overall performance, MS
+is slightly better in most settings. The improvement in the
+prediction set size can be attributed to the use of smaller
+groups and the higher flexibility of MS, which leverages
+model-specific information and “soft” similarity values. In-
+terestingly, for #Superclasses the results are similar to those
+of MA, despite the distances between classes being derived
+directly from the model. This may be explained by the over-
+all smaller sets of our MS variant.
+7
+
+Table 2. Performance comparison of various CP methods with α = 0.1.
+#Superclasses ↓
+Size ↓
+Method
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+m-ImageNet, RN50
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+LAC
+Standard
+1.37 (±0.046)
+1.44 (±0.051)
+1.07 (±0.023)
+1.79 (±0.130)
+1.62 (±0.084)
+1.75 (±0.091)
+1.21 (±0.064)
+Clustered
+1.48 (±0.144)
+1.53 (±0.128)
+1.09 (±0.036)
+2.18 (±0.379)
+1.82 (±0.267)
+1.90 (±0.221)
+1.27 (±0.083)
+AIR
+1.02 (±0.097)
+1.09 (±0.091)
+1.06 (±0.040)
+N/A
+5.10 (±0.101)
+5.45 (±0.089)
+5.30 (±0.061)
+MA-CS
+1.24 (±0.063)
+1.34 (±0.065)
+1.04 (±0.018)
+N/A
+1.54 (±0.127)
+1.70 (±0.120)
+1.19 (±0.037)
+MS-CS
+1.25 (±0.053)
+1.32 (±0.072)
+1.05 (±0.015)
+1.69 (±0.158)
+1.53 (±0.092)
+1.65 (±0.138)
+1.18 (±0.042)
+RAPS
+Standard
+1.92 (±0.053)
+2.69 (±0.062)
+1.19 (±0.019)
+3.79 (±0.142)
+2.70 (±0.102)
+4.33 (±0.125)
+1.51 (±0.049)
+Clustered
+1.91 (±0.087)
+2.64 (±0.108)
+1.20 (±0.098)
+4.28 (±0.661)
+2.69 (±0.166)
+4.22 (±0.222)
+1.54 (±0.122)
+AIR
+1.52 (±0.077)
+1.63 (±0.085)
+1.10 (±0.026)
+N/A
+7.60 (±0.121)
+8.15 (±0.095)
+5.50 (±0.051)
+MA-CS
+1.34 (±0.099)
+1.45 (±0.100)
+1.03 (±0.032)
+N/A
+2.10 (±0.177)
+2.60 (±0.165)
+1.38 (±0.053)
+MS-CS
+1.34 (±0.085)
+1.49 (±0.080)
+1.07 (±0.020)
+2.05 (±0.203)
+1.89 (±0.160)
+2.18 (±0.174)
+1.28 (±0.056)
+SAPS
+Standard
+1.48 (±0.110)
+1.57 (±0.096)
+1.10 (±0.017)
+2.16 (±0.395)
+1.83 (±0.204)
+1.97 (±0.186)
+1.29 (±0.044)
+Clustered
+1.60 (±0.265)
+1.73 (±0.299)
+1.20 (±0.224)
+2.96 (±0.760)
+1.99 (±0.336)
+2.18 (±0.406)
+1.49 (±0.236)
+AIR
+1.16 (±0.039)
+1.10 (±0.023)
+1.02 (±0.017)
+N/A
+5.80 (±0.207)
+5.50 (±0.155)
+4.03 (±0.145)
+MA-CS
+1.26 (±0.044)
+1.42 (±0.063)
+1.06 (±0.012)
+N/A
+1.74 (±0.140)
+1.89 (±0.163)
+1.27 (±0.062)
+MS-CS
+1.36 (±0.084)
+1.39 (±0.059)
+1.07 (±0.013)
+1.95 (±0.239)
+1.71 (±0.172)
+1.81 (±0.136)
+1.24 (±0.049)
+6.2. The effect of λ on the metrics
+In this section, we examine how the penalty coefficient λ in-
+fluences both the #Superclasses and the average prediction-
+set size. In Figure 2, we present both metrics for different
+values of λ. In order to emphasize practical usage we used
+only 10% of the data for calibration and another 10% for
+validation. As expected, for a large range of λ the #Su-
+perclasses decreases as λ increases, reflecting the intended
+effect of the penalty. The slight increase starting from a
+very large (impractical) value of λ can be explained by a
+decrease in number of samples with empty prediction sets.
+Namely, even for samples where the minimal score across
+labels is quite large, due to overly large λ the CP threshold
+becomes large enough to upper bound the minimal score.
+As for the average set size, observe that it initially de-
+creases for small values of λ, aligned with Theorem 4.5.
+Then, after reaching a minimum, the metric increases with
+λ. These observations suggest that there exists a regime of
+λ in which both metrics exhibit improvement, underscoring
+the practical value of appropriately tuning the regulariza-
+tion strength. In Figure 2, we observe that for λ ∈(0, 0.28]
+both metrics improve. At λ = 0.28, the method achieves a
+substantial reduction of approximately 33% in the average
+prediction-set size and 25% in the #Superclasses. Notably,
+we demonstrate that this tuning process for λ can be con-
+ducted using only 20% of the data, requires just a single
+trial, and can be completed within a matter of minutes.
+In the supplementary we further show robustness of a
+class-conditional coverage metric to changes in λ.
+6.3. Model-perceived class similarity
+In this part, we show the similarity between classes as per-
+ceived by the model. For CIFAR100-ResNet50 we present
+in Figure 3 the top-left 10×10 block of the similarity matrix
+M (defined in section 5). The associated model-agnostic
+similarity is depicted as well. The complete matrices are
+Figure 2. The effect of λ on the average set size (blue) and number
+of superclasses (red) for CIFAR-100, ResNet50 and RAPS score.
+Figure 3. Comparison of zoomed 10×10 regions of the model spe-
+cific (left) and model agnostic (right) similarity matrices.
+provided in the supplementary.
+To further highlight the advantage of the model-
+perceived class similarity, we also compare the performance
+of the MS-CS matrix against the identity matrix M = I,
+which equally punishes all classes except the prediction.
+The experiments in the supplementary, demonstrating the
+superiority of MS-CS similarity matrix over this matrix,
+suggesting using the learned embeddings from the model
+itself is highly valuable.
+7. Conclusion
+In this paper, we proposed a class-similarity-based regular-
+ization approach that can be applied to any CP score func-
+tion and reduces both the number of groups and the overall
+size of the prediction sets. We backed our model-agnostic
+variant with comprehensive theory, which also motivated
+us to extend it to a novel model-specific approach. Impor-
+tantly, the latter reduces the prediction set size even further
+and does not require any known class structure, making it a
+widely applicable tool in the CP toolbox.
+8
+
+Acknowledgments
+The work is supported by the Israel Science Foundation
+(No. 1940/23) and MOST (No. 0007091) grants.
+References
+[1] Anastasios N Angelopoulos and Stephen Bates. A gentle in-
+troduction to conformal prediction and distribution-free un-
+certainty quantification. arXiv preprint arXiv:2107.07511,
+2021. 3
+[2] Anastasios Nikolas Angelopoulos, Stephen Bates, Michael
+Jordan, and Jitendra Malik. Uncertainty sets for image clas-
+sifiers using conformal prediction. In International Confer-
+ence on Learning Representations, 2021. 1, 2, 6
+[3] Konstantina Bairaktari, Jiayun Wu, and Zhiwei Steven
+Wu.
+Kandinsky conformal prediction:
+Beyond class-
+and
+covariate-conditional
+coverage.
+arXiv
+preprint
+arXiv:2502.17264, 2025. 2
+[4] Lahav Dabah and Tom Tirer. On temperature scaling and
+conformal prediction of deep classifiers. In Forty-second In-
+ternational Conference on Machine Learning, 2025. 1
+[5] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li,
+and Li Fei-Fei. Imagenet: A large-scale hierarchical image
+database. In 2009 IEEE conference on computer vision and
+pattern recognition, pages 248–255. Ieee, 2009. 6
+[6] Tiffany Ding, Anastasios Angelopoulos, Stephen Bates,
+Michael Jordan, and Ryan J Tibshirani. Class-conditional
+conformal prediction with many classes. Advances in Neu-
+ral Information Processing Systems, 36, 2023. 2, 6
+[7] Shani Goren, Ido Galil, and Ran El-Yaniv. Hierarchical se-
+lective classification. Advances in Neural Information Pro-
+cessing Systems, 37:111047–111073, 2024. 2, 6
+[8] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun.
+Deep residual learning for image recognition. In Proceed-
+ings of the IEEE conference on computer vision and pattern
+recognition, pages 770–778, 2016. 6
+[9] Floris den Hengst, In`es Blin, Majid Mohammadi, Syed Iht-
+esham Hussain Shah, and Taraneh Younesian. Hierarchical
+conformal classification. arXiv preprint arXiv:2508.13288,
+2025. 2
+[10] Jianguo Huang, Huajun Xi, Linjun Zhang, Huaxiu Yao, Yue
+Qiu, and Hongxin Wei. Conformal prediction for deep clas-
+sifier via label ranking. In International Conference on Ma-
+chine Learning, pages 20331–20347. PMLR, 2024. 1, 2, 6
+[11] Alex Krizhevsky, Geoffrey Hinton, et al. Learning multiple
+layers of features from tiny images. 2009. 6
+[12] Benjamin Lambert, Florence Forbes, Senan Doyle, Har-
+monie Dehaene, and Michel Dojat. Trustworthy clinical AI
+solutions: A unified review of uncertainty quantification in
+deep learning models for medical image analysis. Artif. In-
+tell. Medicine, 150:102830, 2024. 1
+[13] Lars Lindemann, Yiqi Zhao, Xinyi Yu, George J Pap-
+pas, and Jyotirmoy V Deshmukh.
+Formal verification
+and control with conformal prediction.
+arXiv preprint
+arXiv:2409.00536, 2024. 1
+[14] Thomas Mortier, Alireza Javanmardi, Yusuf Sale, Eyke
+H¨ullermeier, and Willem Waegeman.
+Conformal pre-
+diction in hierarchical classification.
+arXiv preprint
+arXiv:2501.19038, 2025. 2
+[15] Harris Papadopoulos, Kostas Proedrou, Volodya Vovk, and
+Alex Gammerman. Inductive confidence machines for re-
+gression. In Machine Learning: ECML 2002: 13th European
+Conference on Machine Learning Helsinki, Finland, Au-
+gust 19–23, 2002 Proceedings 13, pages 345–356. Springer,
+2002. 3
+[16] Vardan Papyan, XY Han, and David L Donoho. Prevalence
+of neural collapse during the terminal phase of deep learning
+training. Proceedings of the National Academy of Sciences,
+117(40):24652–24663, 2020. 6
+[17] Yaniv Romano, Matteo Sesia, and Emmanuel Candes. Clas-
+sification with valid and adaptive coverage.
+Advances
+in Neural Information Processing Systems, 33:3581–3591,
+2020. 2, 6
+[18] Mauricio Sadinle, Jing Lei, and Larry Wasserman.
+Least
+ambiguous set-valued classifiers with bounded error levels.
+Journal of the American Statistical Association, 114(525):
+223–234, 2019. 1, 2, 6
+[19] Shibani Santurkar, Dimitris Tsipras, and Aleksander Madry.
+Breeds: Benchmarks for subpopulation shift. arXiv preprint
+arXiv:2008.04859, 2020. 6
+[20] Tom Tirer, Haoxiang Huang, and Jonathan Niles-Weed. Per-
+turbation analysis of neural collapse. In International Con-
+ference on Machine Learning, pages 34301–34329. PMLR,
+2023. 6
+[21] Oriol Vinyals, Charles Blundell, Timothy Lillicrap, Daan
+Wierstra, et al. Matching networks for one shot learning. Ad-
+vances in neural information processing systems, 29, 2016.
+6
+[22] Vladimir Vovk. Conditional validity of inductive conformal
+predictors. In Asian conference on machine learning, pages
+475–490. PMLR, 2012. 2, 6
+[23] Volodya Vovk, Alexander Gammerman, and Craig Saunders.
+Machine-learning applications of algorithmic randomness.
+In Proceedings of the Sixteenth International Conference on
+Machine Learning, pages 444–453, 1999. 1, 3
+[24] Vladimir Vovk, Alexander Gammerman, and Glenn Shafer.
+Algorithmic learning in a random world. Springer, 2005. 1,
+3
+[25] Yongyi Yang, Jacob Steinhardt, and Wei Hu. Are neurons ac-
+tually collapsed? on the fine-grained structure in neural rep-
+resentations. In International Conference on Machine Learn-
+ing, pages 39453–39487. PMLR, 2023. 6
+[26] Botong Zhang, Shuo Li, and Osbert Bastani.
+Conformal
+structured prediction.
+arXiv preprint arXiv:2410.06296,
+2024. 2
+9
+
+A. Proofs and Additional Derivations
+A.1. Proof of Theorem 4.5
+From the definition of sλ(x, y), for any fixed x, the size of the penalized conformal set can be written as
+|Cλ(x)| =
+X
+y∈Y0(x)
+I{s(x, y) ≤qλ} +
+X
+y∈Y1(x)
+I{s(x, y) ≤qλ −λ}
+= n0(x) ˆF x
+0 (qλ) + n1(x) ˆF x
+1 (qλ −λ),
+where in the first equation we used qλ due to Assumption 1, and in the second equation we used the definition of ˆF x
+z (t). By
+the law of total expectation,
+E[|Cλ(X)|] = E[n0(X) ˆF X
+0 (qλ)] + E[n1(X) ˆF X
+1 (qλ −λ)].
+Using the definition of ˜Fz(t) in Assumption 3, we get
+E[|Cλ(X)|] = n0 ˜F0(qλ) + n1 ˜F1(qλ −λ).
+(7)
+Next, recall that qλ is defined as the (1 −α)–quantile of the CDF Fλ(t) := P(sλ(X, Y ) ≤t). Namely, Fλ(qλ) = 1 −α.
+Observe that
+Fλ(t) = P(Y ∈Y0(x))F0(t) + P(Y ∈Y1(x))F1(t −λ)
+= p0F0(t) + p1F1(t −λ).
+Applying implicit differentiation, by differentiating both sides of Fλ(qλ) = 1 −α with respect to λ (valid due to Assumption
+2), we get
+∂Fλ
+∂λ (qλ) + ∂Fλ
+∂t (qλ) dqλ
+dλ = 0.
+Since
+∂Fλ
+∂t (t) = p0f0(t) + p1f1(t −λ),
+∂Fλ
+∂λ (t) = −p1f1(t −λ),
+we obtain
+dqλ
+dλ =
+p1f1(qλ −λ)
+p0f0(qλ) + p1f1(qλ −λ).
+At λ = 0 (with q = q0),
+dqλ
+dλ
+
+λ=0
+=
+p1f1(q)
+p0f0(q) + p1f1(q).
+(8)
+Now, let us differentiate equation 7 with respect to λ (valid due to Assumption 3):
+d
+dλ E[|Cλ(X)|] = n0 ˜f0(qλ) dqλ
+dλ + n1 ˜f1(qλ −λ)
+dqλ
+dλ −1
+
+.
+Evaluating at λ = 0 and substituting equation 8,
+d
+dλ E[|Cλ(X)|]
+
+λ=0
+= n0 ˜f0(q)
+p1f1(q)
+p0f0(q) + p1f1(q) + n1 ˜f1(q)
+
+p1f1(q)
+p0f0(q) + p1f1(q) −1
+
+=
+1
+p0f0(q) + p1f1(q)
+
+˜f0(q)f1(q) · p1n0 −˜f1(q)f0(q) · p0n1
+
+.
+Since
+1
+p0f0(q) + p1f1(q) > 0 (strictly positive), we obtain equation 3.
+10
+
+A.2. Derivation of equation 4
+To simplify the notation, define the event Az = Y ∈Yz(X). We have
+Fz(t) = P(s(X, Y ) ≤t|Az)
+= EX,Y |Az[I{s(X, Y ) ≤t}]
+= EX|Az[EY |Az,X[I{s(X, Y ) ≤t}]]
+= EX|Az[P(s(x, Y ) ≤t|Y ∈Yz(X), X)]
+= EX|Az[F X
+z (t)]
+Next, using pX|Az(x) = P(Az|X = x)pX(x)
+P(Az)
+= pz(x)pX(x)
+pz
+, we have
+Fz(t) =
+Z
+F x
+z (t)pX|Az(x)dx
+= 1
+pz
+Z
+F x
+z (t)pz(x)pX(x)dx
+= 1
+pz
+E[pz(X)F X
+z (t)].
+11
+
+B. Additional Experimental Details
+B.1. Training details
+For CIFAR-100 models, we use the following: Batch size: 128; Epochs: 100; Cross entropy loss; Optimizer: SGD; Learning
+rate: 0.1; Momentum 0.9 and weight decay 0.0005.
+Similarly, for Living 17 we use: Batch size: 64; Epochs: 15; Cross entropy loss; Optimizer: Adam; Learning rate: 0.0001.
+For training details regarding Mini-ImageNet, see the following link:
+https://huggingface.co/datasets/timm/mini-ImageNet
+B.2. Definitions of the score functions
+LAC:
+s(x, y) := 1 −ˆπ(x, y)
+(9)
+RAPS:
+s(x, y) :=
+C
+X
+y′=1
+ˆπ(x, y′) 1{ˆπ(x, y′) > ˆπ(x, y)} + λRAP S ·
+ ox(y) −kreg
++ + ˆπ(x, y) · u,
+(10)
+where
+ox(y) =
+{ y′ ∈Y : ˆπ(x, y′) ≥ˆπ(x, y) }
+,
+(x)+ is the positive part of the expression and λRAP S, kreg are hyperparameters, which we set as in the original RAPS
+implementation.
+SAPS:
+S(x, y) :=
+
+
+
+u · ˆπmax(x, y),
+if ox(y) = 1
+ˆπmax(x, y) +
+ ox(y) −2 + u
+
+· λSAP S,
+else
+(11)
+where u is a uniform random variable and ˆπmax(x, y) denotes the maximum softmax. We optimized the hyperparameter
+λSAP S per model-dateset pair to a fixed value that minimizes the average set size (the values where roughly around 0.08).
+B.3. Definitions of the evaluation metrics
+We report metrics over the test set, which we denote by {(x(test)
+i
+, y(test)
+i
+)}Ntest
+i=1 , comprising of the samples that were not
+included in the calibration set. The metrics are as follows.
+• Average set size – The mean prediction set size of the CP algorithm:
+Average Size =
+1
+Ntest
+Ntest
+X
+i=1
+|C(x(test)
+i
+)|.
+• Average number of superclasses - The mean number of distinct superclasses in prediction set of the CP algorithm.
+Average #Superclasses =
+1
+Ntest
+Ntest
+X
+i=1
+|G(x(test)
+i
+)|.
+where G(x) = {g(y) : y ∈C(x)}
+• Marginal coverage - The coverage rate of the prediction sets of the CP algorithm:
+Coverage rate =
+1
+Ntest
+Ntest
+X
+i=1
+1{yi ∈C(x(test)
+i
+)}.
+12
+
+C. Additional Experiments
+C.1. Marginal coverage
+In Tables 3, we present the marginal coverage for each of the methods and all the settings for α = 0.05. Similarly, in Table 4
+we present the marginal coverage for α = 0.1. As expected from Theorem 3.1, the marginal coverage holds.
+Table 3. Marginal coverage of the CP methods for α = 0.05.
+Coverage
+Method
+Mini ImageNet
+CIFAR100 RN50
+CIFAR100 RN34
+L17
+LAC
+Standard
+0.952
+0.950
+0.952
+0.953
+Clustered
+0.950
+0.951
+0.950
+0.950
+AIR
+N/A
+0.951
+0.954
+0.948
+MA-CS
+N/A
+0.950
+0.951
+0.949
+MS-CS
+0.949
+0.950
+0.947
+0.950
+RAPS
+Standard
+0.951
+0.950
+0.951
+0.955
+Clustered
+0.950
+0.950
+0.951
+0.951
+AIR
+N/A
+0.950
+0.952
+0.951
+MA-CS
+N/A
+0.950
+0.949
+0.952
+MS-CS
+0.951
+0.948
+0.948
+0.950
+SAPS
+Standard
+0.952
+0.950
+0.951
+0.950
+Clustered
+0.950
+0.951
+0.949
+0.950
+AIR
+N/A
+0.954
+0.946
+0.950
+MA-CS
+N/A
+0.946
+0.943
+0.951
+MS-CS
+0.948
+0.946
+0.949
+0.951
+Table 4. Marginal coverage of the CP methods for α = 0.1.
+Coverage
+Method
+Mini ImageNet
+CIFAR100 RN50
+CIFAR100 RN34
+L17
+LAC
+Standard
+0.901
+0.899
+0.902
+0.905
+Clustered
+0.895
+0.915
+0.919
+0.902
+AIR
+N/A
+0.905
+0.902
+0.901
+MA-CS
+N/A
+0.900
+0.895
+0.898
+MS-CS
+0.896
+0.897
+0.899
+0.899
+RAPS
+Standard
+0.898
+0.900
+0.903
+0.902
+Clustered
+0.902
+0.917
+0.913
+0.903
+AIR
+N/A
+0.906
+0.907
+0.904
+MA-CS
+N/A
+0.899
+0.899
+0.900
+MS-CS
+0.901
+0.898
+0.900
+0.905
+SAPS
+Standard
+0.900
+0.898
+0.904
+0.899
+Clustered
+0.901
+0.900
+0.900
+0.902
+AIR
+N/A
+0.908
+0.896
+0.900
+MA-CS
+N/A
+0.898
+0.900
+0.898
+MS-CS
+0.898
+0.900
+0.899
+0.900
+13
+
+C.2. The effect of our penalty on conditional coverage
+First, we define our conditional coverage metric:
+Worst class-coverage gap - The highest deviation from the desired 1- α coverage:
+TopCovGap = Maxy∈[C]
+
+1
+|Iy|
+X
+i∈Iy
+1
+n
+y(test)
+i
+∈C
+
+x(test)
+i
+o
+−(1 −α)
+
+,
+where Iy = {i ∈[Ntest] : y(test)
+i
+= y} is the indices of the test examples labeled y.
+In Figure 4, we illustrate how the penalty hyperparameter λ influences both the average set size and the conditional coverage.
+For our experiments, 10% of the data was allocated for calibration and an additional 10% for validation. As λ increases, the
+average set size initially decreases, reaches a minimum, and then begins to rise again. For conditional coverage, we report
+the TopCovGap metric, which remains relatively stable across the range of λ values.
+Figure 4. Average set size (blue) and worst class conditional coverage deviation (red) over hyperparamter λ in RAPS method Model
+Specific with model CIFAR-100 Resnet 50. Average set size is reaching a minimum along with λ while the class conditinal remains
+stabilized.
+Table 5. TopCovGap of the CP methods for α = 0.05.
+TopCovGap
+Method
+m-ImageNet, RN50
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+LAC
+Standard
+0.106
+0.101
+0.114
+0.182
+Clustered
+0.125
+0.102
+0.118
+0.226
+AIR
+N/A
+0.086
+0.123
+0.127
+MA-CS
+N/A
+0.111
+0.125
+0.206
+MS-CS
+0.128
+0.096
+0.109
+0.168
+RAPS
+Standard
+0.122
+0.078
+0.083
+0.160
+Clustered
+0.143
+0.099
+0.092
+0.183
+AIR
+N/A
+0.061
+0.093
+0.097
+MA-CS
+N/A
+0.099
+0.135
+0.169
+MS-CS
+0.136
+0.090
+0.118
+0.160
+SAPS
+Standard
+0.128
+0.106
+0.134
+0.213
+Clustered
+0.136
+0.091
+0.145
+0.218
+AIR
+N/A
+0.070
+0.099
+0.100
+MA-CS
+N/A
+0.118
+0.173
+0.186
+MS-CS
+0.144
+0.095
+0.115
+0.219
+14
+
+Table 6. TopCovGap of the CP methods for α = 0.1.
+TopCovGap
+Method
+Mini ImageNet
+CIFAR100 RN50
+CIFAR100 RN34
+L17
+LAC
+Standard
+0.180
+0.194
+0.169
+0.372
+Clustered
+0.183
+0.186
+0.179
+0.312
+AIR
+N/A
+0.196
+0.211
+0.306
+MA-CS
+N/A
+0.143
+0.183
+0.372
+MS-CS
+0.183
+0.164
+0.192
+0.346
+RAPS
+Standard
+0.129
+0.139
+0.101
+0.224
+Clustered
+0.134
+0.149
+0.140
+0.235
+AIR
+N/A
+0.144
+0.120
+0.102
+MA-CS
+N/A
+0.131
+0.176
+0.261
+MS-CS
+0.163
+0.148
+0.177
+0.277
+SAPS
+Standard
+0.188
+0.156
+0.180
+0.368
+Clustered
+0.180
+0.175
+0.181
+0.302
+AIR
+N/A
+0.146
+0.251
+0.198
+MA-CS
+N/A
+0.135
+0.201
+0.346
+MS-CS
+0.197
+0.158
+0.190
+0.273
+D. Visualization and Ablation Study of the Model-Specific Class Similarity
+D.1. Visualization
+In this section, we examine the cosine class similarity, as described in Section 5, using the class similarity matrix M. The
+image on the left shows the full similarity matrix, in contrast to the 10×10 zoomed-in view presented in the left panel of
+Figure 3. The right image similarly displays the full, unzoomed version of the model-agnostic superclass association matrix.
+(a) Similarity matrix learned by ResNet50 on CIFAR-100.
+(b) Original superclass matrix of CIFAR-100.
+Figure 5. Comparison of the ResNet50 model-specific similarity matrix and the original superclass matrix of CIFAR-100.
+15
+
+D.2. Ablation study
+In this section, we further emphasize the benefits of incorporating model-perceived class similarity. To this end, we compare
+the performance of our MS-CS matrix, which uses a similarity matrix M detailed in Section 5, with a version that uses a
+simple identity matrix M = I, which is model-agnostic and penalizes all non-predicted classes equally. We refer to this
+baseline as Model-Agnostic Diagonal (MA-Diag). Tuning the hyperparameter λ for MA-Diag is done exactly as for MA-CS
+and MS-CS.
+Tables 7 and 8 report the resulting number of superclasses and prediction-set sizes across all dataset–model pairs and CP
+algorithms for α ∈{0.05, 0.1}, respectively. Across all settings and for both evaluation metrics, MA-Diag never outperforms
+either MA-CS or MS-CS. This demonstrates the clear advantage of accounting for inter-class similarity—whether derived
+from semantic structure or captured implicitly by the model’s learned embeddings. We also note that, unlike our method, the
+naive MA-Diag does have reduced average prediction set size compared to the standard LAC (cf. Tables 1 and 2).
+Table 7. Performance comparison of model agnostic and specific methods with α = 0.05.
+#Superclasses ↓
+Size ↓
+Method
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+Mini-ImageNet
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+LAC
+MA-CS
+1.85 (±0.183)
+1.92 (±0.108)
+1.19 (±0.068)
+N/A
+3.17 (±0.424)
+3.51 (±0.749)
+1.71 (±0.183)
+MS-CS
+1.83 (±0.137)
+1.87 (±0.126)
+1.19 (±0.058)
+3.82 (±0.696)
+2.92 (±0.339)
+2.94 (±0.339)
+1.70 (±0.156)
+MA-Diag
+2.29 (±0.285)
+2.38 (±0.285)
+1.26 (±0.059)
+4.93 (±1.050)
+3.74 (±0.785)
+3.74 (±0.724)
+1.77 (±0.177)
+RAPS
+MA-CS
+2.01 (±0.160)
+2.29 (±0.250)
+1.23 (±0.081)
+N/A
+3.50 (±0.305)
+4.52 (±0.501)
+1.97 (±0.295)
+MS-CS
+1.95 (±0.122)
+2.22 (±0.182)
+1.24 (±0.050)
+7.35 (±2.495)
+3.17 (±0.265)
+3.79 (±0.387)
+1.81 (±0.222)
+MA-Diag
+2.40 (±0.144)
+3.13 (±0.186)
+1.32 (±0.071)
+8.63 (±2.256)
+3.65 (±0.282)
+5.23 (±0.389)
+1.87 (±0.236)
+SAPS
+MA-CS
+1.88 (±0.286)
+1.93 (±0.162)
+1.26 (±0.033)
+N/A
+3.14 (±0.464)
+3.32 (±0.271)
+1.94 (±0.147)
+MS-CS
+1.97 (±0.187)
+2.14 (±0.175)
+1.24 (±0.035)
+4.7 (±1.026)
+3.14 (±0.361)
+3.32 (±0.371)
+1.87 (±0.146)
+MA-Diag
+2.29 (±0.203)
+2.36 (±0.176)
+1.32 (±0.105)
+5.61 (±1.441)
+3.38 (±0.393)
+3.52 (±0.346)
+1.99 (±0.357)
+Table 8. Performance comparison of model agnostic and specific methods with α = 0.1.
+#Superclasses ↓
+Size ↓
+Method
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+Mini-ImageNet
+CIFAR100, RN50
+CIFAR100, RN34
+L17, RN50
+LAC
+MA-CS
+1.24 (±0.063)
+1.34 (±0.065)
+1.04 (±0.018)
+N/A
+1.54 (±0.127)
+1.70 (±0.120)
+1.19 (±0.037)
+MS-CS
+1.25 (±0.053)
+1.32 (±0.072)
+1.05 (±0.015)
+1.69 (±0.158)
+1.53 (±0.092)
+1.65 (±0.138)
+1.18 (±0.042)
+MA-Diag
+1.39 (±0.067)
+1.44 (±0.068)
+1.08 (±0.040)
+1.79 (±0.209)
+1.67 (±0.123)
+1.74 (±0.121)
+1.25 (±0.113)
+RAPS
+MA-CS
+1.34 (±0.099)
+1.45 (±0.100)
+1.03 (±0.032)
+N/A
+2.10 (±0.177)
+2.60 (±0.165)
+1.38 (±0.053)
+MS-CS
+1.34 (±0.085)
+1.49 (±0.080)
+1.07 (±0.020)
+2.05 (±0.203)
+1.89 (±0.160)
+2.18 (±0.174)
+1.28 (±0.056)
+MA-Diag
+1.67 (±0.099)
+1.99 (±0.115)
+1.14 (±0.036)
+2.29 (±0.212)
+2.19 (±0.199)
+2.82 (±0.241)
+1.31 (±0.091)
+SAPS
+MA-CS
+1.26 (±0.044)
+1.42 (±0.063)
+1.06 (±0.012)
+N/A
+1.74 (±0.140)
+1.89 (±0.163)
+1.27 (±0.062)
+MS-CS
+1.36 (±0.084)
+1.39 (±0.059)
+1.07 (±0.013)
+1.95 (±0.239)
+1.71 (±0.172)
+1.81 (±0.136)
+1.24 (±0.049)
+MA-Diag
+1.45 (±0.094)
+1.54 (±0.093)
+1.1 (±0.034)
+2.07 (±0.330)
+1.78 (±0.179)
+1.92 (±0.182)
+1.27 (±0.105)
+16

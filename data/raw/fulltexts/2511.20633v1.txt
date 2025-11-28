@@ -1,0 +1,2928 @@
+Reinforcing Action Policies by Prophesying
+Jiahui Zhang1 3 ∗
+Ze Huang1 3 ∗
+Chun Gu1 2 3
+Zipei Ma1 2
+Li Zhang1 2 3 §
+1School of Data Science, Fudan University
+2Shanghai Innovation Institute
+3Logos Robotics
+Abstract
+Vision–Language–Action (VLA) policies excel in aligning language, perception, and robot control.
+However, most VLAs are trained purely by imitation, which overfits to demonstrations, and is brittle
+under distribution shift. Reinforcement learning (RL) directly optimizes task reward and thus
+addresses this misalignment, but real-robot interaction is expensive and conventional simulators
+are hard to engineer and transfer. We address both data efficiency and optimization stability in
+VLA post-training via a learned world model and an RL procedure tailored to flow-based action
+heads. Specifically, we introduce Prophet, a unified action-to-video robot actuation pretrained
+across large-scale, heterogeneous robot data to learn reusable action–outcome dynamics. It is able
+to few-shot adapt to new robots, objects, and environments, yielding a rollout-ready simulator.
+Upon Prophet, we reinforce action policies with Flow–action–GRPO (FA-GRPO), which adapts
+Flow-GRPO to operate on VLA actions, and with FlowScale, a stepwise reweighting that rescales
+per-step gradients in the flow head. Together, Prophet, FA-GRPO, and FlowScale constitute
+ProphRL, a practical, data- and compute-efficient path to VLA post-training. Experiments show
+5–17% success gains on public benchmarks and 24–30% gains on real robots across different VLA
+variants.
+Correspondence §: Li Zhang at lizhangfd@fudan.edu.cn
+Project page: https://LogosRoboticsGroup.github.io/ProphRL
+1
+Introduction
+Vision–Language–Action (VLA) policies [6, 7, 32, 52, 58, 63, 69, 74] control robots from language instructions
+and visual observations, and now operate over image sequences with multistep action generation [7, 32, 63]
+rather than single-frame instruction following. Despite the progress, VLA training remains imitation-heavy
+and suffers from objective-metric misalignment, i.e., likelihood-based objectives do not optimize long-horizon
+task reward. Policies become brittle under distribution shift and accumulate errors over horizons.
+To mitigate these issues, recent works add reinforcement learning (RL) post-training to VLA policies [12,
+34, 44, 49, 57], optimizing task-reward–aligned objectives rather than demonstration likelihood. In practice,
+however, online RL in robotics faces high interaction cost, limited parallelism, and frequent human-in-the-loop
+overhead. Classical simulators require substantial engineering and often show visual domain transfer gaps for
+RGB-based policies. Offline RL, in turn, lacks closed-loop data from the current policy, weakening long-horizon
+credit assignment. Data-driven world models offer a middle ground: they generate action-conditioned futures
+at scale, enabling policies to practice in imagination while reusing the same visual interface as VLAs.
+However, most existing efforts [19, 27, 28, 38, 39, 59, 75] remain confined to single-scene world models and, even
+when paired with VLA policies, primarily use them as data augmentors rather than truly adaptable simulators,
+leaving open how such models generalize to new real-world scenes and goals. A few works [1, 29, 35, 66] that
+do employ world models as simulators for post-training VLA largely focus on replacing an existing simulator
+∗Equal contribution.
+1
+arXiv:2511.20633v1  [cs.RO]  25 Nov 2025
+
++5.9
++12.1
++17.7
++4.2
++8.0
++14.9
++24.6
++30.0
++27.5
+Results on SimplerEnv & Real-robot
+𝐸
+Generated or real history frames
+History latent packing
+History latent
+Condition latent with noised future
+Conditional frame
+𝐸
+Diffusion Transformers (DiT)
+History-aware Self-
+attention
+Cross-attention
+Q
+KV
+Denoised
+future latent
+Action condition feature
+Future action frame (Optional)
+𝒄𝟑= [𝒑𝟑, 𝒆𝟑, 𝒈𝟑] 𝒄𝟒= [𝒑𝟒, 𝒆𝟒, 𝒈𝟒]
+Future scalar action
+𝐸
+Prophet - A unified action-to-video robot actuation
+Generated future robot 
+manipulation
+𝐷
+Generated rollouts
+Each gripper keeps moving right 2mm per-frame
+Each gripper keeps moving forward 2mm per-frame
+Conditional frame
+Precise robot control, by pretrained Prophet 
+Fast generalization, by fine-tuned Prophet on 150 samples exclude “yellow cube” in task
+Put the yellow cube on top of the blue cube (unseen object in fine-tuning) 
+Failure trajectory using simulated action as input
+Real-world adaptation, by fine-tuned Prophet on 100 samples from self-collected data
+Stack the bowls (unseen trajectory in fine-tuning)
+DROID
+Open-X
+AgiBot
+Prophet
+Limited new environment data 
+Fine-tuning
+Pretraining
+Fast generalization to new manipulations
+Generation
+World model pretraining and fine-tuning
+31M+ sampled trajectories
+Reinforcing VLA
+Algorithm
+Aggregate over 𝒌
+Per-d ratio
+PPO-clip & sum over d
+FA-GRPO
+FlowScale
+5× faster, 30% higher
+From noise 
+schedule
+Normalize-Mix-Clip; 
+stop gradient
+𝑶𝒕
+𝑶𝒕+𝟏
+𝑨𝟎
+𝓝(𝟎, 𝑰)
+𝑨𝝉𝟏
+𝑨𝝉𝟐
+𝑨𝝉𝑲= 𝑨𝟏
+Denoising process
+Prophet
+VLA policy
+Reward model
+Reward 
+signal
+Action
+Rollouts
+Figure 1 ProphRL uses a world model as a real-world–facing simulator to post-train VLA policies. Our
+world model Prophet extends a video generator with history-aware mechanism and dual action conditioning, and
+is pretrained on large-scale robot trajectories to model action-to-video dynamics. The pretrained Prophet enables
+‘prophesying’ precise, physically plausible long-horizon rollouts, and can be rapidly adapted via few-shot fine-tuning to
+new environments, objects, and trajectories. Upon Prophet, we introduce the FA-GRPO with FlowScale RL algorithm
+to more stably and efficiently improve policies. Together, our training paradigm turns diverse logged data and a single
+pretrained world model into a unified engine for scalable, data-efficient, and safely improvable VLA systems.
+with a learned one, and do not tackle the harder problem of making world models practical RL backends for
+real-world robots. This leaves open the core question of how to acquire a general-purpose, few-shot adaptable
+world model that remains useful in the real world.
+In this work, we argue that a practical goal is to learn a world model that can be few-shot adapted to new
+embodiments, tasks, and scenes under realistic data and compute budgets. Such a rollout-ready model provides
+a practical substrate for RL, delivering action-aligned long-horizon feedback without physical risk. To this end,
+we present Prophet, an action-conditioned world model built upon a video generator that predicts long-horizon
+manipulation rollouts from first-frame observation and multi-step action inputs. Our Prophet is pretrained
+over diverse manipulation datasets to learn action-to-outcome dynamics, then adapted with few-shot to new
+situations. To assess action-conditioning fidelity, we introduce an optical flow-guided evaluation protocol that
+measures end-effector accuracy and interaction fidelity beyond conventional video quality metrics.
+Within this substrate, we develop ProphRL, which couples Prophet with FA-GRPO and FlowScale to reinforce
+VLA policies: FA-GRPO aligns Flow-GRPO [43] ratios with environment-level actions rather than individual
+flow steps, while FlowScale reweights per-step gradients using the noise schedule to reduce score-driven
+heteroscedasticity and stabilize updates.
+Our contributions are as follows: (i) We introduce Prophet, a history-aware, action-conditioned world model that
+produces action-aligned, long-horizon manipulation rollouts and interfaces directly with the VLA observation
+space; (ii) We conduct large-scale pretraining across heterogeneous robot datasets followed by few-shot
+adaptation to new environments, objects, and trajectories, yielding a rollout-ready world simulator; (iii) We
+propose an optical flow-guided evaluation protocol that assesses end-effector trajectories and interaction fidelity,
+complementing conventional quality metrics; (iv) We develop FA-GRPO and FlowScale, an RL post-training
+scheme tailored to flow-based action heads for VLA policies.
+2
+
+2
+Related Works
+World models for robot manipulation Prior work uses text-conditioned video generation [9, 16, 30], sometimes
+with coarse action cues such as move left or go up [30, 67]. These models leverage web-scale priors for
+language grounding and scene understanding, but their loose conditioning limits controllability, making
+them ill suited for manipulation policies that require precise geometry and reliable dynamics. More recent
+works [19, 27, 28, 38, 39, 59, 75] condition on low-level robot signals, such as end-effector poses or joint
+trajectories, to generate future manipulation videos and sometimes serve as simulators for downstream
+control [1, 29, 35, 66]. Yet they still struggle with long-horizon rollouts and realistic failure modes, and often
+require substantial new data to adapt beyond training domains. Evaluation typically relies on generic video
+metrics rather than checking action-conditioned correctness of end-effector motion and contact, leaving their
+utility for control-centric applications unclear.
+RL for VLA policies Policy-gradient methods [18, 20, 40, 54, 55, 64] have long guided on-policy robotics under
+data and safety constraints [51, 73]. Across foundation models, RL algorithms [13, 24, 37, 43, 56, 68] enabled
+large-scale post-training on outcome-aligned signals. Recent works [34, 44] transfer these recipes to RL
+post-training, typically optimizing log-likelihood objectives on image-conditioned action sequences. For VLA
+policies [6, 11, 25, 45, 58] with flow-based action heads, several studies [35, 72] modify sampling to make flows
+RL compatible but leave the update signal unchanged, so score-driven gradient heteroscedasticity persists and
+long-horizon stability remains limited, often alongside reliance on task-specific simulators.
+3
+Methodology
+3.1
+Overall training paradigm
+Our overall training paradigm ProphRL, couples Prophet with VLA post-training, as shown in Fig. 2. At
+each outer step, the policy predicts an action chunk from instruction and initial image. Prophet generates a
+clip conditioned on this chunk and the initial image. The clip is fed back to the policy and Prophet, enabling
+long-horizon closed-loop rollouts. A frozen VLM-based reward model [4] scores each rollout to produce
+group rewards, using a prompt template. Finally, we optimize the policy with FA-GRPO (Eq. (18)) using
+group-normalized advantages, while FlowScale (Eq. (19)) reweights denoising steps to stabilize gradients.
+3.2
+World model
+Preliminaries We build Prophet on a latent video diffusion pipeline. A video autoencoder encodes a real clip
+x1:T into latents z0 = E(x1:T ) and approximately reconstructs it via ˆx1:T ≈D(z0). A DiT denoiser then
+learns a conditional diffusion model over z0: at step t we add Gaussian noise to obtain zt, and the denoiser
+takes (zt, t, f), where f denotes conditioning, to iteratively predict a clean latent ˆz0 that is finally decoded
+back to video. The denoiser is optimized with the standard latent-space noise prediction objective:
+Ldiff = Ez0,ϵ∼N (0,I),t
+h ϵ −ϵθ
+ zt, t, f
+2
+2
+i
+,
+(1)
+where zt = √¯αtz0+ϵ√1 −¯αt. z0 is the clean latent from the encoder, t is a diffusion step, f is the conditioning
+feature, and ϵθ predicts the injected noise, teaching the model to invert the noising process under condition.
+3.2.1
+Definition of action
+For each trajectory we represent the low-level control commands as c ∈RT ×N×D, where T is the time horizon,
+N is the number of end-effectors, and D is the action dimension. To enable cross-dataset pretraining, we fix
+N to be the maximum number of end-effectors across all datasets (i.e., 2 on AgiBot [10]), and pad trajectories
+with fewer end-effectors with zeros along the end-effector dimension. These padded entries do not correspond
+to any physical end-effector but allow us to keep a single, shared action parameterization.
+Each per-step, per-end-effector action is a 7-dim vector (i.e., D = 7):
+ct,n =
+
+∆p⊤
+t,n, ∆e⊤
+t,n, gt,n
+⊤∈R7,
+t = 1, . . . , T,
+n = 1, 2,
+(2)
+3
+
+Put the cube in the bowl.
+VLM
+Flow action head
+VLA policy
+Instruction
+Prophet – 
+world model
+Video autoencoder
+Video decoder
+Diffusion Transformers
+Initial frame
+Rollout with success manipulation
+Rollout with failure manipulation
+Reward model
+You will be shown a video. Determine 
+if the robot succeeds at put the cube in 
+the bowl. Output the final answer 
+strictly as one of: Success or Failure.
+Future
+frames
+Close-loop update initial frame and history buffer 
+VLA policy
+FA-GRPO & FlowScale
+Predicted action chunk
+Action frames (optional)
+History buffer & 
+initial frame
+Close-loop update 
+Optimize
+Figure 2 ProphRL Training paradigm. Given an initial frame and instruction, the policy predicts an action chunk
+and Prophet generates the future robot rollout, updating the policy input, current frame, and history buffer until the
+episode ends. An offline reward model scores each full trajectory, and the policy is reinforced with FA-GRPO and
+FlowScale using these ‘prophesied’ and realistic rollouts.
+where ∆pt,n ∈R3 is a translational delta, ∆et,n ∈R3 is a rotational delta expressed in Euler angles, and
+gt,n ∈[0, 1] denotes the open ratio of the gripper.
+During large-scale pretraining, we parameterize the motion as a local delta pose with respect to the previous
+end-effector frame. Let ξt−1,n ∈SE(3) denote the transform of end-effector n at time t −1 in the world
+coordinate system. The action ct,n corresponds to a target transform ξt,n obtained by applying a small
+rigid-body motion ∆ξt,n in the local frame of ξt−1,n:
+∆ξt,n =
+ ∆pt,n, ∆et,n
+
+,
+ξt,n = ξt−1,n ◦∆ξt,n,
+(3)
+where ∆pt,n and ∆et,n are interpreted as a translation and a rotation around the end-effector origin at time
+t −1. This delta formulation makes the action space more homogeneous across tasks and datasets.
+For fine-tuning, we retain the same 7-dim structure but adapt the semantics of the deltas to match the low-level
+controller used in each environment. For example, in simulator-based LIBERO, the action is interpreted as
+a servo command directly consumed by the environment, whereas on real-robot and BRIDGE the action
+corresponds to the difference between consecutive absolute poses (i.e., ξt,n −ξt−1,n in position and Euler
+angle). In all cases, the gripper gt,n remains a normalized scalar indicating the desired degree of opening.
+3.2.2
+Construct action frames
+To provide Prophet with a compact yet geometry–aware representation of the robot motion, we construct
+an action frame by projecting the end-effector action onto the camera image plane and rendering a 2D
+visualization on a black background, following [28, 39]. For each time step t, we assume access to: (i) the
+camera intrinsics K ∈R3×3; (ii) the camera extrinsics Et ∈SE(3) that transform 3D points from the world to
+the camera coordinates; (iii) the end-effector position pt,j ∈R3 and rotation Rt,j ∈R3×3 for each end-effector
+j; (iv) a scalar control signal gt,j (i.e., gripper opening degree) used to encode the action magnitude.
+4
+
+Figure 3 Action frame visualization. The first row shows RGB frames, the middle row shows the constructed action
+frames, and the last row shows the alignment between the visualized action frames and the image pixels.
+Let {nx, ny, nz} denote three axis-aligned unit vectors in the end-effector frame, scaled by a constant axis
+length l:
+nk = l vk,
+k ∈{x, y, z},
+(4)
+where vk is the k-th canonical basis vector. The corresponding 3D points in the world frame consist of the
+end-effector origin and the tips of the three axes
+p0
+t,j = pt,j,
+pk
+t,j = pt,j + Rt,jnk,
+k ∈{x, y, z}.
+(5)
+These points are transformed into the camera coordinates:
+xk
+t,j = Et
+pk
+t,j
+1
+
+∈R3,
+(6)
+and then projected onto the image plane:
+˜uk
+t,j = K xk
+t,j,
+uk
+t,j =
+ 
+˜uk
+t,j,x
+˜uk
+t,j,z
+, ˜uk
+t,j,y
+˜uk
+t,j,z
+!
+,
+(7)
+where uk
+t,j are 2D pixel coordinates and z0
+t,j = x0
+t,j,z denotes the depth of the end-effector origin in the camera
+frame. To make the visualization depth-aware, we set the radius of the rendered disk to be a monotonically
+decreasing function of the depth:
+r(z0
+t,j) = clip
+ 
+rref · zref
+z0
+t,j
+, rmin, rmax
+!
+,
+(8)
+where rref is the radius at a reference depth zref, and rmin, rmax bound the radius range. We also map the
+scalar control signal gt,j to a color using a fixed colormap CM(·) defined over a value range [gmin, gmax]:
+colort,j = CM(gt,j) ∈R3.
+(9)
+Finally, we render the action frame on a black canvas ct ∈RH×W ×3. For each end-effector j, we draw a filled
+disk with radius r(z0
+t,j) and color colort,j centered at u0
+t,j, and overlay a small white point at the center and
+three colored line segments from u0
+t,j to uk
+t,j, k ∈{x, y, z}, indicating the local orientation.
+In practice, we draw the colored disk onto a separate overlay and alpha-blend it with the line drawing to
+obtain a smooth appearance. Fig. 3 visualizes the action frames constructed on AgiBot [10].
+5
+
+3.2.3
+Action conditioning
+Our Prophet conditions on actions at two levels: (i) a global chunk-level embedding of the scalar action stream,
+and (ii) an optional latent embedding of the action frames.
+Notation In practice, each per-step action is a tensor of shape (N, D) over N end-effectors (Sec. 3.2.1), and
+we pad N to the maximum number of end-effectors across datasets. For notational simplicity, we fold the
+end-effector dimension and write actions as c1:T ∈RT ×D. The explicit end-effector index is omitted to keep
+the action-conditioning formulas concise.
+Scalar action stream Given a per-step action sequence c1:T ∈RT ×D, we first flatten the whole chunk into a
+single vector of shape [T × D] and map it to a global embedding via an MLP, fsa = ϕ(c1:T ) ∈RDm, where
+Dm is the DiT channel dimension.
+Let ˜t ∈RTl×Dm denote the standard timestep embeddings produced by the DiT time-embedder. We inject
+the scalar action conditioning by simply adding the global action embeddings, ˜t = ˜t + fsa. Broadcasting over
+the temporal dimension is applied in practice.
+Action frame stream When action frames c1:T ∈RT ×H×W ×3 are available, we additionally condition on their
+latent representation.
+Let zaf = E(c1:T ) ∈RTl×Cl×Hl×Wl denote the latent action video obtained by encoding action frames. The
+lightweight 3D projection ψ first maps zaf into the DiT channel space Dm via a 1 × 1 × 1 convolution, followed
+by depthwise separable 1 × 3 × 3 and 1 × 1 × 1 convolutions over space:
+u = Conv1×1×1(zaf),
+u = DWConv1×3×3(u),
+u = PWConv1×1×1(u).
+(10)
+We then average-pool u ∈RTl×Dm×Hl×Wl over the spatial dimensions and add a sinusoidal positional encoding
+along temporal dimension:
+ht = AvgPoolHl,Wl(ut) + PE(t),
+ht ∈RDm.
+(11)
+Finally, an MLP maps h ∈RT ×Dm to final action frame conditioning feature faf ∈RTl×Dm, and added to the
+timestep embeddings ˜t = ˜t + fsa + faf.
+3.2.4
+History-aware mechanism
+We maintain a low-resolution memory over past latent frames using a FramePack-style [70, 71] module.
+Given a history latent zhist ∈RTh×Cl×Hl×Wl computed by video autoencoder from the history buffer h−Th:0,
+the history-aware module applies several 3D average-pooling and 1 × 1 × 1 projection blocks at different
+spatio-temporal strides, and concatenates all resulting tokens into a memory matrix M ∈RLh×Dm. Two
+linear layers map M to additional key and value vectors (Kmem, Vmem), which are fed into all DiT blocks as
+an external concatenated memory ˜Q = Attn(Q, [Kmem; K], [Vmem; V ]).
+The history-aware mechanism provides long-range temporal context for stable geometry and contact evolution
+while keeping computation predictable.
+3.2.5
+Long rollout generation
+We generate long videos autoregressively in chunks. Starting from the first observed frame, we initialize the
+history buffer with this frame. Given an action rollout for the first segment, the model produces a short clip.
+The last generated frame is then used as the start frame for the next segment, and the newly generated clip is
+compressed into the history. We repeat this procedure to maintain temporal continuity while scaling to long
+horizons. A detailed long rollout generation with history buffer updating procedure is shown in Alg. 1.
+3.2.6
+Optical flow-guided evaluation protocol
+Prior action-conditioned world models are usually evaluated only with video metrics (e.g., PSNR), which
+capture perceptual fidelity but not whether actions are executed correctly or physical interactions follow the
+6
+
+Algorithm 1 Closed-loop rollout with Prophet given streaming action chunks
+Require: History length Th, initial RGB frame x0, chunk size C
+1: Initialize history buffer H ←[x0, x0, . . . , x0] (length Th)
+2: for s = 1, 2, 3, . . . do
+▷iterate over incoming action chunks
+3:
+Receive current action chunk As = [c(s)
+1 , . . . , c(s)
+C ]
+4:
+H ←last Th frames in H
+▷history input
+5:
+ˆx1:C ←Prophet(x0, As, H)
+▷predict C future frames
+6:
+x0 ←ˆxC
+▷last generated frame as next start frame
+7:
+Append [ˆx1, . . . , ˆxC] to H
+8:
+Keep only the most recent Th frames in H
+9:
+if no more action chunks are provided then
+10:
+break
+11:
+end if
+12: end for
+intended control. To address this, we introduce an optical flow–based protocol that compares motion fields
+between real videos and action-conditioned rollouts. Given a real video x1:T and a rollout ˆx1:T , we compute
+dense optical flow between consecutive frames using the Farnebäck estimator [17] after grayscale conversion
+ut = Flow(xt, xt+1),
+ˆut = Flow(ˆxt, ˆxt+1). We measure magnitude agreement with the end-point error:
+EPEt =
+1
+HW
+X
+x
+∥ut(x) −ˆut(x)∥2,
+(12)
+and directional alignment with the cosine similarity:
+cost =
+1
+|Vt|
+X
+x∈Vt
+⟨ut(x), ˆut(x)⟩
+∥ut(x)∥2∥ˆut(x)∥2 + ε,
+(13)
+where Vt = {m : ∥ut(x)∥2 > τ ∧∥ˆut(x)∥2 > τ} filters near-static pixels, τ is a small threshold. We report the
+mean and median endpoint error EPE, ]
+EPE, the mean and median flow-direction cosine cos, f
+cos, aggregated
+over t, which jointly capture control-relevant motion magnitude and direction. Such metrics compare motion
+fields rather than appearance, yielding an appearance-invariant, control-relevant assessment of whether the
+conditioned actions induce the correct end-effector and contact dynamics.
+3.3
+RL-based VLA post-training
+Trajectory layout We represent a batch of episodic rollouts as a tensor of shape [B, S, K, CH, D], where B is
+the batch size, S indexes outer model inference steps (environment steps and policy calls along the trajectory),
+K is the number of denoising steps in the flow-based action head, CH is the number of action chunks emitted
+per policy call, and D is the action dimension per chunk. For each episode i ∈{1, . . . , B} and outer step
+s ∈{1, . . . , S}, the policy receives an observation o(i)
+s
+and outputs a chunked action {a(i)
+s,c,d}c=1,...,CH; d=1,...,D.
+Each pair (s, c) corresponds to one low-level control command executed sequentially between two policy calls,
+in all our experiments D = 7, encoding end-effector translation, rotation, and a scalar gripper command.
+The chunk index c lets the policy emit a short open-loop sequence of commands per observation o(i)
+s , which
+empirically stabilizes long-horizon control.
+Flow action head and internal steps The flow-based action head factorizes the per-chunk, per-dimension
+log-likelihood across internal steps:
+log πθ(as,c,d | os) =
+K
+X
+k=1
+log π(k)
+θ (as,c,d | os),
+(14)
+where π(k)
+θ
+is the likelihood factor contributed by internal step k. The index k is internal to the flow head
+and does not advance environment time: for fixed (s, c), the K denoising updates all condition on os and
+7
+
+jointly parameterize a single environment-level action as,c. In our RL objective, we first aggregate over k as
+in (14), keep dimensions d factorized, and treat each pair (s, c) as one environment action. PPO-style ratios
+are computed per triplet (s, c, d).
+Variable-length episodes and masking. Episodes have variable lengths. Let Ti be the horizon of episode i in
+outer steps. We store trajectories in tensors of fixed length S and pad remaining slots with dummy transitions.
+Early termination is handled by a binary mask:
+M (i)
+s,c ∈{0, 1},
+M (i)
+s,c =
+(
+1,
+s ≤Ti,
+0,
+s > Ti,
+(15)
+which zeroes out all loss contributions after the episode ends. In practice, we broadcast M (i)
+s,c over k and d,
+and multiply both policy losses and advantages by this mask. If an episode terminates between chunks, we
+conservatively set M (i)
+s,c = 0 for all chunks c after the first terminal chunk, so that no gradient is propagated
+beyond the first invalid action.
+3.3.1
+Flow-action-GRPO (FA-GRPO)
+Vanilla Flow-GRPO [43] treats each internal flow step k as an atomic action and constructs PPO ratios per
+(s, c, k) before summing over k. To better match the environment, FA-GRPO instead aggregates all internal
+flow steps into an action-level log-probability and then forms ratios per dimension of each action chunk, i.e.,
+at the level of (s, c, d) while still treating each (s, c) as one environment action.
+Recall from Eq. (14) that the flow-based action head factorizes the per-chunk, per-dimension log-likelihood
+across internal steps. For each environment step s, chunk c, and action dimension D, we define the action-level
+log-probabilities under the current and behavior policies:
+ℓs,c,d = log πθ(as,c,d | os) =
+K
+X
+k=1
+log π(k)
+θ (as,c,d | os),
+ℓold
+s,c,d = log πold(as,c,d | os),
+(16)
+and a per-dimension PPO ratio:
+rs,c,d = exp
+ ℓs,c,d −ℓold
+s,c,d
+
+= πθ(as,c,d | os)
+πold(as,c,d | os) .
+(17)
+Given action-level advantages ˆAs,c (one advantage per outer step and chunk, broadcast over d), we optimize a
+clipped-ratio objective with a KL regularizer:
+LFA-GRPO(θ) = −E
+h X
+s,c,d
+Ms,c fclip
+ rs,c,d, ˆAs,c
+i
++ β KL
+ πθ ∥πref
+
+,
+(18)
+where fclip(r, A) = min
+
+rA, clip(r, 1 −εlow, 1 + εhigh) A
+	
+, πref is the frozen supervised VLA policy, and the
+mask Ms,c zeroes out contributions from padded or terminated timesteps. The KL term is evaluated on the
+same factorized per-dimension action distribution, i.e., over all (s, c, d), and aggregated with the mask Ms,c.
+Compared to the Flow-GRPO objective, Eq. (18) only changes how internal flow steps are handled: instead
+of treating each (s, c, k) as a separate action with its own ratio and advantage, we sum the log-likelihood
+contributions over k into ℓs,c,d and use a single advantage ˆAs,c shared across all d and k for the same (s, c).
+This leaves the underlying stochastic policy over actions unchanged; it only changes how gradients from
+internal flow steps are aggregated, by broadcasting one scalar advantage per environment action over all
+dimensions and internal steps.
+8
+
+Algorithm 2 FlowScale weight computation and application (per mini-batch)
+1: Input: log-probs logp_elem ∈RB×S×K×CH×D, old log-probs old_logp_elem, advantages ˆAs,c, action
+mask Ms,c, per-step std std ∈RB×S×K×1×1
+2: Hyperparameters: p, α, wmin, wmax, ε
+3: σ2 ←std.squeeze(−1, −2)2
+▷σ2 ∈RB×S×K
+4: ˜w ←(σ2 + ε)p
+▷power-scaled weights
+5: ¯w ←˜w/meank( ˜w)
+▷normalize so
+1
+K
+P
+k ¯ws,k = 1
+6: wmix ←α · 1 + (1 −α) ¯w
+7: w ←clip(wmix, wmin, wmax)
+8: w ←stop_gradient(w)
+9: Broadcast w to shape [B, S, K, CH, D] and multiply into ˆAs,c (or equivalently into log π(k)
+θ )
+10: Compute the FA-GRPO loss of Eq. (18) using the weighted advantages and mask Ms,c
+3.3.2
+Intrinsic stepwise reweighting (FlowScale)
+SDE-based flow heads exhibit highly non-uniform gradient magnitudes across internal steps k: early noisy
+steps and late refinement steps affect the overall action log-likelihood in very different ways. Without any
+correction, low-noise steps (large k, small t) tend to dominate the update. FlowScale introduces a state- and
+step-dependent weight ws,k that modulates each flow step’s contribution while keeping the action-centric
+surrogate of Eq. (18) unchanged.
+At the level of the scalar objective, we formulate the FlowScale loss as:
+LFlowScale(θ) = −E
+h X
+s,c,d
+Ms,c fclip
+ rs,c,d, ws,k ˆAs,c
+i
++ β KL
+ πθ ∥πref
+
+,
+(19)
+where rs,c,d is the per-dimension PPO ratio from Eq. (17). Here ws,k should be understood as a stepwise
+modulation of the contribution of each internal flow step k to the gradient of the aggregated log-probability,
+we treat it as a stop-gradient coefficient and do not change the underlying stochastic policy over actions.
+Per-step noise scale For each outer step s and internal flow step k, we obtain a scalar noise scale from the
+diffusion/flow time schedule rather than predicting it with the network. We use a noise schedule {σj}K
+j=0 and
+a normalized time variable ts,k ∈[0, 1]. The standard deviation of the injected noise is, up to a constant:
+stds,k ∝
+q
+σ(ts,k)
+p
+|∆t|,
+(20)
+implemented by combining a lookup table of σ values with the current time ts,k. After squeezing channel
+dimensions we set:
+σ2
+s,k := std2
+s,k
+⇒
+σ2 ∈RB×S×K,
+(21)
+and use σ2
+s,k as a scalar proxy for the local noise level (or uncertainty) of the flow head at step k.
+Weight construction Given σ2
+s,k, FlowScale constructs a normalized and clipped weight ws,k with a simple
+normalize–mix–clip rule:
+ws,k = clip
+
+(1 −α)
+˜ws,k
+1
+K
+PK
+j=1 ˜ws,j
++ α, wmin, wmax
+
+,
+˜ws,k = (σ2
+s,k + ε)p,
+(22)
+where ε > 0 avoids numerical issues, p > 0 controls how strongly weights depend on the noise level, α ∈(0, 1)
+mixes the normalized weights with a uniform baseline, and wmin, wmax > 0 bound the effective reweighting.
+By construction
+1
+K
+P
+k ws,k = 1 for each s, so the average scale of the gradient is preserved. Because σs,k
+decreases over time, earlier, noisier steps are relatively upweighted and later, low-noise refinement steps
+are downweighted, which balances per-step gradient contributions across k. The final ws,k are treated as
+constants during backpropagation (stop-gradient), so FlowScale only rescales gradients and does not change
+the optimization target.
+9
+
+In implementation, we broadcast ws,k to shape [B, S, K, CH, D] and multiply it into either the advantages
+ˆAs,c or the per-step log-probabilities log π(k)
+θ
+before aggregating over k. These two views are equivalent under
+the factorization in Eq. (14). Alg. 2 summarizes the computation in PyTorch-style pseudocode.
+3.3.3
+Theoretical rationale and derivations
+FlowScale is a heuristic reweighting of per-step flow gradients. Here we sketch a simple rationale based on a
+Gaussian view of the per-step likelihood and how score norms scale with the noise level σs,k.
+Score norm versus noise scale. Fix an outer step s and flow step k, and suppress the indices (s, c, d).
+Approximate the per-step likelihood factor π(k)
+θ
+by an isotropic Gaussian in action space with mean µs,k and
+variance σ2
+s,kI:
+log π(k)
+θ (a | os) = −
+1
+2σ2
+s,k
+∥a −µs,k∥2 + const.
+(23)
+We treat σs,k as fixed by the noise schedule (Sec. 3.3.2) and focus on gradients with respect to the mean µs,k.
+Under this simplification, the score with respect to µs,k is:
+∇µs,k log π(k)
+θ (a | os) = a −µs,k
+σ2
+s,k
+.
+(24)
+If we further assume that a ∼N(µs,k, σ2
+s,kI), then a −µs,k has covariance σ2
+s,kI and the expected squared
+norm of the score scales as:
+E
+
+∥∇µs,k log π(k)
+θ ∥2
+= E
+
+∥a −µs,k∥2
+/ σ4
+s,k ∝σ−2
+s,k.
+(25)
+Thus, in this Gaussian setting, flow steps with smaller noise σs,k tend to produce larger score norms.
+Gradient decomposition across flow steps. Ignoring clipping and KL terms for simplicity, a linearized view of
+the FA-GRPO with FlowScale gradient can be written as:
+∇θL ≈−E
+"X
+s,c
+Ms,c ˆAs,c
+K
+X
+k=1
+ws,k S(k)
+s,c
+#
+,
+S(k)
+s,c :=
+D
+X
+d=1
+∇θ log π(k)
+θ (as,c,d | os),
+(26)
+where S(k)
+s,c denotes the contribution of flow step k to the policy gradient at (s, c), and ws,k are the FlowScale
+weights from Sec. 3.3.2. For a fixed (s, c), Eq. (25) suggests that, up to reparameterization:
+E
+
+∥S(k)
+s,c ∥2
+∝σ−2
+s,k,
+(27)
+i.e., flow steps with a smaller noise scale σs,k tend to dominate the gradient norm.
+A variance-balancing choice of weights Motivated by Eq. (27), we consider a variance-balancing criterion:
+for a fixed (s, c), choose weights ws,k so that the expected contribution of each flow step to the gradient norm
+is comparable. Approximating different steps as uncorrelated, we require:
+E
+
+∥ws,k S(k)
+s,c ∥2
+= w2
+s,k E
+
+∥S(k)
+s,c ∥2
+≈constant in k.
+(28)
+Using Eq. (27), a sufficient choice is:
+w⋆
+s,k ∝σs,k,
+(29)
+so that w⋆2
+s,k σ−2
+s,k is constant across k. This suggests using weights that grow with the noise scale, downweighting
+low-noise (high-score) steps and upweighting noisier steps. In our implementation, we parameterize the weights
+as ˜ws,k = (σ2
+s,k + ε)p with p = 0.5, which gives ˜ws,k ∝σs,k and is consistent with Eq. (29).
+Normalize–mix–clip as a diagonal preconditioner. The normalize–mix–clip rule in Eq. (22) adds three practical
+modifications to w⋆
+s,k: (i) Normalization enforces
+1
+K
+P
+k ¯ws,k = 1 for each (s, batch), so the mean scale of
+the policy gradient over flow steps is preserved and only relative differences between steps are changed. (ii)
+Uniform mixing with strength α prevents collapse to a single dominant step by pulling all weights towards one,
+10
+
+and (iii) Clipping to [wmin, wmax] bounds the effective per-step change in step size. Together, these operations
+can be viewed as a simple diagonal preconditioner along the flow-step dimension: FlowScale rescales gradients
+from different internal steps without changing the overall learning rate or the action-level surrogate in Eq. (18).
+This analysis is only approximate and serves as a motivating heuristic. In practice, the full training dynamics
+also depend on clipping, KL regularization, and correlations between flow steps.
+3.4
+Reward model
+From RM outputs to advantages. The reward model (RM) operates at the trajectory level, given a rollout i
+with observations and actions τ (i) = {o(i)
+s , a(i)
+s,c}s,c and task text texti, the RM produces a scalar score:
+Ri = fRM
+ τ (i), texti
+
+.
+(30)
+For LIBERO, Ri ∈{0, 1} is a binary success signal; for BRIDGE and real-robot rollouts, Ri comes from a
+VLM-based classifier.
+Following GRPO, we apply group-wise normalization over a batch G of rollouts:
+˜Ri = Ri −µG
+σG + εR
+,
+µG =
+1
+|G|
+X
+j∈G
+Rj,
+σ2
+G =
+1
+|G|
+X
+j∈G
+(Rj −µG)2,
+(31)
+with a small constant εR > 0 for numerical stability. The normalized score ˜Ri is broadcast to all chunks (s, c)
+within trajectory i and used as the advantage:
+ˆA(i)
+s,c = ˜Ri M (i)
+s,c,
+(32)
+where M (i)
+s,c is the padding/termination mask from Sec. 3.3. These advantages are plugged into the FA-GRPO
+and FlowScale objectives (Eqs. (18) and (19)) in place of the scalar ˆAt in GRPO.
+3.4.1
+RMs for LIBERO
+For LIBERO, we can roll out policies in the physics simulator and obtain ground truth success labels and
+episode lengths. We collect rollouts with a horizon of 500 frames per episode, render each rollout as a video,
+and record a binary success label and the number of environment steps until success. Using these labeled
+videos, we fine-tune a Qwen2.5-VL-7B [4] as a binary RM: given a task description and frames resized to
+224 × 224, the model predicts whether the task is completed (and an estimated completion step for temporal
+masking). At inference, we uniformly subsample 50 frames per trajectory, evaluate the RM five times with
+stochastic decoding via vLLM [33], and take the majority vote as the final label. This binary outcome is
+mapped to Ri in Eq. (30) for LIBERO policies trained both in the simulator and in the world model.
+Directly applying a simulator-trained RM to world-model rollouts is suboptimal, since world-model videos
+differ in appearance and long-horizon dynamics. We therefore adopt a simple domain-bridging strategy: during
+data collection, we run the same policy in both the simulator and the world model in parallel with identical
+action sequences. The simulator provides ground truth success labels, while the world model provides the RGB
+observations that the RM will see during training and RL. We train a second RM to predict simulator-derived
+labels from world-model videos, yielding an RM that is visually adapted to the world model but supervised by
+the reliable simulator signal. In practice, this semi-synthetic supervision is a pragmatic workaround that we
+found adequate to run RL in the world model, although the induced rewards remain noisy and the stability of
+the resulting training signal varies across tasks.
+3.4.2
+RMs for BRIDGE and real-world data
+For BRIDGE tasks evaluated on SimplerEnv-WidowX [36] and for our UR30e real-robot experiments, collecting
+diverse labeled failures is expensive and off-policy logs rarely contain clean success/failure annotations. In
+these settings we use a larger off-the-shelf VLM as a zero-shot RM. Concretely, we deploy Qwen2.5-VL-72B as
+a real-world RM: for each trajectory, we sample 20 frames, resize them to 224 × 224, and feed them together
+11
+
+Real-world prompt for PulloutTissueScene
+You will be shown a video. Determine if the robot succeeds at pulling out a tissue.
+Success requires both of the following to be clearly visible (with flexible interpretation):
+1. Grip and pull. The gripper (or fingers) must make contact with any visible part of a tissue and pull it
+outward from the box or container. Partial pulling is acceptable as long as the tissue visibly moves
+outwards by a noticeable distance.
+2. Extraction. The tissue must be partially or fully separated from the box opening. It can still be held
+in the gripper or fall outside after being pulled. The tissue does not need to be lifted completely off the
+surface, as long as it is visibly extracted from the opening.
+Additionally, the gripper must make contact with some object for the attempt to be considered valid.
+Do not give a success easily. If none of the objects move, the task fails.
+First, provide your step-by-step reasoning. Then, provide the final answer. Output the final answer strictly as
+one of: \box{Success} or \box{Failure}.
+Example RM response for PulloutTissueScene
+Step-by-step reasoning:
+1. Initial position. In the first few frames (frame_step0 to frame_step5), the robot arm is positioned
+above the tissue box, indicating preparation for interaction.
+2. Contact and grip. By frame_step20, the robot’s grippers make contact with the tissue box. However,
+there is no clear indication that they are gripping a tissue yet.
+3. Pulling motion. From frame_step30 to frame_step35, the robot arm begins to move, suggesting an
+attempt to pull something. It appears that the grippers have made contact with tissue inside the box.
+4. Tissue movement. In frame_step35, a tissue becomes partially visible, extending out of the box. This
+indicates that robot has successfully initiated the extraction process.
+5. Extraction confirmation. By frame_step30 and frame_step40, the tissue is more visibly separated
+from the box, confirming the extraction step. The tissue is now clearly outside the box opening.
+6. Completion. The subsequent frames show the tissue being fully pulled out and then released. There is
+no ambiguity about the tissue being extracted.
+Final answer: \box{Success}
+Figure 4 Real-world reward model prompt and example response for the task PulloutTissueScene on BRIDGE. The
+prompt is designed following the principles in Sec. 4.4 (high recall with reasonably clean positive labels), while not
+optimal, it provides sufficiently informative supervision for our current real-world experiments.
+with the task description and a task-specific prompt into the model via vLLM. An example prompt and
+corresponding RM response for PulloutTissueScene are shown in Fig. 4. Trajectories are short (30 steps on
+BRIDGE and 100 steps on UR30e), so 20 frames suffice to cover the motion. We again use a voting scheme
+over five evaluations and take the majority decision as the final label Ri.
+Unlike the LIBERO RM, which also predicts an estimated finish step used for temporal masking, the real-world
+RM only outputs a binary success or failure label. Because rollouts are short, we use an all-ones temporal
+mask in Eq. (32), which empirically suffices for effective improvement.
+4
+Experiments
+4.1
+Experimental setups
+4.1.1
+Prophet training setups
+Our Prophet is initialized from Cosmos-Predict2-2B-Video2World [2] and augmented with history-aware
+mechanism, and dual action conditioning. Prophet conditions on the first observed frame and, given a 20-step
+action chunk, generates the next 20 frames. For action frame construction, we set l = 0.15, rref = 40, zref = 1.0,
+12
+
+rmin = 8, and rmax = 140. Across all datasets, we normalize the gripper signal to [gmin, gmax] = [0, 1], where
+0 denotes fully closed and 1 denotes fully open. For the video autoencoder E, we adopt the Wan2.1 video
+autoencoder [62] (also used in Cosmos-Predict2 [2]), which compresses the spatio-temporal dimensions of a
+video by 4 × 8 × 8, yielding latents of size Hl = H/8, Wl = W/8, Tl = 1 + T/4, and Cl = 16. For our Prophet,
+the total number of parameters is 2.058B, the DiT channel Dm = 1024. For the history-aware mechanism, we
+set Th = 60, i.e., we maintain a fixed-length buffer of the most recent 60 frames as historical latent input.
+We pretrain the Prophet on a mixture of robot manipulation datasets, including AgiBot [10], DROID [31],
+LIBERO [41], and high-quality subsets filtered from Open-X [50], with a total of over 31M sampled trajectories.
+Since not all Open-X sub-datasets are suitable for our setting (some videos have extremely low resolution,
+some robots have poor end-effectors, and some subsets do not provide reliable end-effector poses or gripper
+states), we only use a curated subset for pretraining. Concretely, we select Austin Sailor [47], DLR Wheelchair
+Shared Control [53, 60], BC-Z [26], CMU Stretch [3, 46], Stanford HYDRA [5], USC Jaco Play [15], Furniture
+Bench [22], NYU Franka Play [14], and RT-1-style data [8]. For downstream RL, we fine-tune Prophet on
+BRIDGE [61], LIBERO [41], and our self-collected real-robot dataset, all of which provide simulation or
+real-robot environments for evaluation.
+Pretraining and fine-tuning data are strictly separated. For pretraining, we train all model parameters on 64
+H200 GPUs for 2 epochs, with a batch size of 16 per GPU and gradient accumulation of 4. For fine-tuning,
+we apply LoRA [23] (rank 16) on 8 H200 GPUs with a batch size of 24, running for a task-dependent number
+of steps. Both stages use the fused Adam optimizer with a learning rate of 1 × 10−4 and weight decay of 0.1.
+During both Prophet pretraining and fine-tuning, we keep dataset-specific input resolutions. On AgiBot [10]
+and our custom real-robot data we use 240 × 320, on DROID [31] we use 240 × 416, and on LIBERO [41] and
+BRIDGE [61] we use 256×256. For Open-X, we also standardize to 240×320: we first resize the height to 240
+pixels, then either pad black borders on the left and right if the width is smaller than 320, or center-crop to
+320 if the width is larger. Since pretraining spans multiple sources and only some datasets provide the camera
+parameters required to construct action frames, our batch sampler always draws each mini-batch from a single
+dataset. This avoids conflicts in resolution and conditioning signals and stabilizes multi-dataset pretraining.
+4.1.2
+Real-world experiment setting
+We collected our custom manipulation dataset using a UR30e robot arm, providing a physical evaluation
+environment to assess real-world adaptation of Prophet and the universality of our RL algorithm. We collected
+800 trajectories from 4 tasks. For all tasks, we fix the camera, low-level controller, and policy interfaces,
+and vary only the initial object configurations according to a predefined grid layout on the table. For each
+policy–task pair, we conduct three evaluation runs and report the mean and standard deviation of the success
+rate across all trials.
+To stabilize RL on the real-robot, we augment the visual input with a low-dimensional state vector. For
+each rollout, the policy receives the first-frame RGB image together with the initial robot state (end-effector
+pose and gripper status). The action head predicts delta actions, and we update the state for subsequent
+action inputs by integrating these deltas over time rather than querying the robot at every step. Thus, in
+all real-world RL experiments, the training data consists of a single initial image and the state trajectory
+induced by the predicted delta actions.
+Data collection Real-world data for these tasks are collected using a UR30e robot arm teleoperated through
+the GELLO [65] interface.
+A fixed third-person Intel RealSense D455 RGB-D camera provides visual
+observations, and its extrinsics are calibrated to the robot base using the EasyHandEye toolkit. During data
+collection, objects are uniformly placed across the workspace to capture diverse initial configurations, and
+each demonstration consists of a full successful execution from the first-frame to task completion. Data from
+four tasks are collected, i.e., GraspBottle, PlaceCube, PulloutTissue, and PlaceBowl.
+Details of each task Fig. 5 shows a random subset of trajectories collected on each task:
+(i) GraspBottle. A plastic bottle is placed on the table and the goal is to pick it up and place it into a box.
+During data collection, the bottle is uniformly placed at different locations on the tabletop. The bottle is
+13
+
+GraspBottle
+PlaceCube
+PulloutTissue
+PlaceBowl
+Figure 5 Presentation of custom data collected using a UR30e robot arm. We collect data for four tabletop
+manipulation tasks, including challenging cases such as pulling tissues from a box, which are impossible to simulate
+accurately in standard physics simulators.
+smooth and slightly elastic, so even small grasp tilts can cause it to slip or pop out of the gripper, making the
+task very sensitive to grasp pose and stability. For evaluation, we draw a regular 4 × 5 grid on the table and
+place the bottle once at each grid cell, yielding 20 distinct start positions per run.
+(ii) PlaceCube. The policy must place a green cubic block into a bowl. The cube starts from a fixed location
+on the table, while the bowl position is varied. At evaluation time, we use the same 4 × 5 grid layout: the
+cube remains at its fixed start pose, and the bowl is placed at each grid cell in turn, resulting in 20 trials per
+run that cover the full grid.
+(iii) PulloutTissue. The policy must grasp a tissue from a box, pull it out, and place it next to the box.
+Because the tissue is soft and deformable, the gripper must align accurately with the exposed edge and pull
+smoothly without tearing or dropping it. For evaluation, we place the box at each cell of a 4 × 5 tabletop grid,
+yielding 20 trials per run.
+(iv) PlaceBowl. The policy must pick up a bowl and place it onto a plate. The plate remains fixed while
+the bowl position is varied. We define a 2 × 5 grid of bowl start positions and evaluate two full passes over
+this grid per run, resulting in 20 trials per run. Compared with PlaceCube, this task emphasizes stable bowl
+grasps and precise placement on a relatively small plate support area.
+Across all four tasks, each method is evaluated over three runs, so reported numbers are the mean and
+standard deviation of the success rate over 3 × 20 trials per task.
+4.1.3
+Supervised fine-tuning (SFT) policies and RL setups
+We evaluate three policies at different scales, i.e., VLA-Adapter-0.5B [63], Pi0.5-3B [25], and OpenVLA-OFT-
+7B [32]. All policies take a single-image per step and output a 7D delta action via a lightweight flow action
+head. Before RL, we conduct fine-tuning for the policies, with batch size 64, a learning rate of 2.5e−5 with
+AdamW optimizer and weight decay 0.1 for 200k steps. For real-robot experiments, we independently fine-tune
+policies on each of the four tasks (200 trajectories per task) with batch size 16 for 50k steps per task using
+the same optimizer. For RL, we set ngroup = 8, a total batch size of 256, and a mini-batch size of 128, with
+all policies trained for 100 steps. All RL-related experiments are conducted on 8 H200 GPUs.
+14
+
+120-frame long rollouts on AgiBot: (A) generating using ground truth actions; (B) control the right arm to continuously pull the trash bag to the right while the left arm keep still.
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+Rollout A
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+Rollout B
+200-frame long rollout on LIBERO spatial task.
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+Idx 140
+Idx 160
+Idx 180
+Idx 200
+40-frame rollouts on DROID: 
+(A) generating using ground truth actions; (B) control the gripper to keep it open.
+Initial frame
+Rollout B
+Idx 10
+Idx 10
+Idx 20
+Idx 20
+Initial frame
+Idx 30
+Idx 40
+Idx 30
+Idx 40
+Rollout A
+60-frame rollouts on Open-X, furniture bench: 
+(A) generating using ground truth actions; (B) control the arm to keep move left.
+Rollout A
+Rollout B
+Initial frame
+Initial frame
+Idx 15
+Idx 30
+Idx 45
+Idx 60
+Idx 15
+Idx 30
+Idx 45
+Idx 60
+Figure 6 Qualitative results of the pretrained Prophet. Our Prophet accurately maps actions to robot manipulation,
+supports hundred-level-frame rollouts, and enables flexible control of both arm motions and end-effector states. Even
+for unseen action controls at training time, generations remain accurate and physically plausible.
+Table 1 Evaluation of the pretrained Prophet on multiple datasets.
+Datasets
+Visual fidelity ↑
+Action consistency
+PSNR
+SSIM
+tSSIM
+EPE ↓
+]
+EPE ↓
+cos ↑
+f
+cos ↑
+AgiBot [10]
+27.05
+.8916
+.7666
+.2959
+.2750
+.2144
+.2176
+DROID [31]
+25.23
+.8813
+.7812
+.2574
+.2385
+.1532
+.1568
+Open-X [50]
+27.25
+.8810
+.7950
+.4521
+.2910
+.0843
+.0822
+LIBERO [41]
+26.29
+.9075
+.8639
+.1660
+.1602
+.4164
+.4235
+4.2
+World model evaluation
+4.2.1
+Evaluation of the pretrained Prophet
+Before pretraining, we unify data conventions across corpora, e.g., standardizing gripper state semantics,
+coordinate frames (camera, robot, and world), and action parameterizations, to eliminate cross-dataset
+ambiguities and enable efficient large-scale joint training. In particular, since data in Open-X lacks reliable
+camera parameters, it is conditioned only by the scalar action stream, whereas all other datasets additionally
+employ action frame conditioning.
+Tab. 1 presents detailed validation results of the pretrained Prophet on held-out trajectories from each dataset.
+Across multiple datasets, the model attains consistently high visual fidelity and strong action consistency.
+Note that these numbers are obtained from a single pretrained Prophet. With dataset-specific fine-tuning the
+metrics improve substantially, as evidenced by the large gains on LIBERO reported in Tab. 4.
+Representative rollouts in Fig. 6 illustrate long-horizon end-effector control, contact formation, and object state
+changes under varied viewpoints. Fig. 7 shows more qualitative results of the pretrained Prophet on AgiBot.
+These examples are drawn from held-out validation trajectories, and the specific man-made motion patterns
+shown here never appear in the pretraining data. Nevertheless, the pretrained Prophet already captures rich,
+physically plausible interactions with the environment across diverse scenes and object configurations. It not
+15
+
+120-frame long rollouts on AgiBot: control the end-effectors continuously rotate clockwise around the X-axis.
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+120-frame long rollouts on AgiBot: control the end-effectors continuously rotate clockwise around the Y-axis.
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+120-frame long rollouts on AgiBot: control the end-effectors continuously rotate clockwise around the Z-axis.
+Initial frame
+Idx 20
+Idx 40
+Idx 60
+Idx 80
+Idx 100
+Idx 120
+Figure 7 Qualitative results of the pretrained Prophet on AgiBot. We additionally visualize rollouts where the
+end-effector is commanded to perform mechanical rotations and physically interact with the real-world. Our Prophet
+produces highly realistic and physically consistent results, including accurate shadows, specular reflections, liquid
+pouring, and interactions with complex materials.
+only preserves fine-grained appearance details, but also reproduces realistic contact dynamics and secondary
+effects (e.g., shadows, reflections, and deformations of soft or thin objects), closely matching real-world physics
+even under novel combinations of actions and objects. Such faithful physical behavior on unseen sequences is
+crucial for providing reliable rollouts when optimizing VLA policies via RL in the real world, since the policy
+is trained almost entirely on model-generated experience.
+4.2.2
+Fine-tuning on BRIDGE
+To further assess generalization of Prophet under limited or rich real-robot data, we fine-tune on BRIDGE [61]
+in three settings summarized in Tab. 2. In experiment 1, we select tasks such as ‘fold the cloth’, fine-tune
+using only a small snippet of the available trajectories per task, and evaluate generalization on the remaining
+held-out trajectories and scene instances. In experiment 2, we increase difficulty by testing cross-object
+transfer under few-shot supervision. For example, we fine-tune on 150 demonstrations of a ‘pick up sth.’
+(exclude carrot) task and evaluate zero-shot on the complementary ‘pick up carrot’ task. In experiment 3, we
+examine the upper bound with data-rich fine-tuning. We allocate 15/16 of the trajectories for training and
+the remaining 1/16 for validation, preserving scene disjointness across splits. We compare our Prophet with
+state-of-the-art baselines, including LTX-Video [21] (with LTX-Video-2b-v0.9 model), Genie-envisioner [39]
+(with GE-Base-slow-v0.1 model), and Cosmos-Predict2 [2] (with Cosmos-Predict2-2B-Video2World-480p-10fps
+model), and all baselines are well fine-tuned using the same action-conditioning strategy with Prophet. In
+16
+
+Cross-object few-shot transfer: put the yellow cube
+Prophet (Ours)
+Cosmos-Predict2
+Genie-envisioner
+Initial frame
+Initial frame
+Initial frame
+Ground truth
+Initial frame
+Initial frame
+Initial frame
+Cross-object few-shot transfer: move the carrot
+Initial frame
+Initial frame
+Initial frame
+Cross-object few-shot transfer: pick up spoon
+Same task few-shot transfer: take the lid
+Prophet (Ours)
+Cosmos-Predict2
+Genie-envisioner
+Initial frame
+Ground truth
+Initial frame
+Initial frame
+Initial frame
+Initial frame
+Initial frame
+Same task few-shot transfer: close the drawer
+Initial frame
+Initial frame
+Initial frame
+Same task few-shot transfer: fold the cloths
+Figure 8 Qualitative few-shot transfer results on BRIDGE. We use a green ✓to denote trajectories that correctly
+complete the task, a blue ⃝for cases that largely succeed but exhibit noticeable execution deviations, and a red × for
+rollouts that fail to perform the intended task or do not produce a recognizable outcome. Our Prophet achieves perfect
+success on all six challenging few-shot transfer tasks, with action execution and physical interactions that are nearly
+indistinguishable from the real videos. In contrast, the baselines perform poorly under this setting, often grasping the
+wrong object, following incorrect trajectories, or failing to generate meaningful rollouts at all.
+experiments 1 and 2, each model is fine-tuned for 2k steps, while in experiment 3 we extend fine-tuning to
+30k steps. For all these experiments, action frame conditioning is disabled for our Prophet.
+Quantitative results are shown in Tab. 2. Across all three settings, our Prophet consistently matches or
+exceeds baselines on visual fidelity while yielding markedly better action consistency. The gains are most
+pronounced in the few-shot regimes of experiments 1 and 2, indicating that Prophet has already learned an
+action-to-manipulation paradigm during pretraining, enabling rapid generalization from only small amounts
+of new data. In experiment 3, even with abundant data, Prophet exhibits across-the-board advantages,
+highlighting its strong generality and faithful modeling of end-effector trajectories and contacts.
+In Fig. 8, we show qualitative comparison samples from the few-shot transfer experiments on BRIDGE,
+encompassing all six few-shot settings. In these experiments, all world models are given the same ground truth
+action sequences as conditioning, the only difference is how faithfully they realize these actions in the generated
+videos. Our Prophet generalizes well from the few-shot fine-tuning data, it consistently follows the conditioned
+actions, closes the correct drawer, grasps the intended object, and produces physically plausible interactions
+on unseen scenes. By contrast, the baselines often ignore the action condition, generating results that grasping
+the wrong object, following an incorrect trajectory, or failing to produce a recognizable outcome. These
+indicating a weak alignment between their latent dynamics and the action channel. This strong action-faithful
+generalization from few-shot world model fine-tuning is precisely what enables the subsequent RL stage
+on BRIDGE, where both full-data and few-shot policy optimization benefit significantly from rollouts that
+accurately reflect how different action sequences affect the physical scene.
+Notably, several baselines report relatively high PSNR and SSIM yet fail to execute the intended action.
+We use a combination of qualitative and quantitative analysis to assess why optical flow-guided evaluation
+provides more effective metrics for action-conditioned world models, shown in Fig. 9.
+17
+
+Table 2 World model evaluation on BRIDGE. The first three tasks evaluate same-task few-shot fine-tuning with
+evaluation on larger held-out splits; the middle three evaluate cross-object transfer, where few-shot fine-tuning is
+performed on object instance of the same task and evaluation is on unseen objects of that task; the last one evaluate
+the full-data fine-tuning results. Bold and underlined mark the best and second-best (same applies to the following
+tables), and ‘train/val’ denotes the number of trajectories used for fine-tuning / evaluation.
+Method
+Train-val
+Task(s)
+Visual fidelity ↑
+Action consistency
+PSNR
+SSIM
+tSSIM
+EPE ↓
+]
+EPE ↓
+cos ↑
+f
+cos ↑
+Experiment 1: same-task few-shot transfer
+LTX-Video [21]
+100-2737
+fold cloths
+21.44
+.7549
+.5098
+1.8329
+1.4782
+.0397
+.0340
+150-331
+close the drawer
+22.32
+.7565
+.5052
+1.4707
+1.2827
+.0673
+.0617
+150-856
+remove lid
+22.27
+.7429
+.5082
+1.2379
+0.9502
+.0295
+.0281
+Genie-envisioner [39]
+100-2737
+fold cloths
+21.96
+.7918
+.6009
+1.8306
+1.5534
+.0813
+.0873
+150-331
+close the drawer
+22.93
+.7898
+.5764
+1.5163
+1.3813
+.1172
+.1130
+150-856
+remove lid
+23.60
+.7924
+.5705
+1.2390
+1.0012
+.0661
+.0690
+Cosmos-Predict2 [2]
+100-2737
+fold cloths
+19.44
+.7723
+.6205
+1.9468
+1.5755
+.0745
+.0766
+150-331
+close the drawer
+19.91
+.7737
+.6171
+1.4515
+1.3058
+.1389
+.1455
+150-856
+remove lid
+21.70
+.7798
+.6429
+1.3404
+1.0601
+.0711
+.0756
+Prophet (Ours)
+100-2737
+fold cloths
+21.30
+.7945
+.6481
+1.4489
+1.1768
+.1836
+.1870
+150-331
+close the drawer
+21.96
+.7999
+.6505
+1.0890
+0.9508
+.2225
+.2266
+150-856
+remove lid
+23.58
+.8036
+.6795
+0.9407
+0.6990
+.1312
+.1342
+Experiment 2: cross-object few-shot transfer
+LTX-Video [21]
+150-33
+move sth. ⇒move carrot
+21.97
+.7335
+.4706
+1.5567
+1.3250
+.0238
+.0226
+150-50
+put cube ⇒put yellow cube
+21.11
+.6684
+.4669
+1.3699
+1.0701
+.0415
+.0435
+150-59
+pick up sth. ⇒pick up spoon
+21.37
+.7250
+.4664
+1.4971
+1.2296
+.0257
+.0280
+Genie-envisioner [39]
+150-33
+move sth. ⇒move carrot
+22.32
+.7769
+.5407
+1.6545
+1.4396
+.0424
+.0406
+150-50
+put cube ⇒put yellow cube
+22.15
+.7538
+.5551
+1.4554
+1.1870
+.0795
+.0815
+150-59
+pick up sth. ⇒pick up spoon
+22.05
+.7700
+.5324
+1.5353
+1.3067
+.0610
+.0657
+Cosmos-Predict2 [2]
+150-33
+move sth. ⇒move carrot
+19.80
+.7476
+.5827
+1.8921
+1.5433
+.0479
+.0489
+150-50
+put cube ⇒put yellow cube
+19.89
+.7398
+.6138
+1.7488
+1.2797
+.0640
+.0664
+150-59
+pick up sth. ⇒pick up spoon
+19.18
+.7582
+.6090
+1.9190
+1.5245
+.0576
+.0583
+Prophet (Ours)
+150-33
+move sth. ⇒move carrot
+22.09
+.7739
+.6128
+1.4466
+1.1315
+.1312
+.1310
+150-50
+put cube ⇒put yellow cube
+23.15
+.7887
+.6666
+1.0311
+0.7216
+.1750
+.1782
+150-59
+pick up sth. ⇒pick up spoon
+22.34
+.7944
+.6535
+1.1945
+0.9254
+.1430
+.1473
+Experiment 3: Full-data fine-tuning
+LTX-Video [21]
+36243-2417
+full-data
+23.34
+.7970
+.5739
+1.4289
+1.1657
+.0980
+.1005
+Genie-envisioner [39]
+36243-2417
+full-data
+23.66
+.8038
+.5825
+1.4328
+1.1950
+.1061
+.1107
+Cosmos-Predict2 [2]
+36243-2417
+full-data
+24.58
+.8276
+.6723
+1.0243
+0.8121
+.2051
+.2071
+Prophet (Ours)
+36243-2417
+full-data
+25.47
+.8367
+.6839
+0.9136
+0.7378
+.2234
+.2245
+Conventional frame-level metrics, e.g., PSNR, SSIM, primarily measure global visual fidelity, which are
+sensitive to blur, noise, and global color or texture shifts, but largely agnostic to whether the ‘motion’ in the
+generated video is behaviorally correct. In manipulation settings, however, two rollouts may look equally
+sharp and photorealistic while corresponding to very different actions (e.g., the drawer only half closed or the
+gripper stopping short of contact). As illustrated on the left of Fig. 9, both our Prophet and the baseline
+produce high visual fidelity, leading to only marginal differences in visual fidelity despite the baseline clearly
+failing to complete the ‘close the drawer’.
+To make the evaluation more sensitive to action correctness, we compute dense optical flow between consecutive
+frames for both the generated rollout and the ground truth, and compare them only in regions with significant
+motion. Our designed flow-based metrics are largely invariant to static background appearance and lighting,
+but are highly sensitive to whether the arm moves along the correct trajectory and establishes contact at the
+right time and location. On the right of Fig. 9, the visualized flow fields highlight this effect: the flow of our
+Prophet closely tracks the ground truth motion of both the arm and the drawer, whereas the baseline exhibits
+fragmented or misplaced motion, especially near the handle and along the closing direction. Correspondingly,
+the gap in EPE and flow-direction cosine between the two models is much larger than the gap in PSNR and
+18
+
+Same-task few-shot transfer: close the drawer
+Ground truth
+Prophet (Ours)
+Initial frame
+Cosmos-Predict2
+Initial frame
+RGB frames
+Visualized optical flow
+PSNR: 22.79, SSIM: 0.7932, tSSIM: 0.6536  
+EPE: 1.0889, cos: 0.2211 
+PSNR: 21.56, SSIM: 0.7833, tSSIM: 0.6471  
+EPE: 1.4757, cos: 0.1225 
+Figure 9 Optical flow evaluation reveals action errors beyond visual metrics. Although the baseline clearly fails
+to fully execute the closing motion, standard visual fidelity metrics differ only slightly between the two models. On the
+right, the visualized optical flow focuses on the moving arm and drawer. The flow of our Prophet closely matches the
+ground truth, whereas the baseline exhibits obvious mismatches in motion and contact, leading to a much larger gap
+in flow-based metrics that cleanly separates good from poor rollouts.
+Table 3 Evaluation of the fine-tuned Prophet on custom dataset. ‘Hist.’ for history-aware mechanism, ‘Pre.’
+denotes pretraining, and ‘A-frm.’ for adding action-frame conditioning (same applies to the following tables).
+Variants
+Visual fidelity ↑
+Action consistency
+Hist.
+Pre.
+A-frm.
+PSNR
+SSIM
+tSSIM
+EPE ↓
+]
+EPE ↓
+cos ↑
+f
+cos ↑
+✗
+✗
+✗
+24.28
+.8952
+.7807
+.5396
+.4907
+.1830
+.1865
+✓
+✗
+✗
+24.85
+.9008
+.7881
+.5224
+.4711
+.1959
+.1996
+✓
+✓
+✗
+25.92
+.9123
+.7995
+.4463
+.4061
+.2157
+.2191
+✓
+✓
+✓
+26.12
+.9150
+.8032
+.4345
+.3952
+.2189
+.2214
+SSIM. Across tasks, we observe that these optical flow metrics correlate much more strongly with task success
+rates of downstream VLA policies, indicating that flow-guided evaluation provides a more faithful measure of
+action-conditioned world model than conventional metrics.
+4.2.3
+Fine-tuning on custom data
+We fine-tuned Prophet for 20k steps on our custom data. Tab. 3 shows the results on validation trajectories.
+Obviously, our fine-tuned Prophet achieves strong generation quality, with each of our introduced components
+yield considerable gains.
+4.2.4
+Ablation studies on Prophet components
+We conduct additional ablation studies of key Prophet components on LIBERO. We fine-tune Prophet for 30k
+steps using the original training rollouts augmented with trajectories generated by SFT VLA-Adapter-0.5B,
+and evaluate on unseen trajectories. As shown in Tab. 4, using pretraining and the history-aware mechanism
+yields consistent, across-the-board gains. In the LIBERO scenario, introducing the action frame further boosts
+action consistency, but incurring a small drop in PSNR. Given our downstream goal, i.e., faithful action
+execution, this trade-off is desirable.
+4.2.5
+Simulating failure rollouts
+A key advantage of using a world model for RL is that it can expose the policy to both successes and failures
+without repeatedly failing on real hardware. Rather than only replaying curated demonstrations, we would
+19
+
+Initial frame
+Initial frame
+Initial frame
+20-frame rollout on custom data, showing a simulated failed grasp
+Initial frame
+20-frame rollout on custom data, showing a simulated bowl drop.
+100-frame long rollout on LIBERO goal task, a simulated failed grasp and contorted robot arm configuration.
+Initial frame
+100-frame long rollout on LIBERO object task , a simulated contorted robot arm configuration.
+Initial frame
+20-frame rollout on BRIDGE, showing a simulated highly contorted robot arm.
+20-frame rollout on BRIDGE, showing a simulated highly contorted robot arm.
+Initial frame
+20-frame rollout on BRIDGE, showing a simulated failed grasp.
+Initial frame
+20-frame rollout on BRIDGE, showing a simulated failed grasp.
+Figure 10 Simulated failure rollouts by the fine-tuned Prophet on each dataset. We visualize diverse simulated
+failure rollouts, including failed grasps, highly contorted arm poses, and interactions with task-irrelevant objects.
+Crucially, the Prophet not only generates successful trajectories but also realistic, precise failures, allowing downstream
+RL to better optimize policies by learning from both success and failure.
+like Prophet to also hallucinate plausible but undesired outcomes, so that the policy can practice avoiding
+unsafe or unproductive behaviors entirely inside the model.
+Fig. 10 shows simulated failure rollouts generated by the fine-tuned Prophet on three domains. On BRIDGE
+data, even though Prophet is fine-tuned only on successful demonstrations using full data, it produces realistic
+failures such as stopping short of the target, or drifting away after contact, effectively enriching the data
+distribution seen by downstream RL. On our custom real-robot data, Prophet is adapted from a small number
+of success-only trajectories, yet still synthesizes plausible failure behaviors including slipping grasps, suggesting
+that it can serve as a realistic real-world simulator even under very limited supervision. On LIBERO data, the
+fine-tuned Prophet captures how small perturbations in the action sequence lead to missed grasps, contorted
+arm poses, or spurious interactions with distractor objects, rather than collapsing to only ideal outcomes.
+Across these settings, the ability to generate calibrated failure rollouts is crucial for RL, since it provides
+informative negative examples, teaches the policy which behaviors to avoid, and prevents overfitting to overly
+optimistic dynamics that would rarely occur in the real environment.
+4.3
+RL with world models across simulators and real-robot
+4.3.1
+Evaluation on BRIDGE and SimplerEnv
+Single-task RL with Prophet We use Prophet fine-tuned on BRIDGE full data for 30k steps. Policies are
+first SFT for 200k steps on the same BRIDGE data, and then post-trained in Prophet with FA-GRPO and
+FlowScale. We consider four WidowX tasks: PutCarrot, PutSpoon, StackCube, and PutEggplant. For each
+task, we run RL separately, initializing the policy and world model with only the language instruction and
+100 single-image snapshots, and then training the policy with our paradigm (Fig. 2). Performance is reported
+on the corresponding SimplerEnv benchmark.
+Tab. 5 reports grasp and success rates. Across all three VLA variants sizes with the same flow head, both
+20
+
+Table 4 Ablation of Prophet components on LIBERO. Tasks: S = Spatial, O = Object, G = Goal, L = Long.
+Variants
+Task
+Visual fidelity ↑
+Action consistency
+Hist.
+Pre.
+A-frm.
+PSNR
+SSIM
+tSSIM
+EPE ↓
+]
+EPE ↓
+cos ↑
+f
+cos ↑
+✗
+✗
+✗
+S
+34.29
+.9683
+.9221
+.0771
+.0744
+.5332
+.5366
+✓
+✗
+✗
+S
+34.44
+.9690
+.9239
+.0752
+.0727
+.5359
+.5399
+✓
+✓
+✗
+S
+34.66
+.9699
+.9239
+.0740
+.0714
+.5393
+.5429
+✓
+✓
+✓
+S
+34.54
+.9697
+.9256
+.0730
+.0706
+.5401
+.5437
+✗
+✗
+✗
+O
+32.91
+.9556
+.9168
+.0681
+.0630
+.3338
+.3350
+✓
+✗
+✗
+O
+33.01
+.9565
+.9192
+.0665
+.0617
+.3378
+.3396
+✓
+✓
+✗
+O
+33.10
+.9567
+.9177
+.0677
+.0619
+.3381
+.3396
+✓
+✓
+✓
+O
+33.15
+.9575
+.9210
+.0649
+.0603
+.3416
+.3432
+✗
+✗
+✗
+G
+35.14
+.9704
+.9329
+.0661
+.0633
+.4447
+.4496
+✓
+✗
+✗
+G
+35.22
+.9707
+.9345
+.0649
+.0622
+.4465
+.4508
+✓
+✓
+✗
+G
+35.44
+.9717
+.9339
+.0623
+.0593
+.4519
+.4558
+✓
+✓
+✓
+G
+35.42
+.9717
+.9362
+.0612
+.0583
+.4528
+.4562
+✗
+✗
+✗
+L
+32.53
+.9597
+.9124
+.1015
+.0980
+.4253
+.4275
+✓
+✗
+✗
+L
+32.86
+.9620
+.9160
+.0976
+.0944
+.4289
+.4314
+✓
+✓
+✗
+L
+33.18
+.9631
+.9164
+.0929
+.0895
+.4348
+.4374
+✓
+✓
+✓
+L
+33.09
+.9635
+.9185
+.0924
+.0894
+.4347
+.4372
+Table 5 SimplerEnv (WidowX) evaluation with RL post-training on BRIDGE. For reproduced VLA variants, policies
+take a single RGB image (no multi-view, history, or state) as input, and SFT for 200k steps. Rollouts from our Prophet
+are used for decision support.
+Method
+Put Spoon on Towel
+Put Carrot on Plate
+Stack Green Block on Yellow Block
+Put Eggplant in Yellow Basket
+Partial
+Overall
+Grasp Spoon
+Success
+Grasp Carrot
+Success
+Grasp Green Block
+Success
+Grasp Eggplant
+Success
+Average
+Average
+RT-1-X [50]
+16.7
+0
+20.8
+4.2
+8.3
+0
+0.0
+0
+11.5
+1.1
+Octo-Base [48]
+34.7
+12.5
+52.8
+8.3
+31.9
+0
+66.7
+43.1
+46.5
+16.0
+Octo-Small [48]
+77.8
+47.2
+27.8
+9.7
+40.3
+4.2
+87.5
+56.9
+58.4
+30.0
+OpenVLA [32]
+4.1
+0
+33.3
+0
+12.5
+0
+8.3
+4.1
+14.6
+1.0
+RoboVLM (fine-tuning) [42]
+54.2
+29.2
+25.0
+25.0
+45.8
+12.5
+58.3
+58.3
+45.8
+31.3
+SpatialVLA (fine-tuning) [52]
+20.8
+16.7
+29.2
+25.0
+62.5
+29.2
+100.0
+100.0
+53.1
+42.7
+VLA-Adapter-0.5B [63]
+45.9 ± 7.2
+18.0 ± 8.7
+40.3 ± 6.4
+18.1 ± 4.8
+69.4 ± 6.4
+7.0 ± 4.8
+72.2 ± 7.2
+50.0 ± 4.8
+57.0 ± 5.1
+23.3 ± 2.2
++ FA-GRPO (Ours)
+66.7 ± 7.2 (+20.8)
+38.9 ± 4.8 (+20.9)
+45.8 ± 6.4 (+5.5)
+29.2 ± 4.2 (+11.1)
+76.4 ± 8.4 (+7.0)
+9.7 ± 2.4 (+2.7)
+88.9 ± 8.4 (+16.7)
+75.0 ± 8.4 (+25.0)
+69.4 ± 4.8 (+12.4)
+38.2 ± 2.4 (+14.9)
++ FA-GRPO & FlowScale (Ours)
+70.8 ± 7.2 (+24.9)
+33.3 ± 4.2 (+15.3)
+52.8 ± 2.4 (+12.5)
+36.1 ± 4.8 (+18.0)
+77.8 ± 4.8 (+8.4)
+15.3 ± 4.8 (+8.3)
+87.5 ± 8.3 (+15.3)
+79.2 ± 4.8 (+29.2)
+72.2 ± 2.4 (+15.2)
+41.0 ± 2.4 (+17.7)
+Pi0.5-3B [7]
+65.3 ± 6.4
+44.4 ± 6.4
+57.0 ± 4.8
+29.2 ± 0
+75.0 ± 7.2
+18.1 ± 6.4
+80.5 ± 4.8
+63.9 ± 2.4
+69.5 ± 2.4
+38.9 ± 2.6
++ FA-GRPO (Ours)
+75.8 ± 3.0 (+10.5)
+51.4 ± 4.8 (+7.0)
+59.7 ± 8.7 (+2.7)
+41.6 ± 7.2 (+12.4)
+91.7 ± 4.2 (+16.7)
+22.2 ± 6.4 (+4.1)
+82.0 ± 4.8 (+1.5)
+72.2 ± 6.4 (+8.3)
+77.3 ± 4.8 (+7.8)
+46.9 ± 3.0 (+8.0)
++ FA-GRPO & FlowScale (Ours)
+72.8 ± 5.2 (+7.5)
+58.3 ± 4.8 (+13.9)
+59.7 ± 4.8 (+2.7)
+43.0 ± 8.7 (+13.8)
+82.0 ± 4.8 (+7.0)
+22.2 ± 4.8 (+4.1)
+93.2 ± 2.2 (+12.7)
+80.6 ± 2.4 (+16.7)
+76.9 ± 2.8 (+7.4)
+51.0 ± 1.2 (+12.1)
+OpenVLA-OFT-7B [32]
+45.8 ± 4.2
+25.0 ± 4.2
+40.3 ± 4.8
+13.9 ± 2.4
+50.0 ± 8.3
+5.6 ± 2.4
+79.2 ± 4.2
+55.5 ± 2.3
+53.8 ± 3.2
+25.0 ± 1.8
++ FA-GRPO (Ours)
+46.0 ± 7.0 (+0.2)
+26.4 ± 2.4 (+1.4)
+41.7 ± 7.2 (+1.4)
+19.5 ± 4.8 (+5.6)
+61.1 ± 8.6 (+11.1)
+9.7 ± 4.8 (+4.1)
+93.1 ± 2.4 (+14.3)
+61.1 ± 2.4 (+5.6)
+60.5 ± 2.7 (+6.7)
+29.2 ± 1.8 (+4.2)
++ FA-GRPO & FlowScale (Ours)
+55.6 ± 7.2 (+9.8)
+29.2 ± 4.2 (+4.2)
+57.0 ± 8.7 (+16.7)
+16.7 ± 4.2 (+2.8)
+69.4 ± 6.4 (+19.4)
+11.1 ± 2.4 (+5.5)
+90.3 ± 4.8 (+11.1)
+66.7 ± 4.2 (+11.2)
+68.1 ± 2.1 (+14.3)
+30.9 ± 0.6 (+5.9)
+metrics improve consistently after RL. Prophet is fine-tuned on real BRIDGE data, whereas SimplerEnv,
+although sharing a similar tabletop setup, differs in visuals and object instances. The gains therefore reflect
+transfer from real-world data to a distinct simulator. Using 100 single-image snapshots per task for post-
+training yields improvements, indicating that Prophet can provide accurate rollouts for policy optimization in
+this setting and that our RL procedure improves VLA policies from modest real-world supervision.
+Multi-task RL with Prophet To test whether our training paradigm also works in a multi-task setting, we run
+an additional experiment on the four SimplerEnv-WidowX tasks and jointly fine-tune each VLA variant on
+the union of these tasks in Prophet. We initialize from the same 200k-step SFT checkpoints as in Tab. 5, then
+perform 250 RL updates with FA-GRPO and FlowScale, sampling the four tasks uniformly when generating
+world model rollouts; evaluation remains per-task in the simulator. Tab. 6 shows that multi-task RL with
+Prophet yields consistent gains across all three variants, improving both grasp metrics and full-task success
+for each individual task. This suggests that FA-GRPO with FlowScale can effectively exploit a shared world
+model when multiple tasks are optimized jointly, without requiring task-specific RL runs.
+World model choice and fine-tuning data Tab. 7 studies how the choice of world model and the amount of
+fine-tuning data influence RL performance. All experiments use single-image VLAs, with FA-GRPO and
+FlowScale for policy optimization. We fine-tune Cosmos-Predict2 and Prophet on BRIDGE full data for
+30k steps and use each as the rollout generator for the same policies under identical RL settings. Replacing
+Cosmos-Predict2 with Prophet increases success rates, suggesting that a more accurate action-conditioned
+world model yields stronger downstream VLA performance. In a few-shot setting, we fine-tune both models
+on only 400 BRIDGE samples for 500 steps. Here the Cosmos-Predict2 setup degrades more, whereas Prophet
+largely preserves its gains, indicating better sample efficiency and few-shot adaptability as an RL backend.
+21
+
+Table 6 Multi-task RL in the world model. Additional results where we jointly fine-tune VLA policies (all SFT 200k
+steps) on the four SimplerEnv-WidowX tasks using FA-GRPO and FlowScale in Prophet for 250 RL updates.
+Method
+Put Spoon on Towel
+Put Carrot on Plate
+Stack Green Block on Yellow Block
+Put Eggplant in Yellow Basket
+Partial
+Overall
+Grasp Spoon
+Success
+Grasp Carrot
+Success
+Grasp Green Block
+Success
+Grasp Eggplant
+Success
+Average
+Average
+VLA-Adapter-0.5B [63]
+45.9 ± 7.2
+18.0 ± 8.4
+40.3 ± 6.3
+18.1 ± 4.8
+69.4 ± 6.3
+7.0 ± 4.8
+72.2 ± 7.2
+50.0 ± 4.8
+57.0 ± 5.1
+23.3 ± 2.2
++ FA-GRPO & FlowScale-joint
+59.7 ± 9.6 (+13.8)
+36.1 ± 8.6 (+18.1)
+58.3 ± 4.2 (+18.0)
+29.2 ± 4.2 (+11.1)
+73.6 ± 4.9 (+4.2)
+12.5 ± 4.2 (+5.5)
+77.8 ± 2.4 (+5.6)
+65.3 ± 4.8 (+15.3)
+67.4 ± 3.2 (+10.4)
+35.8 ± 1.6 (+12.5)
+Pi0.5-3B [7]
+65.3 ± 6.4
+44.4 ± 6.4
+57.0 ± 4.8
+29.2 ± 0
+75.0 ± 7.2
+18.1 ± 6.4
+80.5 ± 4.8
+63.9 ± 2.4
+69.5 ± 2.4
+38.9 ± 2.6
++ FA-GRPO & FlowScale-joint
+75.8 ± 3.0 (+10.5)
+51.4 ± 4.8 (+7.0)
+59.7 ± 8.7 (+2.7)
+41.6 ± 7.2 (+12.4)
+91.7 ± 4.2 (+16.7)
+22.2 ± 6.4 (+4.1)
+82.0 ± 4.8 (+1.5)
+72.2 ± 6.4 (+8.3)
+77.3 ± 3.0 (+7.8)
+46.9 ± 4.8 (+8.0)
+OpenVLA-OFT-7B [32]
+45.8 ± 4.2
+25.0 ± 4.2
+40.3 ± 4.8
+13.9 ± 2.4
+50.0 ± 8.3
+5.6 ± 2.4
+79.2 ± 4.2
+55.5 ± 2.3
+53.8 ± 3.2
+25.0 ± 1.8
++ FA-GRPO & FlowScale-joint
+59.7 ± 9.6 (+13.9)
+30.6 ± 2.4 (+5.6)
+59.7 ± 2.4 (+19.4)
+30.6 ± 2.4 (+16.7)
+65.3 ± 9.6 (+15.3)
+9.7 ± 2.4 (+4.1)
+83.3 ± 11.0 (+4.1)
+70.8 ± 8.4 (+15.3)
+67.0 ± 3.3 (+13.2)
+35.4 ± 1.1 (+10.4)
+Table 7 Ablation of world model on BRIDGE. We compare RL trained with Cosmos-Predict2 vs. Prophet, after
+fine-tuning each model on either the full set (30k steps) or a few-shot set (400 samples, 500 steps, denoted Few).
+Method
+Put Spoon on Towel
+Put Carrot on Plate
+Stack Green Block on Yellow Block
+Put Eggplant in Yellow Basket
+Partial
+Overall
+Grasp Spoon
+Success
+Grasp Carrot
+Success
+Grasp Green Block
+Success
+Grasp Eggplant
+Success
+Average
+Average
+VLA-Adapter-0.5B [63] (SFT 200k steps)
+45.9 ± 7.2
+18.0 ± 8.4
+40.3 ± 6.3
+18.1 ± 4.8
+69.4 ± 6.3
+7.0 ± 4.8
+72.2 ± 7.2
+50.0 ± 4.8
+57.0 ± 5.1
+23.3 ± 2.2
+Cosmos-Predict2 [2] + FA-GRPO & FlowScale
+52.8 ± 6.4 (+6.9)
+26.4 ± 2.4 (+8.4)
+52.8 ± 6.4 (+12.5)
+34.7 ± 2.4 (+16.6)
+72.2 ± 6.4 (+2.8)
+11.1 ± 2.4 (+4.1)
+86.5 ± 7.2 (+14.3)
+76.4 ± 6.4 (+16.4)
+66.3 ± 3.7 (+9.3)
+37.1 ± 2.2 (+13.8)
+Prophet + FA-GRPO & FlowScale
+70.8 ± 7.2 (+24.9)
+33.3 ± 4.2 (+15.3)
+52.8 ± 2.4 (+12.5)
+36.1 ± 4.8 (+18.0)
+77.8 ± 4.8 (+8.4)
+15.3 ± 4.8 (+8.3)
+87.5 ± 8.3 (+15.3)
+79.2 ± 4.8 (+29.2)
+72.2 ± 2.4 (+15.2)
+41.0 ± 2.4 (+17.7)
+Cosmos-Predict2 [2]-Few + FA-GRPO & FlowScale
+69.5 ± 8.7 (+23.6)
+26.4 ± 6.4 (+8.4)
+48.6 ± 6.4 (+8.3)
+38.9 ± 2.4 (+20.8)
+61.1 ± 4.8 (−8.3)
+9.6 ± 2.5 (+2.6)
+76.4 ± 8.6 (+4.4)
+54.2 ± 8.4 (+4.2)
+63.9 ± 3.2 (+6.9)
+32.3 ± 2.2 (+9.0)
+Prophet-Few + FA-GRPO & FlowScale
+55.6 ± 6.4 (+9.7)
+26.4 ± 2.4 (+8.4)
+51.4 ± 2.4 (+11.1)
+33.3 ± 4.2 (+15.2)
+70.8 ± 4.2 (+1.4)
+11.1 ± 4.8 (+4.1)
+88.9 ± 4.8 (+16.7)
+75.0 ± 8.3 (+25.0)
+66.0 ± 3.1 (+9.0)
+36.5 ± 1.8 (+13.2)
+Few-shot RL with Prophet We study how sensitive our training paradigm is to the amount of data to bootstrap
+RL with Prophet. We use VLA-Adapter-0.5B [63] on four SimplerEnv-WidowX tasks. Starting from the
+200k-step SFT checkpoint in Tab. 5, we subsample the set so that each task provides either 100 or 10 images
+instead of the full dataset, these snapshots are the observations available when starting RL with Prophet. We
+continue post-training with FA-GRPO and FlowScale for 100 RL updates under each data regime.
+Tab. 8 compares two few-shot regimes: using 100 training images per task versus 10. With 100 images (the
+same setting as in Tab. 5), world model RL boosts the overall success rate from 23.3 to 41.0, while the extreme
+10-image setting still reaches 34.7 over the SFT-only baseline. We observe improvements on grasp and full-task
+success across four tasks in this highly data-starved regime, suggesting that FA-GRPO with FlowScale can
+effectively leverage a small number of training images to refine the policy via world model rollouts.
+4.3.2
+Evaluation on real-robot
+Tab. 9 reports real-robot results on our UR30e setup. We fine-tune Prophet on data for 20k steps and use it
+to train policies with 100 RL updates per task, initialized from 20 image snapshots. Across the VLA variants,
+success increases by 24–30% with fewer updates than SFT (100 RL steps versus 50k SFT), indicating that
+FA-GRPO and FlowScale can effectively refine policies from Prophet rollouts in low-data regime.
+Behavior emergence in PlaceBowl. Fig. 11 illustrates a clear change in policy behaviour after RL. Although the
+demonstrations only contain left-side grasps, the SFT policy is stochastic and can, with very low probability,
+generate a right-side approach. These rare trajectories are often unstable, but whenever a right-side attempt
+succeeds the RM assigns it a positive signal. RL amplifies this weak mode in the SFT action distribution,
+turning the right-side strategy into a consistent and reliable behavior. This highlights a key difference between
+SFT and RL: SFT imitates the dataset, whereas RL can discover and reinforce behaviors that are only weakly
+expressed in the demonstrations.
+Soft-object manipulation in PulloutTissue. Fig. 12 focuses on the PulloutTissue task, where soft, deformable
+contact makes the problem particularly sensitive to approach pose. The SFT policy (Pi0.5) can reproduce
+the overall motion pattern in the demonstrations, but is highly sensitive to small variations in the approach
+trajectory: even minor lateral drift in the gripper pose leads to poor contact with the tissue edge and frequent
+failures. During RL, the RM assigns higher scores to trajectories that achieve clean edge engagement and
+complete the pull. This provides a learning signal that reduces lateral variance and reinforces approach
+trajectories with better stability. The post-RL policy exhibits a tighter distribution over approach poses and
+maintains alignment with the tissue edge more reliably, enabling consistent extraction across diverse initial
+placements. Such fine-grained alignment is difficult to capture in standard rigid-body simulators, but Prophet,
+trained on real trajectories, can represent these deformable-contact effects without hand-crafted physics.
+22
+
+Table 8 Few-shot RL in world model. Ablation on the four SimplerEnv-WidowX tasks with VLA-Adapter-0.5B (SFT
+200k steps), where post-training with FA-GRPO and FlowScale in Prophet is initialized from only a small number of
+seed trajectories per task (100-img. vs. 10-img.).
+Method
+Put Spoon on Towel
+Put Carrot on Plate
+Stack Green Block on Yellow Block
+Put Eggplant in Yellow Basket
+Partial
+Overall
+Grasp Spoon
+Success
+Grasp Carrot
+Success
+Grasp Green Block
+Success
+Grasp Eggplant
+Success
+Average
+Average
+VLA-Adapter-0.5B [63]
+45.9 ± 7.2
+18.0 ± 8.4
+40.3 ± 6.3
+18.1 ± 4.8
+69.4 ± 6.3
+7.0 ± 4.8
+72.2 ± 7.2
+50.0 ± 4.8
+57.0 ± 5.1
+23.3 ± 2.2
++ FA-GRPO & FlowScale–10-img.
+51.4 ± 2.4 (+5.5)
+26.4 ± 2.4 (+8.4)
+45.9 ± 7.2 (+5.6)
+27.8 ± 6.4 (+9.7)
+72.2 ± 10.5 (+2.8)
+18.0 ± 4.8 (+11.0)
+84.7 ± 2.4 (+12.5)
+66.7 ± 4.2 (+16.7)
+66.7 ± 4.2 (+9.7)
+34.7 ± 3.9 (+11.4)
++ FA-GRPO & FlowScale–100-img.
+70.8 ± 7.2 (+24.9)
+33.3 ± 4.2 (+15.3)
+52.8 ± 2.4 (+12.5)
+36.1 ± 4.8 (+18.0)
+77.8 ± 4.8 (+8.4)
+15.3 ± 4.8 (+8.3)
+87.5 ± 8.3 (+15.3)
+79.2 ± 4.8 (+29.2)
+72.2 ± 2.4 (+15.2)
+41.0 ± 2.4 (+17.7)
+Table 9 Real-robot world model with RL evaluation on UR30e. All VLA policies are first SFT 100k steps, then
+post-trained with FA-GRPO and FlowScale in Prophet, and evaluated on the real robot.
+Method
+GraspBottle
+PickBowl
+PulloutTissue
+PlaceCube
+Overall
+VLA-Adapter-0.5B [63]
+45.0 ± 8.7
+13.3 ± 5.8
+28.3 ± 14.4
+56.7 ± 5.8
+35.8 ± 3.1
++ FA-GRPO & FlowScale
+76.7 ± 2.9 (+31.7)
+46.7 ± 7.6 (+33.4)
+51.7 ± 5.8 (+23.4)
+66.7 ± 5.8 (+10.0)
+60.4 ± 0.7 (+24.6)
+Pi0.5-3B [7]
+58.3 ± 2.9
+51.7 ± 5.8
+33.3 ± 5.8
+65.0 ± 5.0
+52.1 ± 3.8
++ FA-GRPO & FlowScale
+86.7 ± 2.9 (+28.4)
+83.3 ± 2.9 (+31.6)
+66.7 ± 2.9 (+33.4)
+91.7 ± 2.9 (+26.7)
+82.1 ± 0.7 (+30.0)
+OpenVLA-OFT-7B [32]
+55.0 ± 5.0
+33.3 ± 2.9
+41.7 ± 2.9
+11.7 ± 2.9
+35.4 ± 0.7
++ FA-GRPO & FlowScale
+73.3 ± 2.9 (+18.3)
+50.0 ± 5.0 (+16.7)
+81.7 ± 2.9 (+40.0)
+46.7 ± 2.9 (+35.0)
+62.9 ± 0.7 (+27.5)
+Train demonstration (dataset behavior)
+SFT policy rollout
+Ours: Prophet + FA-GRPO + FlowScale
+Figure 11 Real-world rollouts on the PlaceBowl task. Top: examples from collected training data, where the
+gripper approaches and grasps the bowl from the left side. Middle: failed manipulation by the SFT policy (Pi0.5),
+which inherits the left-side approach but cannot complete the task. Bottom: policy after post-training with FA-GRPO
+and FlowScale in Prophet, which learns a new and consistent right-side approach not present in the demonstrations.
+Closed-loop Prophet rollouts during RL. Fig. 13 visualizes closed-loop rollouts produced by Prophet when
+training Pi0.5 on PulloutTissue. For each initial tissue-box pose, the policy interacts only with Prophet, and
+we show both a successful case (S:1) and a failure case (S:0). This diversity of predicted trajectories is crucial
+for GRPO-style methods: the RM can provide feedback on a wide range of behaviors, allowing the policy to
+reshape its action distribution rather than overfitting to a single nominal pattern. A notable effect appears in
+the fourth row. Our data are collected with a human-in-the-loop teleoperation interface, so demonstrators
+occasionally adjust the object position mid-trajectory. These corrections are implicitly absorbed by Prophet
+during training, and the model sometimes predicts similar object adjustments in its rollouts. Although such
+behaviors are not explicitly supervised, they emerge in a purely data-driven manner and highlight the fidelity
+of the learned world model to nuances in the teleoperated demonstrations.
+23
+
+SFT policy rollout
+Ours: Prophet + FA-GRPO + FlowScale
+Figure 12 Real-world rollouts on the PulloutTissue task. The first two rows show rollouts from the SFT policy
+(Pi0.5), which often drifts laterally when approaching the exposed tissue edge. As highlighted, the gripper frequently
+deviates from the intended pulling direction, leading to missed grasps or weak contact with the tissue. The bottom
+two rows show our policy after post-training with FA-GRPO and FlowScale in Prophet, which produces a much more
+stable approach and consistently aligns the gripper with the tissue edge, resulting in reliable extraction and placement.
+This illustrates that RL can correct soft-object manipulation behaviors that remain brittle under SFT alone.
+4.3.3
+Evaluation on LIBERO
+We consider two regimes: (i) RL in the simulator; and (ii) RL with the world model, followed by evaluation in
+simulator. All runs use training scenes to avoid leakage, and we report averages over three seeds.
+For RL in the simulator, policies are optimized for 500 RL steps. We record the step at which the peak test
+score is first reached. As shown in Tab. 10, our FlowScale consistently speeds up convergence and raises the
+final success rate across categories. For RL with the world model, we use the Prophet fine-tuned for 30k steps
+on LIBERO without action frame conditioning (not available under the online servo-control setup). During
+training, the policy interacts with Prophet for rollouts up to 500 frames. Because long-horizon closed-loop
+rollouts accumulate model and reward errors and each update is slower than a simulator step, we train for 100
+RL updates and select the best checkpoint within this budget. Even though rewards come from an external
+RM rather than environment signals, this setting still yields clear gains over the SFT policy, and FlowScale
+further improves results.
+These gains are smaller than in the simulator, as expected: geometric and contact drift over long rollouts,
+combined with bias from the learned RM, make credit assignment harder in Prophet. Rather than replacing
+high-fidelity simulators, Prophet targets regimes where such simulators are unavailable or costly. In our
+experiments, it nevertheless provides training signals that are strong enough to improve policy performance
+under this shorter, noisier training regime.
+4.4
+Reward model discussion
+To understand what makes an RM usable for RL, we run an experiment where RL is performed in LIBERO
+simulator, but the policy receives rewards only from the RM. We start from a SmolVLA [58] policy SFT on
+full LIBERO for 100k steps, and then post-train it on LIBERO-Spatial using FA-GRPO. The simulator is
+used to render observations and to provide ground truth success labels for logging and RM evaluation.
+24
+
+Figure 13 Prophet rollouts during RL training on PulloutTissue. We show successful (S:1) and failed (S:0) Prophet
+rollouts from two initial object positions. Each sequence is the full predicted manipulation trajectory used for policy
+optimization, with the top-left label giving the RM’s majority-vote decision. These examples illustrate the variability
+of the Prophet and how both successes and failures influence the policy during RL.
+Table 10 RL in simulator vs. RL in world model (Prophet) on LIBERO. Green numbers denote absolute gains over
+VLA-Adapter (SFT 10k steps). Simulator rows use subscripts to mark the first RL update where the peak validation
+score is reached. Prophet rows omit subscripts since we select the best checkpoint under a different budget.
+Method
+Spatial
+Object
+Goal
+Long
+Overall
+VLA-Adapter [63]
+82.7 ± 0.9
+78.3 ± 1.3
+80.0 ± 0.2
+78.6 ± 2.0
+79.9 ± 2.2
+Simulator only
++ FA-GRPO
+92.4 ± 0.5 (+9.7) /409
+86.9 ± 0.7 (+8.6) /269
+87.4 ± 1.4 (+7.4) /259
+84.4 ± 1.2 (+5.8) /389
+87.8 ± 3.2 (+7.9)
++ FA-GRPO & FlowScale
+94.6 ± 1.2 (+11.9) /119
+87.4 ± 0.5 (+9.1) /159
+91.2 ± 0.7 (+11.2) /179
+86.4 ± 0.6 (+7.8) /169
+90.1 ± 3.5 (+10.2)
+Model only (Prophet)
++ FA-GRPO
+85.2 ± 0.4 (+2.5)
+80.6 ± 1.1 (+2.3)
+82.9 ± 0.5 (+2.9)
+80.6 ± 1.0 (+2.0)
+82.3 ± 0.7 (+2.9)
++ FA-GRPO & FlowScale
+89.0 ± 1.1 (+6.3)
+81.9 ± 1.3 (+3.6)
+83.7 ± 1.1 (+3.7)
+83.6 ± 1.3 (+3.0)
+84.5 ± 1.1 (+5.1)
+Fig. 14 summarizes the results. From left to right, the columns report: (i) test success rate on held-out scenes
+under the true simulator reward (ground truth-based success rate); (ii) the fraction of on-policy training
+trajectories that the RM classifies as successful (RM-based success rate); and (iii)–(v) RM precision, recall
+(true positive rate, TPR), and false positive rate (FPR) measured on on-policy rollouts:
+Precision = Pr(true success | RM predicts success),
+Recall = Pr(RM predicts success | true success),
+FPR = Pr(RM predicts success | true failure).
+(33)
+RM training setups. All three RMs in Fig. 14 share the same architecture and objective, they differ in the
+policies used to generate training trajectories and in the total amount of data. We use SmolVLA checkpoints
+with different ground truth success rates on LIBERO-Spatial to probe how RM quality affects RL.
+The low-recall RM (bottom row) is trained on 5k trajectories collected from a single checkpoint with roughly
+45% success. The two high-recall RMs (top and middle rows) are trained on mixed data from two checkpoints:
+one with ≈45% success and one with ≈70% success. For the short-run setting (middle row) we use 5k
+25
+
+0
+100
+200
+300
+400
+500
+0.40
+0.45
+0.50
+0.55
+0.60
+0.65
+0.70
+0.75
+High-recall RM (500 steps)
+GT success rate (test)
+0
+100
+200
+300
+400
+500
+0.4
+0.5
+0.6
+0.7
+0.8
+RM success rate (train)
+0
+100
+200
+300
+400
+500
+0.6
+0.7
+0.8
+0.9
+Precision
+0
+100
+200
+300
+400
+500
+0.92
+0.94
+0.96
+0.98
+1.00
+Recall
+0
+100
+200
+300
+400
+500
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+FPR
+0
+50
+100
+150
+200
+0.40
+0.45
+0.50
+0.55
+0.60
+0.65
+0.70
+0.75
+High-recall RM (200 steps)
+0
+50
+100
+150
+200
+0.4
+0.5
+0.6
+0.7
+0.8
+0
+50
+100
+150
+200
+0.70
+0.75
+0.80
+0.85
+0.90
+0
+50
+100
+150
+200
+0.94
+0.96
+0.98
+1.00
+0
+50
+100
+150
+200
+0.1
+0.2
+0.3
+0.4
+0
+50
+100
+150
+200
+Steps
+0.40
+0.45
+0.50
+0.55
+0.60
+0.65
+0.70
+0.75
+Low-recall RM (200 steps)
+0
+50
+100
+150
+200
+Steps
+0.4
+0.5
+0.6
+0.7
+0.8
+0
+50
+100
+150
+200
+Steps
+0.6
+0.7
+0.8
+0.9
+0
+50
+100
+150
+200
+Steps
+0.5
+0.6
+0.7
+0.8
+0.9
+0
+50
+100
+150
+200
+Steps
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+Figure 14 RM diagnostics for three SmolVLA with FA-GRPO runs on LIBERO-Spatial. Columns show (left to right)
+test success rate under the true simulator reward, average RM score on on-policy rollouts, RM precision, RM recall
+(TPR), and RM false positive rate (FPR). Top: high-recall RM, long run (500 steps), where success first improves
+and then collapses as precision drops sharply. Middle: high-recall RM, short run (200 steps), where precision/recall
+stay high and success improves monotonically. Bottom: low-recall RM, short run (200 steps), where FPR is low and
+precision is comparable but recall is much lower, so the policy fails to improve.
+trajectories in total, 2.5k from each checkpoint. For the long-run setting (top row) we double this to 10k
+trajectories, 5k per checkpoint. In all cases, LIBERO ground truth success is used only as a label for RM
+training and evaluation. RL relies solely on RM-based rewards.
+High-recall RM, long run (top row). In the first 300–350 updates, ground truth-based success improves from
+roughly 0.55 to 0.7, while RM-based success steadily increases. Precision remains high (≈0.85–0.9) and recall
+is almost perfect (≈0.98), even though FPR drifts upward from ∼0.08 to ∼0.3. In this regime, the RM is
+slightly over-optimistic on the shrinking set of failures, but still recognizes most truly successful trajectories
+and keeps most RM-labelled successes correct, so FA-GRPO can exploit the induced ranking to improve the
+policy despite moderate noise around failures.
+After about 300 updates, the dynamics change: ground truth-based success stops improving and eventually
+declines, RM-based success saturates, and precision starts to drop while FPR remains high. The RM now
+assigns ‘success’ to a much larger fraction of failures, and RM-labelled positives are no longer dominated by
+genuinely successful episodes. Gradients from RM-based rewards become misaligned with the true task, so
+continued optimization on the RM signal actively hurts performance.
+High-recall RM, short run (middle row). The second run uses the same high-recall RM but is stopped after
+200 updates. Over this horizon, ground truth-based success increases monotonically, RM-based success rises
+smoothly, precision stays above ∼0.85, recall remains close to 0.98, and FPR grows to ∼0.35. The run stays
+in the ‘useful’ regime of the top-row curves and never enters the late-stage precision collapse. This illustrates
+that FA-GRPO can tolerate increases in FPR and distributional shift, as long as the RM continues to assign
+high scores to most truly successful trajectories and keeps the set of RM-labelled successes reasonably clean.
+Low-recall RM, short run (bottom row). The third run highlights a complementary failure mode. Here the RM
+has consistently low FPR (≈0.1–0.2) and precision comparable to the other runs (∼0.8), but its recall is
+significantly lower, fluctuating around 0.7–0.8 instead of being near 1.0. Ground truth-based success now fails
+to improve and oscillates around the initial 0.5 level, even though the RM appears ‘conservative’ by rarely
+misclassifying failures as successes. From a classification viewpoint, many genuinely successful trajectories are
+treated as negatives and receive no advantage over mediocre ones, the RM provides very weak preference
+between good and average behaviour, and the policy has little signal to move towards true success.
+Taken together, these diagnostics clarify what matters for RM quality in our setting. Moderate increases in
+26
+
+FPR are acceptable as the policy distribution drifts: FA-GRPO can still make progress as long as the RM
+maintains high recall, so that most successful trajectories are recognized as such, and reasonably high precision,
+so that RM-labelled successes are not dominated by failures. In contrast, two situations are harmful: (i) a
+late-stage sharp drop in precision while FPR is high, which leads to strong misalignment between RM rewards
+and true success (top row, late phase); and (ii) persistently low recall, even with low FPR, which yields too few
+correctly rewarded successes to drive learning (bottom row). Thus, a useful RM for FA-GRPO should reliably
+find most truly successful trajectories (high recall) while keeping its precision reasonably stable, driving FPR
+to very small values is neither necessary nor sufficient for good RL performance.
+5
+Conclusions
+In this paper, we studied how to make VLA post-training effective and practical by coupling policies with
+an adaptive world model. We introduced Prophet, an action-conditioned video world model that generates
+long-horizon, action-aligned manipulation rollouts from first-frame observations and multi-step actions, and
+showed that large-scale pretraining with few-shot adaptation yields a simulator that transfers across robots,
+objects, and environments. Building on Prophet, we proposed FlowScale, a flow-aware GRPO variant with
+stabilized gradients for reliable long-horizon RL with the world model loop. Across diverse VLA variants, our
+experiments show success gains of 5–17% on public benchmarks and 24–30% on real-robot evaluations.
+At the same time, the current system is computationally demanding. During RL, the policy must interact
+with a 2B-parameter Prophet to generate closed-loop rollouts, which dominates the training cost and limits
+the number of iterations we can feasibly run. Improving the efficiency of the world model—for example via
+architectural simplification, distillation into a smaller student, feature caching across rollouts, or specialized
+inference kernels—could substantially accelerate RL with the world model and enable scaling to longer
+horizons, larger task suites, and richer forms of policy exploration.
+References
+[1] Wmpo: World model-based policy optimization for vision-language-action models. submitted to ICLR, 2025.
+[2] Niket Agarwal, Arslan Ali, Maciej Bala, Yogesh Balaji, Erik Barker, Tiffany Cai, Prithvijit Chattopadhyay,
+Yongxin Chen, Yin Cui, Yifan Ding, et al. Cosmos world foundation model platform for physical ai. arXiv
+preprint, 2025.
+[3] Shikhar Bahl, Russell Mendonca, Lili Chen, Unnat Jain, and Deepak Pathak. Affordances from human videos as
+a versatile representation for robotics. In CVPR, 2023.
+[4] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, Sibo Song, Kai Dang, Peng Wang, Shijie Wang,
+Jun Tang, et al. Qwen2. 5-vl technical report. arXiv preprint, 2025.
+[5] Suneel Belkhale, Yuchen Cui, and Dorsa Sadigh. Hydra: Hybrid robot actions for imitation learning. CoRL, 2023.
+[6] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, Lachy
+Groom, Karol Hausman, Brian Ichter, et al. π0: A vision-language-action flow model for general robot control.
+arXiv preprint.
+[7] Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan Esmail, Michael Robert Equi,
+Chelsea Finn, Niccolo Fusai, Manuel Y Galliker, et al. π0.5: a vision-language-action model with open-world
+generalization. In CoRL, 2025.
+[8] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Joseph Dabis, Chelsea Finn, Keerthana
+Gopalakrishnan, Karol Hausman, Alex Herzog, Jasmine Hsu, et al. Rt-1: Robotics transformer for real-world
+control at scale. arXiv preprint, 2022.
+[9] Jake Bruce, Michael D Dennis, Ashley Edwards, Jack Parker-Holder, Yuge Shi, Edward Hughes, Matthew Lai,
+Aditi Mavalankar, Richie Steigerwald, Chris Apps, et al. Genie: Generative interactive environments. In ICML,
+2024.
+27
+
+[10] Qingwen Bu, Jisong Cai, Li Chen, Xiuqi Cui, Yan Ding, Siyuan Feng, Shenyuan Gao, Xindong He, Xuan Hu,
+Xu Huang, et al. Agibot world colosseo: A large-scale manipulation platform for scalable and intelligent embodied
+systems. arXiv preprint, 2025.
+[11] Chilam Cheang, Sijin Chen, Zhongren Cui, Yingdong Hu, Liqun Huang, Tao Kong, Hang Li, Yifeng Li, Yuxiao
+Liu, Xiao Ma, et al. Gr-3 technical report. arXiv preprint, 2025.
+[12] Zengjue Chen, Runliang Niu, He Kong, and Qi Wang. Tgrpo: Fine-tuning vision-language-action model via
+trajectory-wise group relative policy optimization. arXiv preprint, 2025.
+[13] Ganqu Cui, Lifan Yuan, Zefan Wang, Hanbin Wang, Wendi Li, Bingxiang He, Yuchen Fan, Tianyu Yu, Qixin Xu,
+Weize Chen, et al. Process reinforcement through implicit rewards. arXiv preprint, 2025.
+[14] Zichen Jeff Cui, Yibin Wang, Nur Muhammad Mahi Shafiullah, and Lerrel Pinto. From play to policy: Conditional
+behavior generation from uncurated robot data. ICLR, 2023.
+[15] Shivin Dass, Jullian Yapeter, Jesse Zhang, Jiahui Zhang, Karl Pertsch, Stefanos Nikolaidis, and Joseph J. Lim.
+Clvr jaco play dataset, 2023. URL https://github.com/clvrai/clvr_jaco_play_dataset.
+[16] Yilun Du, Sherry Yang, Bo Dai, Hanjun Dai, Ofir Nachum, Josh Tenenbaum, Dale Schuurmans, and Pieter
+Abbeel. Learning universal policies via text-guided video generation. NeurIPS, 2023.
+[17] Gunnar Farnebäck. Two-frame motion estimation based on polynomial expansion. In Scandinavian conference on
+Image analysis, 2003.
+[18] Scott Fujimoto, Herke Hoof, and David Meger. Addressing function approximation error in actor-critic methods.
+In ICML, 2018.
+[19] Yanjiang Guo, Lucy Xiaoyang Shi, Jianyu Chen, and Chelsea Finn. Ctrl-world: A controllable generative world
+model for robot manipulation. arXiv preprint, 2025.
+[20] Tuomas Haarnoja, Aurick Zhou, Pieter Abbeel, and Sergey Levine. Soft actor-critic: Off-policy maximum entropy
+deep reinforcement learning with a stochastic actor. In ICML, 2018.
+[21] Yoav HaCohen, Nisan Chiprut, Benny Brazowski, Daniel Shalem, Dudu Moshe, Eitan Richardson, Eran Levin,
+Guy Shiran, Nir Zabari, Ori Gordon, Poriya Panet, Sapir Weissbuch, Victor Kulikov, Yaki Bitterman, Zeev
+Melumian, and Ofir Bibi. Ltx-video: Realtime video latent diffusion. arXiv preprint, 2024.
+[22] Minho Heo, Youngwoon Lee, Doohyun Lee, and Joseph J. Lim.
+Furniturebench: Reproducible real-world
+benchmark for long-horizon complex manipulation. In RSS, 2023.
+[23] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, Weizhu Chen,
+et al. Lora: Low-rank adaptation of large language models. ICLR, 2022.
+[24] Jian Hu, Jason Klein Liu, Haotian Xu, and Wei Shen. Reinforce++: An efficient rlhf algorithm with robustness
+to both prompt and reward models. arXiv preprint, 2025.
+[25] Physical Intelligence, Kevin Black, Noah Brown, James Darpinian, Karan Dhabalia, Danny Driess, Adnan
+Esmail, Michael Equi, Chelsea Finn, Niccolo Fusai, et al. π0. 5: a vision-language-action model with open-world
+generalization, 2025. arXiv preprint.
+[26] Eric Jang, Alex Irpan, Mohi Khansari, Daniel Kappler, Frederik Ebert, Corey Lynch, Sergey Levine, and Chelsea
+Finn. Bc-z: Zero-shot task generalization with robotic imitation learning. In CoRL, 2022.
+[27] Joel Jang, Seonghyeon Ye, Zongyu Lin, Jiannan Xiang, Johan Bjorck, Yu Fang, Fengyuan Hu, Spencer Huang,
+Kaushil Kundalia, Yen-Chen Lin, et al. Dreamgen: Unlocking generalization in robot learning through video
+world models. arXiv preprint, 2025.
+[28] Yuxin Jiang, Shengcong Chen, Siyuan Huang, Liliang Chen, Pengfei Zhou, Yue Liao, Xindong He, Chiming Liu,
+Hongsheng Li, Maoqing Yao, et al. Enerverse-ac: Envisioning embodied environments with action condition.
+arXiv preprint, 2025.
+[29] Zhennan Jiang, Kai Liu, Yuxin Qin, Shuai Tian, Yupeng Zheng, Mingcai Zhou, Chao Yu, Haoran Li, and Dongbin
+Zhao. World4rl: Diffusion world models for policy refinement with reinforcement learning for robotic manipulation.
+arXiv preprint, 2025.
+28
+
+[30] Quevedo Julian, Sharma Ansh, Kumar, Yixiang Sun, Suryavanshi Varad, Liang Percy, and Yang Sherry. Worldgym:
+World model as an environment for policy evaluation. arXiv preprint, 2025.
+[31] Alexander Khazatsky, Karl Pertsch, Suraj Nair, Ashwin Balakrishna, Sudeep Dasari, Siddharth Karamcheti,
+Soroush Nasiriany, Mohan Kumar Srirama, Lawrence Yunliang Chen, Kirsty Ellis, et al. Droid: A large-scale
+in-the-wild robot manipulation dataset. arXiv preprint, 2024.
+[32] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna, Suraj Nair, Rafael Rafailov,
+Ethan P Foster, Pannag R Sanketi, Quan Vuong, et al. Openvla: An open-source vision-language-action model.
+In CoRL, 2025.
+[33] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao
+Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention. In
+SOSP, 2023.
+[34] Haozhan Li, Yuxin Zuo, Jiale Yu, Yuhao Zhang, Zhaohui Yang, Kaiyan Zhang, Xuekai Zhu, Yuchen Zhang,
+Tianxing Chen, Ganqu Cui, et al. Simplevla-rl: Scaling vla training via reinforcement learning. arXiv preprint,
+2025.
+[35] Hengtao Li, Pengxiang Ding, Runze Suo, Yihao Wang, Zirui Ge, Dongyuan Zang, Kexian Yu, Mingyang Sun,
+Hongyin Zhang, Donglin Wang, et al. Vla-rft: Vision-language-action reinforcement fine-tuning with verified
+rewards in world simulators. arXiv preprint, 2025.
+[36] Xuanlin Li, Kyle Hsu, Jiayuan Gu, Oier Mees, Karl Pertsch, Homer Rich Walke, Chuyuan Fu, Ishikaa Lunawat,
+Isabel Sieh, Sean Kirmani, et al. Evaluating real-world robot manipulation policies in simulation. In CoRL, 2025.
+[37] Ziniu Li, Tian Xu, Yushun Zhang, Zhihang Lin, Yang Yu, Ruoyu Sun, and Zhi-Quan Luo. Remax: A simple,
+effective, and efficient reinforcement learning method for aligning large language models. arXiv preprint, 2023.
+[38] Junbang Liang, Pavel Tokmakov, Ruoshi Liu, Sruthi Sudhakar, Paarth Shah, Rares Ambrus, and Carl Vondrick.
+Video generators are robot policies. arXiv preprint, 2025.
+[39] Yue Liao, Pengfei Zhou, Siyuan Huang, Donglin Yang, Shengcong Chen, Yuxin Jiang, Yue Hu, Jingbin Cai,
+Si Liu, Jianlan Luo, et al. Genie envisioner: A unified world foundation platform for robotic manipulation. arXiv
+preprint, 2025.
+[40] Timothy P Lillicrap, Jonathan J Hunt, Alexander Pritzel, Nicolas Heess, Tom Erez, Yuval Tassa, David Silver,
+and Daan Wierstra. Continuous control with deep reinforcement learning. arXiv preprint, 2015.
+[41] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter Stone. Libero: Benchmarking
+knowledge transfer for lifelong robot learning. NeurIPS, 2023.
+[42] Huaping Liu, Xinghang Li, Peiyan Li, Minghuan Liu, Dong Wang, Jirong Liu, Bingyi Kang, Xiao Ma, Tao Kong,
+and Hanbo Zhang. Towards generalist robot policies: What matters in building vision-language-action models.
+2025.
+[43] Jie Liu, Gongye Liu, Jiajun Liang, Yangguang Li, Jiaheng Liu, Xintao Wang, Pengfei Wan, Di Zhang, and Wanli
+Ouyang. Flow-grpo: Training flow matching models via online rl. NeurIPS, 2025.
+[44] Guanxing Lu, Wenkai Guo, Chubin Zhang, Yuheng Zhou, Haonan Jiang, Zifeng Gao, Yansong Tang, and Ziwei
+Wang. Vla-rl: Towards masterful and general robotic manipulation with scalable reinforcement learning. arXiv
+preprint, 2025.
+[45] Qi Lv, Weijie Kong, Hao Li, Jia Zeng, Zherui Qiu, Delin Qu, Haoming Song, Qizhi Chen, Xiang Deng, and
+Jiangmiao Pang. F1: A vision-language-action model bridging understanding and generation to actions. arXiv
+preprint, 2025.
+[46] Russell Mendonca, Shikhar Bahl, and Deepak Pathak. Structured world models from human videos. CoRL, 2023.
+[47] Soroush Nasiriany, Tian Gao, Ajay Mandlekar, and Yuke Zhu. Learning and retrieval from prior data for skill-based
+imitation learning. In CoRL, 2022.
+[48] Octo Model Team, Dibya Ghosh, Homer Walke, Karl Pertsch, Kevin Black, Oier Mees, Sudeep Dasari, Joey
+Hejna, Charles Xu, Jianlan Luo, Tobias Kreiman, You Liang Tan, Pannag Sanketi, Quan Vuong, Ted Xiao, Dorsa
+Sadigh, Chelsea Finn, and Sergey Levine. Octo: An open-source generalist robot policy. In RSS, 2024.
+29
+
+[49] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin, Chong Zhang, Sandhini
+Agarwal, Katarina Slama, Alex Ray, et al. Training language models to follow instructions with human feedback.
+NeurIPS, 2022.
+[50] Abby O’Neill, Abdul Rehman, Abhiram Maddukuri, Abhishek Gupta, Abhishek Padalkar, Abraham Lee, Acorn
+Pooley, Agrim Gupta, Ajay Mandlekar, Ajinkya Jain, et al. Open x-embodiment: Robotic learning datasets and
+rt-x models: Open x-embodiment collaboration 0. In ICRA, 2024.
+[51] Zekun Qi, Wenyao Zhang, Yufei Ding, Runpei Dong, Xinqiang Yu, Jingwen Li, Lingyun Xu, Baoyu Li, Xialin
+He, Guofan Fan, et al. Sofar: Language-grounded orientation bridges spatial reasoning and object manipulation.
+arXiv preprint, 2025.
+[52] Delin Qu, Haoming Song, Qizhi Chen, Yuanqi Yao, Xinyi Ye, Yan Ding, Zhigang Wang, JiaYuan Gu, Bin Zhao,
+Dong Wang, et al. Spatialvla: Exploring spatial representations for visual-language-action model. arXiv preprint,
+2025.
+[53] Gabriel Quere, Annette Hagengruber, Maged Iskandar, Samuel Bustamante, Daniel Leidner, Freek Stulp, and
+Joern Vogel. Shared Control Templates for Assistive Robotics. In ICRA, Paris, France, 2020.
+[54] John Schulman, Sergey Levine, Pieter Abbeel, Michael Jordan, and Philipp Moritz. Trust region policy optimization.
+In ICML, 2015.
+[55] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal policy optimization
+algorithms. arXiv preprint, 2017.
+[56] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan Zhang,
+YK Li, Yang Wu, et al. Deepseekmath: Pushing the limits of mathematical reasoning in open language models.
+arXiv preprint, 2024.
+[57] Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin Lin, and
+Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. In EuroSys, 2025.
+[58] Mustafa Shukor, Dana Aubakirova, Francesco Capuano, Pepijn Kooijmans, Steven Palma, Adil Zouitine, Michel
+Aractingi, Caroline Pascal, Martino Russi, Andres Marafioti, et al. Smolvla: A vision-language-action model for
+affordable and efficient robotics. arXiv preprint, 2025.
+[59] GigaBrain Team, Angen Ye, Boyuan Wang, Chaojun Ni, Guan Huang, Guosheng Zhao, Haoyun Li, Jie Li, Jiagang
+Zhu, Lv Feng, et al. Gigabrain-0: A world model-powered vision-language-action model. arXiv preprint, 2025.
+[60] Jörn Vogel, Annette Hagengruber, Maged Iskandar, Gabriel Quere, Ulrike Leipscher, Samuel Bustamante,
+Alexander Dietrich, Hannes Hoeppner, Daniel Leidner, and Alin Albu-Schäffer. Edan - an emg-controlled daily
+assistant to help people with physical disabilities. In IROS, 2020.
+[61] Homer Walke, Kevin Black, Abraham Lee, Moo Jin Kim, Max Du, Chongyi Zheng, Tony Zhao, Philippe Hansen-
+Estruch, Quan Vuong, Andre He, Vivek Myers, Kuan Fang, Chelsea Finn, and Sergey Levine. Bridgedata v2: A
+dataset for robot learning at scale. In CoRL, 2023.
+[62] Team Wan, Ang Wang, Baole Ai, Bin Wen, Chaojie Mao, Chen-Wei Xie, Di Chen, Feiwu Yu, Haiming Zhao,
+Jianxiao Yang, Jianyuan Zeng, Jiayu Wang, Jingfeng Zhang, Jingren Zhou, Jinkai Wang, Jixuan Chen, Kai Zhu,
+Kang Zhao, Keyu Yan, Lianghua Huang, Mengyang Feng, Ningyi Zhang, Pandeng Li, Pingyu Wu, Ruihang Chu,
+Ruili Feng, Shiwei Zhang, Siyang Sun, Tao Fang, Tianxing Wang, Tianyi Gui, Tingyu Weng, Tong Shen, Wei Lin,
+Wei Wang, Wei Wang, Wenmeng Zhou, Wente Wang, Wenting Shen, Wenyuan Yu, Xianzhong Shi, Xiaoming
+Huang, Xin Xu, Yan Kou, Yangyu Lv, Yifei Li, Yijing Liu, Yiming Wang, Yingya Zhang, Yitong Huang, Yong
+Li, You Wu, Yu Liu, Yulin Pan, Yun Zheng, Yuntao Hong, Yupeng Shi, Yutong Feng, Zeyinzi Jiang, Zhen Han,
+Zhi-Fan Wu, and Ziyu Liu. Wan: Open and advanced large-scale video generative models. arXiv preprint, 2025.
+[63] Yihao Wang, Pengxiang Ding, Lingxiao Li, Can Cui, Zirui Ge, Xinyang Tong, Wenxuan Song, Han Zhao, Wei
+Zhao, Pengxu Hou, et al. Vla-adapter: An effective paradigm for tiny-scale vision-language-action model. arXiv
+preprint, 2025.
+[64] Ronald J Williams. Simple statistical gradient-following algorithms for connectionist reinforcement learning.
+Machine learning, 1992.
+[65] Philipp Wu, Yide Shentu, Zhongke Yi, Xingyu Lin, and Pieter Abbeel. Gello: A general, low-cost, and intuitive
+teleoperation framework for robot manipulators. In IROS, 2024.
+30
+
+[66] Junjin Xiao, Yandan Yang, Xinyuan Chang, Ronghan Chen, Feng Xiong, Mu Xu, Wei-Shi Zheng, and Qing Zhang.
+World-env: Leveraging world model as a virtual environment for vla post-training. arXiv preprint, 2025.
+[67] Mengjiao Yang, Yilun Du, Kamyar Ghasemipour, Jonathan Tompson, Dale Schuurmans, and Pieter Abbeel.
+Learning interactive real-world simulators. arXiv preprint, 2023.
+[68] Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan, Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan, Gaohong
+Liu, Lingjun Liu, et al. Dapo: An open-source llm reinforcement learning system at scale. arXiv preprint, 2025.
+[69] Jiahui Zhang, Yurui Chen, Yueming Xu, Ze Huang, Yanpeng Zhou, Yu-Jie Yuan, Xinyue Cai, Guowei Huang,
+Xingyue Quan, Hang Xu, et al. 4d-vla: Spatiotemporal vision-language-action pretraining with cross-scene
+calibration. arXiv preprint, 2025.
+[70] Lvmin Zhang and Maneesh Agrawala. Packing input frame contexts in next-frame prediction models for video
+generation. arxiv preprint, 2025.
+[71] Lvmin Zhang, Shengqu Cai, Muyang Li, Gordon Wetzstein, and Maneesh Agrawala. Frame context packing and
+drift prevention in next-frame-prediction video diffusion models. In NeurIPS, 2025.
+[72] Tonghe Zhang, Chao Yu, Sichang Su, and Yu Wang. Reinflow: Fine-tuning flow matching policy with online
+reinforcement learning. arXiv preprint, 2025.
+[73] Wenyao Zhang, Shipeng Lyu, Feng Xue, Chen Yao, Zheng Zhu, and Zhenzhong Jia. Predict the rover mobility
+over soft terrain using articulated wheeled bevameter. RA-L, 2022.
+[74] Wenyao Zhang, Hongsi Liu, Zekun Qi, Yunnan Wang, Xinqiang Yu, Jiazhao Zhang, Runpei Dong, Jiawei He, Fan
+Lu, He Wang, et al. Dreamvla: a vision-language-action model dreamed with comprehensive world knowledge.
+arXiv preprint, 2025.
+[75] Fangqi Zhu, Hongtao Wu, Song Guo, Yuxiao Liu, Chilam Cheang, and Tao Kong. Irasim: Learning interactive
+real-robot action simulators. arXiv preprint, 2024.
+31

@@ -1,0 +1,2048 @@
+PRINTS: Reward Modeling for Long-Horizon Information Seeking
+Jaewoo Lee 1 Archiki Prasad 1 Justin Chih-Yao Chen 1 Zaid Khan 1 Elias Stengel-Eskin 2 Mohit Bansal 1
+Abstract
+Information-seeking is a core capability for AI
+agents, requiring them to gather and reason over
+tool-generated information across long trajec-
+tories. However, such multi-step information-
+seeking tasks remain challenging for agents
+backed by language models. While process re-
+ward models (PRMs) can guide agents by ranking
+candidate steps at test-time, existing PRMs, de-
+signed for short reasoning with binary judgment,
+cannot capture richer dimensions of information-
+seeking steps, such as tool interactions and rea-
+soning over tool outputs, nor handle the rapidly
+growing context in long-horizon tasks. To ad-
+dress these limitations, we introduce PRINTS,
+a generative PRM trained with dual capabilities:
+(1) dense scoring based on the PRM’s reason-
+ing across multiple step quality dimensions (e.g.,
+interpretation of tool outputs, tool call informa-
+tiveness) and (2) trajectory summarization that
+compresses the growing context while preserving
+essential information for step evaluation. Exten-
+sive evaluations across FRAMES, GAIA (levels
+1-3), and WebWalkerQA (easy-hard) benchmarks
+on multiple models, along with ablations, reveal
+that best-of-n sampling with PRINTS enhances
+information-seeking abilities of open-source mod-
+els as well as specialized agents, matching or sur-
+passing the performance of frontier models with a
+much smaller backbone agent and outperforming
+other strong reward modeling baselines.1
+1. Introduction
+A long-standing goal in artificial intelligence has been to
+develop agents that can answer novel queries by intelli-
+gently seeking information (Bachman et al., 2016; Yuan
+et al., 2020), thereby enabling them to tackle challenging
+1University of North Carolina at Chapel Hill 2University
+of Texas at Austin.
+Correspondence to:
+Jaewoo Lee
+<jwoolee@cs.unc.edu>, Archiki Prasad <archiki@cs.unc.edu>.
+Preprint. November 25, 2025.
+1Code available at https://github.com/G-JWLee/PRInTS
+tasks in mathematics (Liu et al., 2025a;b), software engineer-
+ing (Yang et al., 2025b; Pan et al., 2024), and research (Li
+et al., 2025b; Wu et al., 2025a). Large Language Mod-
+els (LLMs) have shown promise as agents for such tasks
+when equipped with frameworks like ReAct (Yao et al.,
+2023), which interleaves LLM reasoning with external tool
+interactions. However, long-horizon information-seeking
+tasks, which require agents to gather and synthesize infor-
+mation across multiple steps (Su et al., 2025; Shao et al.,
+2025), remain challenging, even for recent LLMs with tool-
+use training, performing far below human-level (Mialon
+et al., 2024; Wei et al., 2025). While finetuning LLMs as
+information-seeking agents has shown promise (Li et al.,
+2025b; Wu et al., 2025a; Tao et al., 2025), it is limited to
+specific model families and is highly computationally de-
+manding (Gao et al., 2025). An alternative way to boost a
+variety of agents is to build reward models (e.g., as done
+for math reasoning and instruction following (Wang et al.,
+2024a; Zou et al., 2025)). These models approximate the
+expected reward of a step or sequence of steps, enabling
+test-time scaling by ranking and selecting higher-quality
+actions or trajectories to successfully tackle long-horizon
+tasks. Specifically, Process Reward Models (PRMs) (Zou
+et al., 2025; Choudhury, 2025; Chae et al., 2025) offer a
+promising model-agnostic way of improving performance,
+scoring the quality of each of an agent’s steps.
+While past work has developed PRMs for tasks such as
+mathematics and logical reasoning, these methods are in-
+sufficient for long-horizon information-seeking tasks for
+two critical reasons. (1) Tool-Reasoning Evaluation Gran-
+ularity: existing PRMs evaluate short reasoning units in
+isolation, typically one- to two-sentence logical or mathe-
+matical inferences (Xiong et al., 2025; Zhao et al., 2025),
+providing binary judgments based on logical/math valid-
+ity. In contrast, long-horizon information-seeking requires
+jointly evaluating a complete trajectory step, which encom-
+passes a reasoning step combined with tool interactions (e.g.,
+web search, web browsing, code execution). Moreover, step
+quality depends on multiple factors (e.g., interpretation of
+tool outputs, tool call informativeness, plan for next action)
+that coarse feedback cannot capture, increasing the granular-
+ity of the guidance needed to effectively steer agents toward
+good trajectories. (2) Context Accumulation: existing
+PRMs cannot manage the ever-growing reasoning context
+1
+arXiv:2511.19314v1  [cs.AI]  24 Nov 2025
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+Process Reward Model for Step Evaluation
+Candidate 𝑖𝑖
+Evaluate short reasoning units
+Output binary judgment
+Struggle with accumulating context
+Reasoning context
+(Rapidly growing)
+Compressed
+Reasoning 𝑡𝑡
+Tool Call 𝑡𝑡 
+Tool Response 𝑡𝑡-1
+Summary 𝑡𝑡 
+Candidate 𝑖𝑖
+Yes / No
+Score
+Summary 
+Trajectory Step
+Existing PRMs
+PRInTS
+- Reasoning t+1: … First, I need to identify the country. The mention of 
+anglophone and francophone broadcasters suggests a country with both 
+English and French as official languages. 
+…
+- Tool Call t+1: {'function': 'google_search', 'arguments': {'q': ‘Canada digital 
+TV transmitters after analog shutdown 2010s', 'gl': 'ca', 'hl': 'en', 'num': 10}}
+Info-seeking
+Reasoning context
+- Informativeness: The assistant identifies Canada 
+as the country based on geographical clues… 
+- Tool Call Appropriateness: The query is generic…
+…
+- Final Judgement: \boxed_score{2.0}
+GAIA Level2 Reasoning Context Growth
+Summary 𝑡𝑡-1
+Evaluate reasoning & tool interactions
+Provide finer-grained guidance
+Maintain reasoning summary
+LasJ
+PRInTS
+Figure 1. Comparison between existing PRMs and PRINTS. Top: Existing PRMs are limited for long-horizon information-seeking as
+they evaluate a short reasoning unit (e.g., one-to-two-sentence inferences) with coarse feedback, which cannot capture multi-faceted
+quality factors from tool interactions. They also struggle with rapidly accumulating reasoning context (left). Bottom: In contrast, PRINTS
+evaluates a complete trajectory step (reasoning + tool interactions), considers multiple trajectory step quality dimensions to produce dense
+scores for finer-grained guidance at each step, and maintains compact trajectory summaries that keep key information for the evaluation.
+that arises over multiple trajectory steps. As illustrated
+in Figure 1 (Top-left), the information-seeking trajectory
+– interleaving reasoning steps, tool calls, and tool call out-
+puts – grows rapidly as tool responses at each step introduce
+lengthy, noisy content, creating computational overhead.
+Furthermore, recent studies show that models struggle to
+process long, accumulated contexts (Tang et al., 2025; Yen
+et al., 2025; Kuratov et al., 2024), resulting in noisy evalua-
+tions. This necessitates compressing trajectories into com-
+pact forms instead of processing entire historical contexts.
+Our work aims to fill these gaps by introducing Progress
+Reward via Information gain scoring and Trajectory
+Summarization (PRINTS), a novel generative PRM for
+long-horizon information-seeking tasks. PRINTS is a uni-
+fied model jointly trained with two key abilities to address
+both the need for fine-grained guidance and the challenge
+of context accumulation. These two abilities are learned
+jointly within the same PRM. First, PRINTS acts as a scorer
+that evaluates candidate next trajectory steps by generating
+Chain-of-Thought (Wei et al., 2022) analyses across multi-
+ple quality dimensions and outputting dense scores derived
+from this generative reasoning, as illustrated in (Figure 1
+(Bottom)). Crucially, we frame step evaluation as informa-
+tion gain estimation that quantifies how much each trajec-
+tory step increases the probability of reaching the correct
+answer. This formulation enables training via reinforcement
+learning with information gain estimation and preference
+prediction objectives, providing richer reward signals that
+account for the multi-faceted quality of trajectory steps. At
+test-time, PRINTS evaluates n candidate next steps, select-
+ing the step expected to yield the greatest information gain.
+Second, PRINTS simultaneously functions as a summarizer
+that recursively generates and updates a compact trajectory
+summary at each step. PRINTS compresses the query, pre-
+vious summary, latest tool response, and current step into an
+updated summary that captures essential findings and plans
+up to the current timestep (Figure 1 (Bottom)). This keeps
+input length bounded, as shown in Figure 1 (Bottom-left),
+while preserving information for subsequent evaluation.
+To equip PRINTS with these dual capabilities, we first
+design preference and summary data that can produce super-
+vision signals needed to train the scoring and summarization
+components. Specifically, our annotation pipeline (Figure 3)
+uses Monte Carlo rollouts (Wang et al., 2024a; Setlur et al.,
+2025) to estimate information gain scores and construct
+preference trajectory step pairs, and generates compact tra-
+jectory summaries for each step. Next, we use this annotated
+data to train PRINTS via reinforcement learning for scor-
+ing ability with two complementary rewards: (1) a Score
+Reward that teaches the model to analyze the trajectory
+step quality and estimate the step’s information gain score,
+and (2) a Comparison Reward that teaches the model to
+assign higher scores to preferred trajectory steps by learning
+from pairwise preferences. These rewards enable the model
+to capture the multi-faceted quality of the trajectory step
+and perform dense step-level evaluation. We jointly train
+PRINTS via supervised fine-tuning for summarization that
+recursively updates the trajectory summary based on the pre-
+vious summary and most recent reasoning context at each
+step, directly addressing the context accumulation challenge
+while preserving key information needed for step-level eval-
+uation. Together, this pipeline enables PRINTS to serve
+as a unified PRM capable of both managing long, noisy
+trajectories and providing fine-grained test-time guidance.
+We validate our approach across three distinct LLMs
+used as information-seeking agents: Qwen3-32B (Yang
+et al., 2025a), Tongyi DeepResearch-30B-A3B (Li et al.,
+2025a) – a specialized information-seeking agent – and
+Gemini-2.5-Flash (Gemini Team, 2025), evaluated on three
+long-horizon information-seeking benchmarks: FRAMES,
+GAIA, and WebWalkerQA. The experimental results show
+that PRINTS, a 4B PRM, consistently provides test-
+time gains across diverse agents – Qwen3-32B by 9.3%,
+2
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+DeepResearch-30B-A3B by 3.9%, and Gemini-2.5-Flash by
+4.0% absolute average accuracy – without fine-tuning the
+underlying models. Unlike existing PRMs, which obtain di-
+minished and inconsistent gains as agents become stronger,
+PRINTS continues to deliver substantial improvements. No-
+tably, on GAIA (levels 1-3) (Mialon et al., 2024), PRINTS
+raises DeepResearch-30B-A3B from 61.9% to 64.4% in our
+implementation, enabling the 30B agent augmented with
+the 4B PRM to match the performance of OpenAI Deep-
+Research (67.4%) and DeepSeek-V3.1-671B (63.1%) (Li
+et al., 2025a). Furthermore, our ablation studies reveal that
+providing compressed summaries outperforms using raw tra-
+jectories as input context, showing that context management
+is essential for accurate step-level evaluation in long-horizon
+tasks. Overall, our approach enhances information-seeking
+abilities of pretrained open-source models as well as spe-
+cialized agents. showing strong generalizability.
+2. Related Work
+Large Language Models (LLM) as Agents.
+LLMs have
+been increasingly adopted as agents through frameworks
+such as ReAct (Yao et al., 2023), which integrates rea-
+soning with external tool interactions to solve complex
+tasks (Deng et al., 2025; Wu et al., 2025c). To facilitate ef-
+fective information-seeking behaviors that require multiple
+reasoning steps and tool interactions to reach a final answer,
+recent studies (Li et al., 2025b; Tao et al., 2025; Li et al.,
+2025a) aim to improve the intrinsic quality of information-
+seeking trajectories. For instance, both WebSailor (Li et al.,
+2025b), WebShaper (Tao et al., 2025), DeepResearch (Li
+et al., 2025a) agents synthesize large-scale QA training data
+by injecting uncertainty into structured knowledge to teach
+LLMs to reduce the search space by discovering unknown
+variables. However, training LLMs for long-horizon tasks
+shares key limitations: (1) it requires substantial supervi-
+sion (MiroMind AI Team, 2025; Li et al., 2025a) and (2) it
+requires access to model weights, which poses challenges
+for generalization whenever the underlying model changes.
+We empirically show that PRINTS enhances agent perfor-
+mance, indicating that test-time guidance and agent fine-
+tuning are orthogonal yet mutually beneficial directions for
+improving information-seeking capabilities.
+Reward Models for Reasoning.
+To measure reasoning
+quality, Outcome Reward Models (ORMs) are used to pre-
+dict the correctness of complete reasoning trajectories (Kim
+et al., 2024; Pan et al., 2024). Consequently, ORMs can-
+not provide finer-grained, step-wise guidance over partial
+trajectories. Process Reward Models (PRMs) address this
+limitation by evaluating and assigning rewards for individ-
+ual steps (Ton et al., 2024; He et al., 2025; Chen et al.,
+2025).
+Recent advancements cast PRMs as generative
+judges (Wang et al., 2024b; Whitehouse et al., 2025; He
+et al., 2025) that generate justifications for step scores and
+have achieved strong performance in mathematics (Zhao
+et al., 2025; Xiong et al., 2025; Wang et al., 2024a), fi-
+nance (Zhou et al., 2025), and agentic tasks (Chae et al.,
+2025; Choudhury, 2025). In contrast to these existing PRM
+approaches that rank the validity of relatively short reason-
+ing snippets and struggle with managing growing contexts,
+PRINTS is equipped with jointly evaluating reasoning with
+tool interactions, planning for subsequent actions across
+multiple dimensions of “information gain” in tandem with
+a compact trajectory summarization mechanism, inspired
+by approaches that compress reasoning histories and have
+shown success in context length reduction (Wu et al., 2025c;
+Kang et al., 2025; Ye et al., 2025).
+3. PRINTS: Progress Reward via Information
+Gain Score and Trajectory Summarization
+We start by introducing the framework that quantifies and
+annotates the quality of each trajectory step – a reasoning
+step combined with a tool call – followed by reinforcement
+learning that uses these annotations to train PRINTS as a
+scorer (Section 3.2). Next, we describe our approach for
+generating compact summaries of long interaction trajecto-
+ries, and explain how these summaries are used to train the
+same PRINTS as a summarizer (Section 3.3). The overall
+design of PRINTS is illustrated in Figure 2.
+3.1. Preliminaries
+To tackle long-horizon information-seeking problems, we
+adopt the agentic ReAct (Yao et al., 2023) paradigm, where
+a Large Language Model (LLM) acts as an agent that in-
+terleaves reasoning with tool-based action toward the goal
+of answering query q (Tao et al., 2025; Li et al., 2025a).
+At each timestep t, the agent may generate intermediate
+reasoning st based on the current context and then predict
+the subsequent action at, i.e., calls to external tools, such as
+web search, web browsing, and code execution, to acquire
+new information. The resulting tool response ot is observed
+and added to the context, which informs the agent’s reason-
+ing at timestep t+1. Figure 2 (Left) visually shows this tool
+interaction process: st, at, ot correspond to reasoning, tool
+call, tool response at timestep t. This process repeats until
+timestep T, when the agent submits its answer oT . The task
+is successful if oT matches the ground-truth answer a∗. The
+accumulated reasoning context up to timestep t, referred to
+as the information-seeking trajectory, is defined as:
+Ht = (s1, a1, o1, s2, a2, o2, . . . , st, at, ot)
+(1)
+Specifically, the agent π generates the next reasoning step
+and tool call conditioned on the query and information-
+seeking trajectory, i.e., st, at ∼π (·|q,Ht−1). Then the
+tool call is executed to get the tool response ot. This in-
+3
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+Web Search
+Web Browse
+Code Execution
+Summary 𝑡𝑡-1
+Tool Response 𝑡𝑡-1
+Reasoning 𝑡𝑡
+Tool Call 𝑡𝑡
+(1) Step-level Information Gain Estimation
+(2) Information-seeking Summary Generation
+Reasoning 𝑡𝑡+1
+Tool Call 𝑡𝑡+1
+InfoSeek Query
+Summary 𝑡𝑡
+Candidate 1
+Tool Response 𝑡𝑡
+Candidate 𝑛𝑛
+𝑛𝑛 x PRM calls
+Tool Response 𝑡𝑡+1
+Tools
+Select the Top-
+Scoring Candidate
+Summary 𝑡𝑡
+Update
+⋮
+InfoSeek Query
+⋮
+PRM as summarizer
+PRM as scorer
++
+⋮
+This step is flawed …
+This step correctly …
+-0.5
+2.5
+Analysis        Score
+Figure 2. Overview of PRINTS. Left: PRINTS functions as a scorer, evaluating agent’s multiple candidate next trajectory steps based on
+the summarized context and current tool response. It generates an analysis and a dense score for each candidate, selecting the top-scoring
+one to guide the agent’s information-seeking. Right: PRINTS acts as a summarizer, recursively updating a compact information-seeking
+trajectory summary to keep input length bounded and preserve key information for its subsequent score evaluation.
+terleaving of reasoning and action has shown success in
+long-horizon information-seeking tasks (Li et al., 2025b;
+Gao et al., 2025; Li et al., 2025a), and thus we adopt this
+setting. However, applying PRMs to guide long-horizon
+information seeking of the agent faces two key challenges:
+trajectory steps contain substantially richer content than
+traditional steps, requiring multi-dimensional evaluation be-
+yond simple correctness, and the accumulated context Ht
+grows rapidly, producing a long, noisy input context, which
+makes it difficult to identify evaluation evidence. Thus, we
+next introduce our data annotation and train pipeline, which
+equips PRINTS with two core capabilities: (1) dense step-
+level scoring for fine-grained guidance, and (2) trajectory
+summarization for effective step-level evaluation under a
+rapidly accumulating input context.
+3.2. Step-level Information Gain Estimation
+Information Gain Score.
+To train a Process Reward
+Model (PRM) for long-horizon information seeking, we
+need to measure how much each reasoning step and tool
+call contributes towards reaching the correct answer. To
+this end, we define information gain of the current step as
+the change in expected likelihood of arriving at the correct
+answer before and after taking the current step (Rao & III,
+2018; Prasad et al., 2023; Wang et al., 2024a). This local
+evaluation quantifies the marginal improvement in task suc-
+cess contributed by the current step. Specifically, for a rea-
+soning step and tool call (st, at) preceded by information-
+seeking trajectory prefix, Ht−1, we use Monte Carlo esti-
+mation (Wang et al., 2024a; Xiong et al., 2025; Setlur et al.,
+2025) by executing M rollouts until their final answers are
+produced and compute the mean accuracy:
+mt =
+PM
+j=1 1(o(j)
+Tj = a∗)
+M
+,
+(2)
+where o(j)
+Tj ∼π(·|q,Ht−1,st,at) is the final answer from
+rollout j, which terminates at timestep Tj. The information
+gain score gt is then computed as:
+gt = (mt −mt−1) × M/2,
+(3)
+which quantifies how much (st, at) contributes to the suc-
+cessful completion of the task. We scale by M/2 to obtain
+scores in the range [−M/2, M/2]. A positive gt indicates
+that the current step (st, at) increases the probability of
+reaching the correct answer – for example, through logically
+coherent reasoning or a tool call that resolves uncertainties –
+whereas a gt lower than zero indicates that the current step
+reduces the probability, e.g., by making unverified assump-
+tions or invoking an irrelevant tool call.
+Trajectory Score Annotations.
+While prior approaches
+annotate individual trajectory steps in isolation (Xiong et al.,
+2025; Wang et al., 2024a) or use imitation learning to learn
+directly from precomputed step-level scores (Wang et al.,
+2024a), Whitehouse et al. (2025) demonstrates that pairwise
+preference learning is effective for training robust judge
+models. We extend this by automatically constructing prefer-
+ence pairs grounded in information gain scores, then training
+PRINTS with complementary objectives – a score reward
+for information gain estimation and a comparison reward
+for preference prediction – as illustrated in Figure 3 (Top).
+During the M rollouts performed to calculate gt, the
+LLM generates a set of M unique next trajectory steps
+{s(j)
+t+1,a(j)
+t+1}M
+j=1 and the corresponding final answer predic-
+tions {o(j)
+Tj ∼π
+
+·|q,Ht,s(j)
+t+1,a(j)
+t+1
+
+}M
+j=1. As shown in Fig-
+ure 3 (Top-left), to construct a candidate preference pair, we
+first select one trajectory step that (1) leads to a successful
+final answer and (2) achieves the shortest successful tra-
+jectory, assuming this step has the highest potential to be
+both effective and efficient among the M rollouts. A second
+trajectory step is then randomly sampled from the remaining
+steps, assuming that it provides a contrasting, less effective
+reasoning (i.e., one that either leads to an incorrect answer
+or reaches the correct answer through a longer trajectory).
+Next, we annotate the information gain scores of this can-
+didate preference pair by treating each trajectory step as a
+new starting point and running M rollouts to estimate their
+respective mean accuracies and information gain scores. Af-
+ter annotation, the winning and losing labels are reassigned
+4
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+𝑠𝑠1
+−, 𝑎𝑎1
+−, 𝑔𝑔1
+−, ℎ1
+−
+𝑠𝑠2
++, 𝑎𝑎2
++, 𝑔𝑔2
++, ℎ2
++
+𝑠𝑠2
+−, 𝑎𝑎2
+−, 𝑔𝑔2
+−, ℎ2
+−
+⋮
+⋯
+⋯
+⋯
+Answer: London O
+Answer: London O
+Answer: Paris       X
+6 Correct, 2 Wrong ⇒𝒎𝒎𝟐𝟐
++ = 𝟔𝟔
+𝟖𝟖= 𝟎𝟎. 𝟕𝟕𝟕𝟕
+Winning Step (Correct & Shortest)
+Losing Step (Random)
+Information Gain Score (Change in Likelihood of Success after Taking the Step 𝒕𝒕) 
+𝒈𝒈𝒕𝒕
+𝒌𝒌= 𝒎𝒎𝒕𝒕
+𝒌𝒌−𝒎𝒎𝒕𝒕−𝟏𝟏
++
+∗
+𝑴𝑴
+𝟐𝟐,  𝒌𝒌∈+, − 
+E.g., 𝒈𝒈𝟐𝟐
++ = 𝒎𝒎𝟐𝟐
++ −𝒎𝒎𝟏𝟏
++ ∗
+𝑴𝑴
+𝟐𝟐 = 𝟎𝟎. 𝟕𝟕𝟕𝟕−𝟎𝟎. 𝟓𝟓𝟓𝟓∗𝟒𝟒= 𝟏𝟏. 𝟎𝟎
+Query 𝑞𝑞
+𝑠𝑠𝑡𝑡
++, 𝑎𝑎𝑡𝑡
++
+Trajectory Score Annotations
+𝑠𝑠𝑡𝑡
+−, 𝑎𝑎𝑡𝑡
+−
+N rollouts
+① Score reward 𝒓𝒓𝒔𝒔= 𝟏𝟏−
+𝒈𝒈𝒌𝒌− ෝ𝒈𝒈𝒌𝒌
+𝑴𝑴
+③ Comparison reward  𝒓𝒓𝒄𝒄: enforces pairwise preferences
+𝑠𝑠1
++, 𝑎𝑎1
++, 𝑔𝑔1
++, ℎ1
++
+Information-Seeking Trajectory Summary (Summarization Up to the Step 𝒕𝒕)
+𝒉𝒉𝒕𝒕= 𝐋𝐋𝐋𝐋𝐋𝐋(𝒒𝒒, 𝒉𝒉𝒕𝒕−𝟏𝟏, 𝒐𝒐𝒕𝒕−𝟏𝟏, 𝒔𝒔𝒕𝒕, 𝒂𝒂𝒕𝒕) 
+PRM as Summarizer
+② Weight 𝐰𝐰= 𝒈𝒈+−𝒈𝒈−
+𝑴𝑴
+Final reward 𝒓𝒓 = ① + ② * ③    →GRPO training
+ℎ𝑡𝑡
+෠ℎ𝑡𝑡
+SFT training
+PRM as Scorer
+𝒉𝒉𝒕𝒕: historical summary          ෡𝒉𝒉𝒕𝒕: PRM generated summary
+𝑜𝑜𝑡𝑡−1
+𝑞𝑞
+ℎ𝑡𝑡−1
+෠ℎ𝑡𝑡
+𝑠𝑠𝑡𝑡, 𝑎𝑎𝑡𝑡
+ℎ𝑡𝑡
+𝑜𝑜𝑡𝑡
+𝑞𝑞
+ℎ𝑡𝑡
+𝑠𝑠𝑡𝑡+1, 𝑎𝑎𝑡𝑡+1
+ℎ𝑡𝑡+1
+Recursive Summary Update
+𝑜𝑜𝑡𝑡−1
+𝑞𝑞
+ℎ𝑡𝑡−1
+𝑠𝑠𝑡𝑡, 𝑎𝑎𝑡𝑡
+⋮
+The verification is …
+1.𝟎𝟎 ( ො𝑔𝑔𝑡𝑡,1
++ )
+1.5 ( ො𝑔𝑔𝑡𝑡,𝑁𝑁
++ )
+It correctly call tools …
+1.𝟓𝟓 ( ො𝑔𝑔𝑡𝑡,1
+−)
+−0.𝟓𝟓 ( ො𝑔𝑔𝑡𝑡,𝑁𝑁
+−)
+⋮
+The step contradicts ...
+It gives no information …
+N rollouts
+Analysis
+1.0
+Reward
+1.8
+0.4
+1.6
+Score
+𝑔𝑔𝑡𝑡
++ = 2.0
+𝑔𝑔𝑡𝑡
+−= 0.0
+Winning / Losing Labeling:
+  𝑔𝑔𝑡𝑡
++  > 𝑔𝑔𝑡𝑡
+−
+Trajectory Summary Annotations
+𝒈𝒈𝒕𝒕: information gain score   ෝ𝒈𝒈𝒕𝒕: PRM predicted score 
+⋯
+𝒎𝒎𝟏𝟏
++ = 𝟎𝟎. 𝟓𝟓𝟓𝟓
+𝑴𝑴= 𝟖𝟖 rollouts
+Figure 3. PRINTS: data annotation and training pipeline. Top: For each trajectory step, we estimate the information gain score via
+Monte Carlo rollouts as the change in mean answer accuracy before and after the step. Then we construct winning-losing step pairs based
+on these scores (left). Preference pair examples are shown in Figure 7. Then we train PRINTS as a scorer via GRPO on these pairs (right).
+The final reward combines a score reward for accurate prediction, a comparison reward for pairwise preference learning, and an adaptive
+weight to mitigate noisy annotations. Bottom: Each step is annotated with a compact, recursively updated trajectory summary capturing
+essential findings and plans up to the step (left). The same PRM is jointly trained as a summarizer via SFT on this summary data (right).
+based on the actual information gain scores: the step with the
+higher score becomes the true winning sample (s+
+t+1,a+
+t+1),
+while the other becomes the losing sample (s−
+t+1,a−
+t+1). The
+winning step then serves as the starting point for generating
+the next pair at step t + 2. This contrastive labeling ensures
+that PRINTS learns relative preferences between trajectory
+steps grounded in empirically estimated improvements.
+Training the PRM as a Scorer.
+The core function of
+PRINTS is to assess information-seeking trajectory step
+quality and assign higher scores to steps expected to yield
+greater information gain. To this end, we train PRINTS to
+evaluate the trajectory step quality by predicting information
+gain scores. Given a query q, trajectory summary ht−1 (in-
+troduce in Section 3.3 below), the latest tool response ot−1,
+and trajectory step (st, at), PRINTS generates a Chain-of-
+Thought analysis and outputs a scalar score prediction ˆgt:
+ˆgt = fI(q, ht−1,ot−1,st,at),
+(4)
+where fI denotes PRINTS that works as an information
+gain scorer function. We train this scoring capability using
+GRPO (Shao et al., 2024) with the following rewards: (1)
+a score reward (rs) that targets minimizing the discrepancy
+between the predicted score (ˆgt) and the ground-truth score
+(gt), and (2) a comparison reward (rc) that enforces pairwise
+preferences derived from annotated pairs:
+rk
+s =1−
+
+gk−ˆgk
+M
+ , rk
+c = 1
+N
+N
+X
+j=1
+yk · sign(ˆgk −ˆg
+¯k
+j )
+(5)
+where sign(x) =
+(
++1,
+x ≥0
+−1,
+x < 0 , k ∈{+, −} indicates
+the winning or losing sample, y+ = 1 and y−= −1 for
+comparison direction, ¯k denotes its counterpart, N is the
+number of rollouts, and ˆg¯k
+j is the predicted score of j-th
+rollout from the counterpart. For simplicity, we omit rollout-
+and step-level indices, which do not affect the underlying
+formulation of the scores. The comparison reward ensures
+PRINTS learns to distinguish better from worse reasoning
+paths, while the score reward provides fine-grained feed-
+back on estimation accuracy. Finally, we combine the two
+rewards into a single scalar per rollout with an adaptive
+weight based on the ground-truth score margin:
+rk = rk
+s + w ∗rk
+c , w = g+ −g−
+M
+,
+(6)
+where w is the comparison reward weight set for each pair.
+This adaptive weighting addresses noise in the automatically
+annotated preference pairs. Pairs with large score margins
+between winning and losing samples (g+ −g−) are more re-
+liably ranked and receive higher comparison weights, while
+pairs with small margins receive lower weights, as they may
+reflect annotation noise rather than true preference (Prasad
+et al., 2024). This weighting scheme amplifies strong pref-
+erence signals while mitigating the impact of noisy annota-
+tions. The combined reward thus encourages PRINTS both
+to estimate absolute scores accurately and to learn robust
+preferences in information-seeking trajectories.
+5
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+3.3. Information-seeking Summary Generation
+Trajectory Summary Annotations.
+Another core chal-
+lenge in building a PRM for information-seeking agents is
+the rapidly growing context (Figure 1 Top-left) of lengthy
+and noisy reasoning and tool interactions. This context ex-
+plosion hinders PRMs from efficient processing and results
+in noise and distraction in quality evaluation. To this end,
+we further extract a concise summary of the information-
+seeking trajectory of each trajectory step (st,at). This sum-
+mary, ht, captures the essential findings and plan develop-
+ment up to timestep t. As illustrated in Figure 3 (Bottom-
+left), each summary is recursively updated and generated
+by an LLM, incorporating the previous summary ht−1, the
+latest tool response ot−1, and the current trajectory step
+(st, at) (i.e., ht = LLM(q,ht−1,ot−1,st,at). This recursive
+formulation ensures that ht maintains a compressed form of
+the entire trajectory Ht, with a bounded input length.
+Training the PRM as a Summarizer.
+To enable efficient
+processing of the reasoning context during the score estima-
+tion, PRINTS is trained to generate concise summaries that
+retain only the essential context:
+ˆht = fS(q, ht−1,ot−1,st,at),
+(7)
+where fS is PRINTS that works as a summarization func-
+tion, and ˆht is the summary generated by PRINTS. We use
+supervised fine-tuning (SFT) on the annotated summaries ht
+of trajectory steps, which allows PRINTS to learn effective
+summarization by imitating the provided annotations.
+4. Experiments
+4.1. Experimental Setup
+Models.
+To evaluate the efficacy and generalizability of
+PRINTS, we use three distinct LLMs: Qwen3-32B (Yang
+et al., 2025a), an open-source model with strong reason-
+ing capability; Gemini-2.5-Flash (Gemini Team, 2025), a
+closed-source frontier model; and Tongyi DeepResearch-
+30B-A3B (Li et al., 2025a), a recently developed agent
+specifically optimized for long-horizon information-seeking
+tasks. We instantiate ReAct-based agents using these LLMs
+and evaluate them using the Inspect-Eval (AI Security Insti-
+tute, 2024) evaluation environment. Further details on the
+evaluation environment are provided in Section A.
+Evaluation Benchmarks.
+Following recent work on long-
+horizon information-seeking agents (Gao et al., 2025; Li
+et al., 2025c;a), we assess the effectiveness of PRM-guided
+reasoning on three benchmarks: FRAMES (Krishna et al.,
+2025), GAIA (Mialon et al., 2024), and WebWalkerQA (Wu
+et al., 2025b). GAIA evaluates general assistant capabil-
+ities on complex retrieval and multi-step reasoning tasks
+spanning three difficulty levels (Level 1-3).
+WebWalk-
+erQA requires agents to traverse webpages to gather ev-
+idence across Easy-Hard levels. FRAMES contains factual
+and reasoning-intensive queries that require multiple re-
+trieval steps. For Qwen3-32B and DeepResearch agent, we
+evaluate across FRAMES, GAIA, and WebWalkerQA. For
+Gemini-2.5-Flash, we evaluate on GAIA. Further explana-
+tions of these benchmarks are provided in Section A.
+Evaluation Metric.
+Following past work (Gao et al.,
+2025; Li et al., 2025c;a), we adopt the LLM-as-Judge (LasJ)
+paradigm to measure benchmark performance, which is
+a standard approach in long-horizon information-seeking
+research. We use GPT-5 to judge the correctness of final
+answers. All results are reported using Avg@3, defined as
+the mean accuracy over three independent runs.
+Baselines.
+We compare PRINTS againts three categories
+of baselines: (1) Base agent: this directly uses the LLM’s
+information-seeking abilities without any PRM guidance.
+This serves as a reference to measure the test-time improve-
+ment achieved by PRM-based guidance. (2) Intrinsic rea-
+soning heuristics: we include widely used reasoning quality
+heuristics, including confidence (Ghasemabadi et al., 2025),
+relevance (Wan et al., 2025), and verbal-progress. (3) Ex-
+isting PRMs: we compare with existing PRMs: GenPRM-
+7B (Zhao et al., 2025), Web-Shepherd-8B (Chae et al.,
+2025), StepWiser (Xiong et al., 2025). To provide a con-
+trolled comparison, we follow StepWiser’s training protocol
+to reimplement StepWiser using our annotated data and
+Qwen3-4B model, adapting it to long-horizon information-
+seeking tasks. This setup allows us to directly demonstrate
+the contributions of PRINTS’s design; dense comparative
+scoring and compact trajectory summarization. Further de-
+tails of the baseline are provided in Section A.
+Implementation Details.
+Our dataset consists of ∼2k
+preference trajectory step pairs with score and summary an-
+notations drawn from publicly available web-agent training
+corpora (MiroMind Data Team, 2025). We use Qwen3-32B
+to generate both the information gain score and summary
+annotation for each step with Monte Carlo rollouts M = 8.
+PRINTS is instantiated as Qwen3-4B and trained with an
+alternating SFT-GRPO schedule, where one epoch of SFT
+for the summarization objective is followed by a period of
+GRPO training for the scoring objective with GRPO roll-
+outs N = 4. This SFT-GRPO cycle is repeated iteratively
+throughout training, enabling PRINTS to jointly acquire
+summarization and scoring abilities. At test-time, all base-
+lines and PRINTS evaluate sets of candidate next steps
+output by LLMs, performing best-of-n guided search with
+n = 4. Further details can be found in Section A.
+6
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+Method
+FRAMES
+GAIA
+WebWalkerQA
+Avg.
+Level 1
+Level 2
+Level 3
+Easy
+Medium
+Hard
+Base agent
+49.3
+35.1
+23.7
+11.1
+30.1
+26.9
+30.3
+29.5
+Confidence
+55.7
+36.8
+24.4
+16.7
+31.7
+31.3
+32.9
+32.8
+Relevance
+56.3
+34.2
+20.5
+8.3
+33.3
+29.5
+32.5
+30.7
+Verbal-progress
+45.0
+35.9
+21.2
+13.9
+27.6
+30.2
+34.2
+29.7
+GenPRM-7B
+50.0
+32.5
+25.7
+16.7
+33.3
+32.8
+34.6
+32.2
+Web-Shepherd-8B
+49.0
+38.5
+23.7
+5.5
+28.5
+31.8
+33.3
+30.0
+StepWiser
+51.3
+37.6
+22.4
+8.3
+31.7
+31.8
+33.8
+31.0
+PRINTS
+58.7
+49.6
+33.3
+19.4
+39.8
+33.3
+37.3
+38.8
+Table 1. Comparison of step quality evaluation methods on Qwen3-32B across information-seeking benchmarks. We adopt the LLM-as-
+Judge (LasJ) metric and report Avg@3. The best and the second best results are in bold and underline, respectively. PRINTS delivers
+consistent gains all benchmarks, whereas the second-best baseline varies.
+Method
+FRAMES
+GAIA
+WebWalkerQA
+Avg.
+Level 1
+Level 2
+Level 3
+Easy
+Medium
+Hard
+Base agent
+79.3
+68.4
+61.6
+41.7
+61.8
+59.5
+68.0
+62.9
+Confidence
+61.3
+60.7
+47.5
+25.0
+63.4
+62.0
+64.9
+55.0
+Relevance
+81.3
+70.1
+63.5
+33.3
+66.7
+62.8
+66.7
+63.5
+Verbal-progress
+82.3
+69.2
+60.9
+41.7
+63.4
+63.8
+68.4
+64.2
+GenPRM-7B
+79.0
+70.1
+64.1
+38.9
+60.2
+63.8
+68.9
+63.6
+Web-Shepherd-8B
+79.7
+69.2
+61.5
+36.1
+62.6
+62.3
+67.1
+62.6
+StepWiser
+81.0
+70.1
+60.9
+36.1
+65.0
+61.8
+64.9
+62.8
+PRINTS
+81.7
+69.2
+65.4
+44.5
+70.7
+65.9
+70.1
+66.8
+Table 2. Comparison of step quality evaluation methods on Tongyi DeepResearch-30B-A3B across information-seeking benchmarks. We
+adopt the LLM-as-Judge (LasJ) metric and report Avg@3. The best and the second best results are in bold and underline, respectively.
+The results show that PRINTS enhances the performance of strong information-seeking agents.
+4.2. Results and Discussion
+PRINTS substantially outperforms existing PRMs
+on foundation models.
+Table 1 presents long-horizon
+information-seeking task results using the open-source
+Qwen3-32B as the LLM agent. Across all benchmarks,
+including FRAMES, GAIA, and WebWalkerQA, PRINTS
+consistently achieves substantial gains over the base agent.
+For instance, on GAIA Level 1 and 2, PRINTS surpasses
+the base agent by 14.5% and 9.6% absolute accuracy, re-
+spectively, whereas other baselines yield only marginal im-
+provements or sometimes even reduce performance. Al-
+though StepWiser is trained on the same annotated dataset
+as PRINTS, it provides only a 1.5% absolute average ac-
+curacy gain (cf. 9.3% improvement with PRINTS). This
+illustrates the limitation of binary correctness signals, which
+provide only coarse supervision and fail to capture multiple
+quality dimensions that influence the usefulness of a tra-
+jectory step in long-horizon information seeking. However,
+even baselines that generate richer outputs do not bridge this
+gap. Verbal-progress – which produces scalar progress esti-
+mates – and Web-Shepherd – which generates and evaluates
+multi-item checklists – both offer more expressive signals
+than binary labels but still fall short, adding marginal gains
+of 0.2% and 0.5% absolute average accuracy respectively.
+This shows that having continuous scores alone does not
+guarantee effective test-time guidance. In contrast, PRINTS
+is trained to produce multi-factor analyses and a dense com-
+parative score grounded in both information-gain estimation
+and pairwise preference learning. This design choice en-
+ables it to identify subtle yet important quality differences
+between candidate steps and select the most informative
+next step, leading to better information-seeking behavior.
+PRINTS improves highly performant information-
+seeking agents.
+In Table 2, we evaluate PRINTS on the
+specialized information-seeking agent DeepResearch-30B-
+A3B, specifically optimized for and achieves high perfor-
+mance in long-horizon information-gain tasks through exten-
+sive fine-tuning. The results show that adding PRINTS to
+this strong information-seeking agent consistently achieves
+7
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+Method
+GAIA
+Avg.
+Level 1
+Level 2
+Level 3
+Base agent
+58.1
+42.3
+19.5
+40.0
+Relevance
+58.1
+44.9
+19.5
+40.8
+Verbal-progress
+60.7
+44.2
+16.7
+40.5
+GenPRM-7B
+56.4
+44.9
+11.1
+37.5
+Web-Shepherd-8B
+59.8
+46.2
+16.7
+40.9
+StepWiser
+60.7
+44.3
+19.5
+41.5
+PRINTS
+61.5
+45.5
+25.0
+44.0
+Table 3. PRINTS shows strong generalization to the frontier
+LLM (Gemini). We adopt the LLM-as-Judge (LasJ) metric and
+report Avg@3 comparing with other step quality evaluation meth-
+ods on Gemini-2.5-Flash.
+performance gains across benchmarks, surpassing the base
+agent by 3.9% absolute average accuracy, while no other
+baselines come close to achieving notable improvements,
+with the strongest one improving performance by only
+1.3% absolute average accuracy.
+It is also noteworthy
+that PRINTS improves on the challenging subsets, such
+as GAIA Level 3 and WebWalkerQA Hard. Moreover,
+on GAIA, PRINTS lifts DeepResearch-30B-A3B from
+61.9% to 64.4% average accuracy, enabling the 30B agent
+augmented with the 4B PRM to reach competitive perfor-
+mance with OpenAI DeepResearch (67.4%) and surpass
+DeepSeek-V3.1-671B (63.1%).2 Specialized information-
+seeking agents (Wu et al., 2025a; Li et al., 2025b;c) require
+a large-scale dataset (10k-100k+ samples), substantial com-
+putational costs for tool interactions and multi-step rollouts
+during online reinforcement learning, which is especially
+challenging as different samples have different trajectory
+lengths to provide the outcome reward signal for training
+agents (Gao et al., 2025). Despite these agents undergoing
+resource-intensive training, applying PRINTS further im-
+proves this strong information-seeking agent, surpassing its
+original performance with training only a small 4B model
+that either does not require a large dataset (2k+ pair samples)
+or long-horizon rollouts and tool interactions during train-
+ing. These findings demonstrate that even highly optimized
+information-seeking agents can benefit from the step-level
+guidance provided by PRINTS, pushing their performance
+to the limit in a cost- and data-effective manner.
+PRINTS also generalizes to frontier LLMs.
+To fur-
+ther demonstrate the versatility of our approach, we use
+the closed-source Gemini-2.5-Flash as the LLM agent, as
+shown in Table 3. PRINTS provides 4.0% absolute av-
+erage accuracy gain, whereas the second-best method im-
+proves performance by only 1.5%. On the most challeng-
+ing subset, GAIA Level 3, PRINTS yields the largest
+2See Section A for details on reporting frontier model results.
+Input Context
+FRAMES
+GAIA
+Avg.
+Level 1
+Level 2
+H−1:
+56.3
+44.5
+25.7
+42.2
+H−2:
+61.0
+44.5
+26.9
+44.1
+H−4:
+57.0
+37.6
+25.0
+39.9
+Ht
+55.7
+38.5
+24.4
+39.5
+ht (Ours)
+58.7
+49.6
+33.3
+47.2
+Table 4. Effectiveness of context compression. Comparison
+of input context representations for PRM on Qwen3-32B across
+information-seeking tasks. H−1:, H−2:, and H−4: provide the
+most recent one, two, and four trajectory steps from the full trajec-
+tory Ht, while ht uses the trajectory summary from PRINTS. Our
+approach (ht) shows better scoring ability by retaining essential
+information for step evaluation in a compact summary.
+improvement among all baselines (+5.5%), showing its
+strength on long-horizon reasoning tasks. Overall, our re-
+sults indicate that PRINTS provides effective test-time guid-
+ance, improving the information-seeking behavior of both
+open-source LLMs, closed-source LLMs, and information-
+seeking agents, which shows strong versatility and general-
+izability without modifying or retraining underlying LLMs.
+4.3. Analysis and Ablations
+Summarization ability contributes to better scoring
+ability.
+To validate the effectiveness of compressed
+information-seeking trajectory representations for accurate
+step-level scoring, we compare our summarization approach
+against several alternatives: providing only the most recent
+one, two, or four trajectory steps as input context (H−1:,
+H−2:, H−4:), and providing the full trajectory Ht. We eval-
+uate on Qwen3-32B across FRAMES and GAIA. Since
+the performance on GAIA Level 3 is low (see Table 1),
+we only use Levels 1 and 2. Results in Table 4 show that
+our summary-based approach achieves the best or second-
+best performance across benchmarks, outperforming the full
+raw-history baseline by 7.7% absolute average accuracy.
+Notably, providing more raw history does not improve per-
+formance. H−2: outperforms both H−1: (insufficient con-
+text), H−4:, and Ht (excessive, noisy context). This demon-
+strates that accumulated raw context becomes a bottleneck
+– longer histories introduce noise and irrelevant informa-
+tion that hinder the PRM from identifying key information,
+distracting step-level evaluation. In contrast, our summa-
+rization compresses entire trajectories into compact repre-
+sentations that preserve key information while filtering out
+noise and maintaining bounded input length, enabling more
+accurate scoring even as trajectories grow arbitrarily long.
+Complementary rewards improve step-level evaluation.
+We analyze the contribution of each reward component
+8
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+Reward Design
+FRAMES
+GAIA
+Avg.
+Level 1 Level 2
+r = rs (score-only)
+57.0
+43.6
+32.0
+44.2
+r = rc (comparison-only)
+58.7
+41.9
+28.8
+43.1
+r = rs + rc (combination)
+60.3
+47.0
+31.4
+46.2
+r = rs + w · rc (Ours)
+58.7
+49.6
+33.3
+47.2
+Table 5. Impact of reward components. Experiments with
+reward components on PRM performance across information-
+seeking tasks evaluated with Qwen3-32B. Combining the score
+reward with comparison reward (rs + rc) leads to better step
+evaluation, with further improvement when mitigating noise in
+preference pairs through the adaptive weight (rs + w · rc).
+in Equation (6). Following the setup from the previous abla-
+tion, we evaluate on Qwen3-32B across FRAMES, GAIA
+Levels 1, and 2. As shown in Table 5, combining the score
+and comparison rewards (rs + rc) yields substantially better
+performance than using either component alone, leading to
+2.0% and 3.1% absolute average accuracy gains compared
+to using the score reward (rs) and comparison reward (rc),
+respectively. This indicates that information-gain estimation
+and preference prediction capture complementary aspects of
+the quality of an information-seeking trajectory step, under-
+scoring the benefit of our pairwise annotation strategy over
+prior work that labels individual steps in isolation (Xiong
+et al., 2025; Wang et al., 2024a). Furthermore, incorporating
+the adaptive weight (rs+w·rc) yields 1.0% additional abso-
+lute average accuracy gain over the naive combination. This
+is because the adaptive weight mitigates noise in preference
+pairs. Pairs with small information gain score differences
+are inherently noisier, as they may reflect annotation vari-
+ance rather than true quality differences. Thus, these pairs
+receive lower weights, while pairs with clear margins are
+weighted higher, leading to more stable learning. Overall,
+adaptive weighting provides a simple and cost-efficient way
+of leveraging existing annotated preference pairs.
+PRINTS scales effectively with test-time compute.
+In
+order to evaluate how PRINTS benefits from additional test-
+time compute, we conduct best-of-n scaling experiments
+with varying numbers of candidate steps (n ∈{1,2,4,8,16})
+on GAIA Level 2 using Qwen3-32B, as shown in Figure 4.
+PRINTS exhibits strong scaling behavior, achieving 2.5%,
+3.8%, 8.9% absolute accuracy gains at n = 2, 4, 8, re-
+spectively, demonstrating that PRINTS reliably identifies
+higher-quality steps within large candidate sets. However,
+performance declines at n = 16, which we attribute to over-
+exploration: we observe that the PRM increasingly selects
+uncertainty-resolving steps even when correct answers al-
+ready appear among candidates. Consequently, the agent
+continues exploring until it reaches the maximum step bud-
+get, failing to output an answer despite having generated one
+1
+2
+4
+8
+16
+Number of candidate steps (n)
+62
+64
+66
+68
+70
+LasJ
+Best-of-n scaling
+PRInTS
+StepWiser
+Figure 4. Scaling test-time compute. Best-of-n test-time scaling
+results on GAIA Level 2 using Qwen3-32B. PRINTS benefits
+from additional test-time compute by identifying higher-quality
+steps from n candidates.
+earlier. In contrast, StepWiser provides only marginal and
+inconsistent improvements under scaling. This difference
+in scaling efficiency further validates that PRINTS’s design
+of information-gain estimation and preference prediction
+captures subtle quality differences between steps, enabling
+fine-grained guidance for long-horizon information-seeking.
+5. Conclusion
+In this paper, we introduce PRINTS, a generative PRM
+for long-horizon information seeking.
+PRINTS unifies
+information gain scoring with recursive trajectory sum-
+marization, enabling fine-grained step-level evaluation un-
+der rapidly accumulating context from agents. To equip
+PRINTS with these dual capabilities, we develop an an-
+notation pipeline that constructs preference step pairs with
+information gain scores and summaries, and we jointly train
+PRINTS through alternating schedule of supervised fine-
+tuning for summarization and reinforcement learning for
+scoring. We validate PRINTS on three distinct agents, in-
+cluding a strong information-seeking agent, and compre-
+hensive experiments demonstrate that PRINTS consistently
+enhances the information-seeking abilities of these agents,
+showcasing its high versatility. Notably, PRINTS pushes
+the performance of the frontier information-seeking agents
+beyond their original performance, showing that test-time
+guidance can be a powerful complement to agent fine-tuning
+while remaining robust to changes in underlying models.
+Acknowledgments
+This work was supported by NSF-AI Engage Institute DRL-
+2112635, NSF-CAREER Award 1846185, DARPA ECOLE
+Program No.
+HR00112390060, Capital One Research
+Award, Apple PhD Fellowship, NDSEG PhD Fellowship.
+The views contained in this article are those of the authors
+and not of the funding agency.
+9
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+References
+AI Security Institute, U.
+Inspect AI: Framework for
+Large Language Model Evaluations, 2024. URL https:
+//github.com/UKGovernmentBEIS/inspect_ai.
+Bachman, P., Sordoni, A., and Trischler, A.
+To-
+wards information-seeking agents.
+arXiv preprint
+arXiv:1612.02605, 2016. URL https://arxiv.org/
+abs/1612.02605.
+Chae, H., Kim, S., Cho, J., Kim, S., Moon, S., Hwangbo,
+G., Lim, D., Kim, M., Hwang, Y., Gwak, M., Choi, D.,
+Kang, M., Im, G., Cho, B., Kim, H., Han, J. H., Kwon,
+T., Kim, M., Kwak, B., Kang, D., and Yeo, J. Web-
+shepherd: Advancing prms for reinforcing web agents.
+arXiv preprint arXiv:2505.15277, 2025. URL https:
+//doi.org/10.48550/arXiv.2505.15277.
+Chen, J., Prasad, A., Saha, S., Stengel-Eskin, E., and Bansal,
+M. MAgICoRe: Multi-agent, iterative, coarse-to-fine re-
+finement for reasoning. In Proceedings of the Conference
+on Empirical Methods in Natural Language Processing
+(EMNLP), November 2025.
+Choudhury, S. Process reward models for LLM agents:
+Practical framework and directions.
+arXiv preprint
+arXiv:2502.10325, 2025. URL https://doi.org/10.
+48550/arXiv.2502.10325.
+Deng, Y., Wang, G., Ying, Z., Wu, X., Lin, J., Xiong, W.,
+Dai, Y., Yang, S., Zhang, Z., Wang, Q., Qin, Y., Wang, Y.,
+Zha, Q., Dai, S., and Meng, C. Atom-searcher: Enhanc-
+ing agentic deep research via fine-grained atomic thought
+reward. arXiv preprint arXiv:2508.12800, 2025. URL
+https://doi.org/10.48550/arXiv.2508.12800.
+Fu, Y., Wang, X., Tian, Y., and Zhao, J. Deep think with
+confidence. arXiv preprint arXiv:2508.15260, 2025. URL
+https://doi.org/10.48550/arXiv.2508.15260.
+Gao, J., Fu, W., Xie, M., Xu, S., He, C., Mei, Z., Zhu, B.,
+and Wu, Y. Beyond ten turns: Unlocking long-horizon
+agentic search with large-scale asynchronous RL. arXiv
+preprint arXiv:2508.07976, 2025. URL https://doi.
+org/10.48550/arXiv.2508.07976.
+Gemini Team.
+Gemini 2.5: Pushing the frontier with
+advanced reasoning, multimodality, long context, and
+next generation agentic capabilities.
+arXiv preprint
+arXiv:2507.06261, 2025. URL https://doi.org/10.
+48550/arXiv.2507.06261.
+Ghasemabadi, A., Mills, K. G., Li, B., and Niu, D. Guided
+by gut: Efficient test-time scaling with reinforced intrinsic
+confidence. arXiv preprint arXiv:2505.20325, 2025. URL
+https://doi.org/10.48550/arXiv.2505.20325.
+He, T., Mu, R., Liao, L., Cao, Y., Liu, M., and Qin, B. Good
+learners think their thinking: Generative PRM makes
+large reasoning model more efficient math learner. arXiv
+preprint arXiv:2507.23317, abs/2507.23317, 2025. URL
+https://doi.org/10.48550/arXiv.2507.23317.
+Kang, M., Chen, W.-N., Han, D., Inan, H. A., Wutschitz, L.,
+Chen, Y., Sim, R., and Rajmohan, S. Acon: Optimizing
+context compression for long-horizon llm agents. arXiv
+preprint arXiv:2510.00615, 2025. URL https://arxiv.
+org/abs/2510.00615.
+Kim, B., Jang, Y., Logeswaran, L., Kim, G., Kim, Y. J.,
+Lee, H., and Lee, M. Prospector: Improving LLM agents
+with self-asking and trajectory ranking. In Al-Onaizan,
+Y., Bansal, M., and Chen, Y. (eds.), Findings of the Con-
+ference on Empirical Methods in Natural Language Pro-
+cessing (EMNLP), 2024.
+Krishna, S., Krishna, K., Mohananey, A., Schwarcz, S.,
+Stambler, A., Upadhyay, S., and Faruqui, M. Fact, fetch,
+and reason: A unified evaluation of retrieval-augmented
+generation. In Proceedings of the Association for Com-
+putational Linguistics (ACL), 2025.
+Kuratov, Y., Bulatov, A., Anokhin, P., Rodkin, I., Sorokin,
+D., Sorokin, A. Y., and Burtsev, M. Babilong: Testing the
+limits of llms with long context reasoning-in-a-haystack.
+In Advances in Neural Information Processing Systems
+(NeurIPS), 2024.
+Li, B., Zhang, B., Zhang, D., Huang, F., Li, G., Chen,
+G., Yin, H., Wu, J., Zhou, J., Li, K., and et al., Y. J.
+Tongyi deepresearch technical report.
+arXiv preprint
+arXiv:2510.24701, 2025a. URL https://arxiv.org/
+abs/2510.24701.
+Li, K., Zhang, Z., Yin, H., Zhang, L., Ou, L., Wu, J., Yin,
+W., Li, B., Tao, Z., Wang, X., Shen, W., Zhang, J., Zhang,
+D., Wu, X., Jiang, Y., Yan, M., Xie, P., Huang, F., and
+Zhou, J. Websailor: Navigating super-human reasoning
+for web agent. arXiv preprint arXiv:2507.02592, 2025b.
+Li, X., Jin, J., Dong, G., Qian, H., Zhu, Y., Wu, Y., Wen, J.,
+and Dou, Z. Webthinker: Empowering large reasoning
+models with deep research capability. arXiv preprint
+arXiv:2504.21776, 2025c. URL https://doi.org/10.
+48550/arXiv.2504.21776.
+Liu, F., Yang, Z., Liu, C., Song, T., Gao, X., and
+Liu, H.
+Mm-agent: LLM as agents for real-world
+mathematical modeling problem.
+arXiv preprint
+arXiv:2505.14148, 2025a. URL https://doi.org/10.
+48550/arXiv.2505.14148.
+Liu, X., Liu, Y., Wang, S., Cheng, H., Estornell, A., Zhao,
+Y., and Wei, J. Agenticmath: Enhancing LLM reasoning
+10
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+via agentic-based math data generation. arXiv preprint
+arXiv:2510.19361, 2025b. URL https://doi.org/10.
+48550/arXiv.2510.19361.
+Mialon, G., Fourrier, C., Wolf, T., LeCun, Y., and Scialom,
+T. GAIA: a benchmark for general AI assistants. In
+Proceedings of the International Conference on Learning
+Representations (ICLR), 2024.
+MiroMind AI Team. Mirothinker: An open-source agen-
+tic model series trained for deep research and complex,
+long-horizon problem solving. https://github.com/
+MiroMindAI/MiroThinker, 2025.
+MiroMind Data Team. Miroverse v0.1: A reproducible,
+full-trajectory,
+ever-growing deep research dataset,
+2025.
+URL https://huggingface.co/datasets/
+miromind-ai/MiroVerse-v0.1.
+Pan, J., Wang, X., Neubig, G., Jaitly, N., Ji, H., Suhr, A.,
+and Zhang, Y. Training software engineering agents and
+verifiers with swe-gym. arXiv preprint arXiv:2412.21139,
+2024. URL https://doi.org/10.48550/arXiv.2412.
+21139.
+Prabhudesai, M., Chen, L., Ippoliti, A., Fragkiadaki, K.,
+Liu, H., and Pathak, D. Maximizing confidence alone
+improves reasoning. arXiv preprint arXiv:2505.22660,
+2025. URL https://doi.org/10.48550/arXiv.2505.
+22660.
+Prasad, A., Saha, S., Zhou, X., and Bansal, M. Receval:
+Evaluating reasoning chains via correctness and informa-
+tiveness. In Proceedings of the Conference on Empiri-
+cal Methods in Natural Language Processing (EMNLP),
+2023.
+Prasad, A., Yuan, W., Pang, R. Y., Xu, J., Fazel-Zarandi,
+M., Bansal, M., Sukhbaatar, S., Weston, J., and Yu, J. A.
+Self-consistency preference optimization. arXiv preprint
+arXiv:2411.04109, 2024. URL https://doi.org/10.
+48550/arXiv.2411.04109.
+Rao, S. and III, H. D. Learning to ask good questions: Rank-
+ing clarification questions using neural expected value of
+perfect information. In Proceedings of the Association
+for Computational Linguistics (ACL), 2018.
+Setlur, A., Nagpal, C., Fisch, A., Geng, X., Eisenstein, J.,
+Agarwal, R., Agarwal, A., Berant, J., and Kumar, A.
+Rewarding progress: Scaling automated process verifiers
+for LLM reasoning. In Proceedings of the International
+Conference on Learning Representations (ICLR), 2025.
+Shao, R., Qiao, R., Kishore, V., Muennighoff, N., Lin, X. V.,
+Rus, D., Low, B. K. H., Min, S., Yih, W., Koh, P. W., and
+Zettlemoyer, L. Reasonir: Training retrievers for reason-
+ing tasks. arXiv preprint arXiv:2504.20595, 2025. URL
+https://doi.org/10.48550/arXiv.2504.20595.
+Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Zhang, M.,
+Li, Y. K., Wu, Y., and Guo, D. Deepseekmath: Pushing
+the limits of mathematical reasoning in open language
+models. arXiv preprint arXiv:2402.03300, 2024. URL
+https://doi.org/10.48550/arXiv.2402.03300.
+Su, H., Yen, H., Xia, M., Shi, W., Muennighoff, N., Wang,
+H., Liu, H., Shi, Q., Siegel, Z. S., Tang, M., Sun, R., Yoon,
+J., Arik, S. Ö., Chen, D., and Yu, T. BRIGHT: A real-
+istic and challenging benchmark for reasoning-intensive
+retrieval. In Proceedings of the International Conference
+on Learning Representations (ICLR), 2025.
+Tang, Z., Ji, B., Qiu, Q., Wang, H., Liang, X., Li, J.,
+and Zhang, M. Longrm: Revealing and unlocking the
+context boundary of reward modeling. arXiv preprint
+arXiv:2510.06915, 2025. URL https://arxiv.org/
+abs/2510.06915.
+Tao, Z., Wu, J., Yin, W., Zhang, J., Li, B., Shen, H., Li,
+K., Zhang, L., Wang, X., Jiang, Y., Xie, P., Huang, F.,
+and Zhou, J. Webshaper: Agentically data synthesizing
+via information-seeking formalization. arXiv preprint
+arXiv:2507.15061, 2025. URL https://doi.org/10.
+48550/arXiv.2507.15061.
+Ton, J., Taufiq, M. F., and Liu, Y. Understanding chain-
+of-thought in llms through information theory. arXiv
+preprint arXiv:2411.11984, 2024. URL https://doi.
+org/10.48550/arXiv.2411.11984.
+Wan, G., Wu, Y., Chen, J., and Li, S. Reasoning aware
+self-consistency: Leveraging reasoning paths for efficient
+LLM sampling. In Proceedings of the North American
+Chapter of the Association for Computational Linguistics
+(NAACL), 2025.
+Wang, P., Li, L., Shao, Z., Xu, R., Dai, D., Li, Y., Chen,
+D., Wu, Y., and Sui, Z. Math-shepherd: Verify and rein-
+force llms step-by-step without human annotations. In
+Proceedings of the Association for Computational Lin-
+guistics (ACL), 2024a.
+Wang, T., Kulikov, I., Golovneva, O., Yu, P., Yuan, W.,
+Dwivedi-Yu, J., Pang, R. Y., Fazel-Zarandi, M., Weston,
+J., and Li, X. Self-taught evaluators. arXiv preprint
+arXiv:2408.02666, 2024b. URL https://doi.org/10.
+48550/arXiv.2408.02666.
+Wang, X., McInerney, J., Wang, L., and Kallus, N. Entropy
+after ⟨/Think⟩for reasoning model early exiting. arXiv
+preprint arXiv:2509.26522, 2025. URL https://arxiv.
+org/abs/2509.26522.
+Wei, J., Wang, X., Schuurmans, D., Bosma, M., Ichter, B.,
+Xia, F., Chi, E. H., Le, Q. V., and Zhou, D. Chain-of-
+thought prompting elicits reasoning in large language
+11
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+models. In Advances in Neural Information Processing
+Systems (NeurIPS), 2022.
+Wei, J., Sun, Z., Papay, S., McKinney, S., Han, J., Fulford,
+I., Chung, H. W., Passos, A. T., Fedus, W., and Glaese,
+A. Browsecomp: A simple yet challenging benchmark
+for browsing agents. arXiv preprint arXiv:2504.12516,
+2025. URL https://doi.org/10.48550/arXiv.2504.
+12516.
+Whitehouse, C., Wang, T., Yu, P., Li, X., Weston, J., Ku-
+likov, I., and Saha, S. J1: incentivizing thinking in llm-
+as-a-judge via reinforcement learning. arXiv preprint
+arXiv:2505.10320, 2025. URL https://doi.org/10.
+48550/arXiv.2505.10320.
+Wu, J., Li, B., Fang, R., Yin, W., Zhang, L., Tao, Z., Zhang,
+D., Xi, Z., Jiang, Y., Xie, P., Huang, F., and Zhou, J.
+Webdancer: Towards autonomous information seeking
+agency. arXiv preprint arXiv:2505.22648, 2025a. URL
+https://doi.org/10.48550/arXiv.2505.22648.
+Wu, J., Yin, W., Jiang, Y., Wang, Z., Xi, Z., Fang, R., Zhang,
+L., He, Y., Zhou, D., Xie, P., and Huang, F. Webwalker:
+Benchmarking llms in web traversal. In Proceedings
+of the Association for Computational Linguistics (ACL),
+2025b.
+Wu, J., Zhu, J., Liu, Y., Xu, M., and Jin, Y. Agentic rea-
+soning: A streamlined framework for enhancing LLM
+reasoning with agentic tools. In Proceedings of the Asso-
+ciation for Computational Linguistics (ACL), 2025c.
+Xiong, W., Zhao, W., Yuan, W., Golovneva, O., Zhang,
+T., Weston, J., and Sukhbaatar, S. Stepwiser: Stepwise
+generative judges for wiser reasoning. arXiv preprint
+arXiv:2508.19229, 2025. URL https://doi.org/10.
+48550/arXiv.2508.19229.
+Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu,
+B., Gao, C., Huang, C., Lv, C., and et al. Qwen3 technical
+report. arXiv preprint arXiv:2505.09388, 2025a. URL
+https://doi.org/10.48550/arXiv.2505.09388.
+Yang, J., Leret, K., Jimenez, C. E., Wettig, A., Khandpur,
+K., Zhang, Y., Hui, B., Press, O., Schmidt, L., and Yang,
+D. Swe-smith: Scaling data for software engineering
+agents. arXiv preprint arXiv:2504.21798, 2025b. URL
+https://doi.org/10.48550/arXiv.2504.21798.
+Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan,
+K. R., and Cao, Y. React: Synergizing reasoning and
+acting in language models. In Proceedings of the Interna-
+tional Conference on Learning Representations (ICLR),
+2023.
+Ye, R., Zhang, Z., Li, K., Yin, H., Tao, Z., Zhao, Y., Su, L.,
+Zhang, L., Qiao, Z., Wang, X., Xie, P., Huang, F., Chen,
+S., Zhou, J., and Jiang, Y. Agentfold: Long-horizon
+web agents with proactive context management. arXiv
+preprint arXiv:2510.24699, 2025. URL https://arxiv.
+org/abs/2510.24699.
+Yen, H., Paranjape, A., Xia, M., Venkatesh, T., Hessel, J.,
+Chen, D., and Zhang, Y. Lost in the maze: Overcoming
+context limitations in long-horizon agentic search. arXiv
+preprint arXiv:2510.18939, 2025. URL https://arxiv.
+org/abs/2510.18939.
+Yuan, X., Fu, J., Côté, M.-A., Tay, Y., Pal, C., and Trischler,
+A. Interactive machine comprehension with information
+seeking agents. In Proceedings of the Association for
+Computational Linguistics (ACL), 2020.
+Zhao, J., Liu, R., Zhang, K., Zhou, Z., Gao, J., Li, D.,
+Lyu, J., Qian, Z., Qi, B., Li, X., and Zhou, B. Genprm:
+Scaling test-time compute of process reward models via
+generative reasoning. arXiv preprint arXiv:2504.00891,
+2025. URL https://doi.org/10.48550/arXiv.2504.
+00891.
+Zhou, Y., Jiang, S., Zhu, J., Li, J., Guo, L., Chen, F., and
+Zhang, C. Fin-prm: A domain-specialized process reward
+model for financial reasoning in large language models.
+arXiv preprint arXiv:2508.15202, 2025. URL https:
+//doi.org/10.48550/arXiv.2508.15202.
+Zou, J., Yang, L., Gu, J., Qiu, J., Shen, K., He, J., and
+Wang, M. Reasonflux-prm: Trajectory-aware prms for
+long chain-of-thought reasoning in llms. arXiv preprint
+arXiv:2506.18896, 2025. URL https://doi.org/10.
+48550/arXiv.2506.18896.
+A. Details of Experimental Setups
+Tool Implementation Details.
+We conduct all experi-
+ments within the Inspect-Eval evaluation framework (AI Se-
+curity Institute, 2024), which fully supports the ReAct
+paradigm (Yao et al., 2023) for multi-turn reasoning and
+tool interactions necessary for complex information-seeking
+tasks. The framework provides access to a comprehensive
+set of external tools:
+• Web Search: We utilize the Serper search API to re-
+trieve up-to-date web content for search queries.
+• Web Browsing: The framework includes built-in
+browser automation tools, supporting essential web
+interaction functions such as browsing with URLs,
+clicking, scrolling down/up, typing, etc.
+12
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+• Code Execution: The framework also supports built-in
+Python and Bash code execution environments.
+In this evaluation framework, agents use these tools to inter-
+act with external sources to search and synthesize informa-
+tion to solve given information-seeking questions.
+Evaluation Benchmarks.
+We provide in-depth explana-
+tions of the long-horizon information-seeking benchmarks
+used in our experiments. (1) GAIA (Mialon et al., 2024)
+evaluates the ability to act as a general AI assistant on com-
+plex retrieval and reasoning tasks spanning three difficulty
+levels. Following prior work (Li et al., 2025c; Gao et al.,
+2025; Kang et al., 2025), we use 103 questions from the
+text-only validation subset. (2) WebWalkerQA (Wu et al.,
+2025b) focuses on web-based reasoning, requiring agents
+to traverse webpages to locate target information across
+three difficulty levels. We evaluate on 247 English ques-
+tions. (3) FRAMES (Krishna et al., 2025) provides factual
+and reasoning-intensive queries to assess both retrieval and
+reasoning capabilities. We use a subset that consists of 300
+samples that are randomly selected from the original dataset.
+Baselines.
+In this section, we provide a more detailed
+explanation of the baselines.
+• GenPRM-7B (Zhao et al., 2025) is a generative PRM
+originally designed for mathematical reasoning. It pro-
+duces Chain-of-Thought rationales with a binary verdict
+(yes / no) indicating whether the current step is correct.
+We follow their prompt format and ask GenPRM to verify
+the correctness of a trajectory step and explain why the
+step is judged correct or incorrect.
+• Web-Shepherd-8B (Chae et al., 2025) generates a task-
+specific checklist that decomposes a task into key subgoals
+and evaluates agentic trajectories based on it. Specifically,
+it assigns coarse feedback labels (Yes / No/ In progress)
+for each checklist item for evaluation. We also follow
+their prompt formats to generate a checklist for a given
+information-seeking task and evaluate each trajectory step
+relative to that checklist.
+• StepWiser (Xiong et al., 2025) trains a generative PRM
+using GRPO with binary rewards, where each step is la-
+beled as effective or ineffective. For implementation, we
+follow the Relative Effective Reward Thresholding in the
+paper to re-annotate our training dataset: a step receives a
+positive label if the ratio between the current and previous
+mean accuracies exceeds the threshold (0.7), and a neg-
+ative label otherwise. Using this binary supervision, we
+train Qwen3-4B for 4 epochs to build StepWiser PRM.
+• Confidence (Ghasemabadi et al., 2025; Fu et al., 2025;
+Prabhudesai et al., 2025; Wang et al., 2025) estimates rea-
+soning quality based on the model’s certainty. Following
+4
+3
+2
+1
+0
+1
+2
+3
+4
+Information Gain Score
+0.0
+0.4
+0.8
+1.2
+1.6
+Density
+Information Gain Score Distribution of Preference Pairs
+Winning Steps
+Losing Steps
+Figure 5. Distribution of annotated information gain scores.
+the confidence definition in recent work (Ghasemabadi
+et al., 2025; Fu et al., 2025), we calculate confidence by
+taking the negative average log-probability of the top-10
+most likely tokens at each position across all generated
+tokens in the reasoning step, and then averaging these
+scores across all token positions. Higher scores indicate
+lower uncertainty.
+• Relevance (Wan et al., 2025) measures the coherence be-
+tween the current step and the preceding context. Specif-
+ically, it uses the Jaccard similarity between the current
+step and the accumulated past steps. A higher similarity
+indicates better contextual coherence.
+• Verbal progress is a zero-shot baseline that assesses
+progress toward the final answer by prompting Qwen3-4B
+to estimate how close the current reasoning state is to
+completing the task. The model is asked to output a scalar
+that ranges from 1 to 5 based on the textual content of
+the current step and its information-seeking trajectory. A
+higher score indicates that the current reasoning state is
+close to the final answer.
+Train Configurations.
+We train PRINTS using Qwen3-
+4B with an alternating SFT-GRPO schedule over four cycles,
+where each cycle consists of one SFT epoch for summariza-
+tion followed by one GRPO epoch for scoring, to jointly
+acquire both abilities. For the SFT stage, we use a batch
+size of 128 and a learning rate of 1e-6. For the GRPO stage,
+we execute N = 4 rollouts and use a batch size of 128 and
+a learning rate of 1e-6. Such alternating optimization allows
+the model to continuously refine its summarization ability
+while simultaneously improving its scoring accuracy on rea-
+soning quality. This iterative schedule ensures both modules
+evolve synergistically, stabilizing training and preventing
+either skill from degrading over time.
+Data Annotations.
+We construct our annotated data from
+4,344 information-seeking questions, comprising 720 ques-
+tions used to train information-seeking agents from the
+Alibaba group (Wu et al., 2025a; Li et al., 2025b; Tao
+et al., 2025), and 3,624 questions from the Miroverse-v0.1
+13
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+dataset (MiroMind Data Team, 2025), a large-scale agent
+dataset covering multi-hop QA, web navigation, and sci-
+entific reasoning tasks. For the score annotation process,
+we execute M = 8 rollouts per trajectory step to estimate
+the mean accuracy and information gain score. We discard
+steps that are either too easy (mt = 1) or too hard (mt = 0),
+resulting in 2,294 preference pairs used for training.
+As shown in Figure 5, our annotation pipeline produces
+well-balanced information gain score distributions across
+the full score range. This balanced distribution ensures that
+PRINTS learns to estimate diverse trajectory step quality,
+from harmful steps that reduce success probability to highly
+effective steps that substantially advance toward the correct
+answer. Moreover, the distributions of winning and losing
+steps exhibit clear separation. This clear separation validates
+the effectiveness of our preference pair construction and
+using this as training signals for PRINTS to output dense
+and comparative scores.
+Frontier Model Performance.
+For the performance of
+frontier models on the GAIA benchmark, we follow
+the reported results (OpenAI DeepResearch: 67.4% and
+DeepSeek-V3.1-671B: 63.1%) in the DeepResearch-30B-
+A3B paper (Li et al., 2025a) and use these reported numbers
+as reference points when evaluating improvements brought
+by integrating PRINTS into DeepResearch-30B-A3B.
+B. Additional Experiments
+PRINTS as Summarizer.
+To validate our design of
+jointly training scoring and summarization within a sin-
+gle model, we compare PRINTS against a variant that uses
+separate models for each capability. Specifically, we train a
+PRM using only GRPO for scoring without SFT for sum-
+marization, and pair it with Qwen3-32B – the same model
+we use for summary annotation – to generate summaries at
+test-time. As shown in 6, PRINTS, which is jointly trained
+as both scorer and summarizer through our alternating SFT-
+GRPO schedule, outperforms this separated design. This
+demonstrates that the two abilities are complementary and
+that our alternating training schedule enables seamless inte-
+gration of these abilities. We hypothesize that this benefit
+arises from positive transfer between the two objectives. As
+both abilities operate on the same input (i.e., query, preced-
+ing summary, latest tool response, current trajectory step),
+learning to distill essential information during SFT directly
+aids GRPO optimization by highlighting the most relevant
+factors for quality evaluation.
+Dataset Scaling
+To further validate that PRINTS is a
+cost-efficient way of improving information-seeking behav-
+iors of agents without fine-tuning them, we conduct an
+ablation study on the training dataset scaling. As shown
+Method
+FRAMES
+GAIA
+Avg.
+Level 1
+Level 2
+Qwen3-32B
+54.7
+44.5
+29.5
+42.9
+PRINTS
+58.7
+49.6
+33.3
+47.2
+Table 6. Ablation study of summarizer. The Qwen3-32B ap-
+proach utilizes Qwen3-32B as a summarizer and employs the PRM
+trained solely as a scorer. PRINTS that simultaneously acts as a
+summarizer and scorer shows better performance, showing that
+two abilities are complementary.
+25%
+50%
+100%
+150%
+Dataset Size (%)
+26
+28
+30
+32
+34
+LasJ
+Dataset Scaling - GAIA Level 2 Performance
+Figure 6. Dataset scaling. Experiments on the impact of dataset
+scaling on GAIA Level 2 using Qwen3-32B. Training PRINTS
+shows strong sample efficiency, achieving performance gain using
+only 50%(∼1k samples) of our annotation data.
+in Figure 6, using only 50% (i.e., ∼1k samples) of our an-
+notation data still achieves 29.5 accuracy in GAIA Level 2,
+surpassing the base agent approach by training a relatively
+lightweight model (4B). The scaling curve saturates beyond
+100%, indicating that our ∼2k preference pairs represent
+a data-efficient point. This demonstrates strong sample ef-
+ficiency compared to fine-tuning agents, which typically
+require 10k-100k samples and expensive long-horizon roll-
+outs using relatively larger models, requiring substantial
+computational resources.
+14
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+-
+Reasoning: 'Okay, the 2020 Frank Zappa documentary is titled "Zappa" 
+and directed by Alex Winter. Now I need to find out if the director, Alex 
+Winter, participated in an event in July 1965… Alex Winter was born in 
+1969, according to some of my prior knowledge, so he wouldn't have 
+been alive in 1965… Therefore, there must be a mistake in the 
+question's phrasing. Let me proceed with that assumption… Let me 
+search for "Run Home Slow 1965 premiere location".'
+-
+Tool Call: {'function': 'google_search', 'arguments': {'q': 'Run Home Slow 
+1965 premiere location'}}
+-
+Reasoning: 'Okay, so the 2020 documentary about Frank Zappa is called 
+"Zappa" and it's directed by Alex Winter. Now, the question is about the 
+city where Alex Winter participated in an event in July 1965… But given 
+that Alex Winter wasn't born yet in 1965 (born in 1961, according to 
+my knowledge), that seems impossible. Wait, I must have made a 
+mistake. Let me confirm Alex Winter's birth year. Let me check Alex 
+Winter's birth year. I can do a quick search for "Alex Winter birth date".'
+-
+Tool Call: {'function': 'google_search', 'arguments': {'q': 'Alex Winter 
+birth date'}}
+Lossing Reasoning (𝒔𝒔𝟐𝟐
++) & Tool Call (𝒂𝒂𝟐𝟐
++)
+-
+ Made unverified assumptions: Assumed the question be wrong 
+and switched to a completely different person without verification.
+-
+Overall accuracy: 0.50 (𝑚𝑚1
++) → 0.00 (𝑚𝑚2
+−)
+-
+Score (𝒈𝒈𝟐𝟐
++): - 2.0
+Winning Reasoning Step (𝒔𝒔𝟐𝟐
++) & Tool Call (𝒂𝒂𝟐𝟐
++)
+-
+ Verified assumptions before pivoting: when things seemed 
+contradictory, fact-checks the key premise rather than making leaps.
+-
+Overall accuracy: 0.50 (𝑚𝑚1
++) → 0.875 (𝑚𝑚2
++)
+-
+Score (𝒈𝒈𝟐𝟐
++): + 1.5
+Winning / Losing Pair Examples
+-
+Reasoning: 'Okay, so the search results indicate that "The Elements of 
+Algebra" from 1795 was authored by James Wood. The second and 
+third results mention James Wood (1760–1839) as the author, and it’s 
+associated with Cambridge. So the person in the question is James 
+Wood. Now, he was at St John's College, Cambridge …’
+-
+Tool Call: {'function': 'google_search', 'arguments': {'q': 'James Wood 
+Cambridge Chief Justice position’}}
+-
+Reasoning: 'Okay, so the user is asking for the name of the position held 
+by an individual starting in 1820 as Chief Justice, but the name of the 
+position is unknown. The Google search results indicate that the author 
+is James Wood, who was active from 1795 to 1839. The second organic 
+result mentions that James Wood was a Fellow of St John’s College, 
+Cambridge, from 1795 to 1839 … '
+-
+Tool Call: {'function': 'google_search', 'arguments': {'q': 'James Wood St 
+John's College Cambridge position 1820 Chief Justice’}}
+Lossing Reasoning (𝒔𝒔𝟑𝟑
+−) & Tool Call (𝒂𝒂𝟑𝟑
+−)
+-
+ Misalignment between reasoning & tool call: No mention of “St 
+John’s College” or “1820” in the search query.
+-
+Overall accuracy: 0.75 (𝑚𝑚2
++) → 0.675 (𝑚𝑚3
+−)
+-
+Score (𝒈𝒈𝟑𝟑
+−): - 1.0
+Winning Reasoning Step (𝒔𝒔𝟑𝟑
++) & Tool Call (𝒂𝒂𝟑𝟑
++)
+-
+ Precise temporal and institutional anchors: key identifiers from 
+the reasoning narrow down the search space effectively.
+-
+Overall accuracy: 0.75 (𝑚𝑚2
++) → 1.00 (𝑚𝑚3
++)
+-
+Score (𝒈𝒈𝟑𝟑
++): + 2.0
+InfoSeek Query
+What is the name of the city where, in July 1965, the director of the 2020 documentary that includes archival footage from the 1960s and focuses on 
+the composer who wrote the soundtrack for the 1963 B movie "Run Home Slow" participated in an event?
+InfoSeek Query
+An individual held positions at St John's College, Cambridge, first ending in 1815 and then from 1815 to 1839, totaling 37 years of tenure. This person 
+authored "The Elements of Algebra (1795)" and bequeathed a library of nearly 4,500 books in classics, history, mathematics, theology, and travel 
+(17th–19th centuries). Starting from 1820, they held a position with the role of Chief Justice, administering an area, but the name of this position is 
+unknown. What is the name of this position?
+Figure 7. Examples of preference pairs constructed by our annotation pipeline.
+15
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+Prompt Template for PRM as Scorer
+Instruction:
+You are given a user information seeking problem. Your task is to act as an impartial judge and evaluate how well the "Current Reasoning 
+Step" contributes to solving the user's problem based on the problem description and historical reasoning context. It is OK that the current 
+step does not contain any tool call response.
+REASONING EVALUATION RULES:
+- As you evaluate, develop and refine your assessment criteria based on the specific requirements of this problem type and reasoning 
+context. Think carefully about how to assess the quality of the current reasoning step. Your thinking should include your evaluation criteria, 
+explaining how the step aligns with or deviates from your expectations.
+- Finally, assign the reasoning step a score from -4 to 4, using either an integer or a decimal with up to 0.1 precision. A higher score should 
+indicate a higher-quality response.
+[Input]:
+# Information Seeking Problem
+{problem}
+# Historical Reasoning Trace Summary
+{historical_summary}
+# Previous Tool Response
+{previous_tool_response}
+# Current Reasoning Step
+{current_reasoning}
+[Output format]:
+1. Criteria Development: [Identify the key evaluation criteria relevant for evaluating this reasoning step. Consider factors such as: logical 
+validity and coherence of the step, tool call appropriateness and argument quality (whether too general or too narrow), consistency with user 
+problem, historical reasoning trace summary, and previous tool response, informative/progress toward final answer, confidence and 
+uncertainty expression, etc. Briefly explain why your selected criteria are critical for this particular evaluation.]
+2. Analysis: [Always provide a step-by-step analysis here. First, briefly state the goal of the current reasoning step. Second, systematically 
+evaluate the step against each of your identified criteria above. For each criterion, assess how well the step performs and explain your 
+reasoning. If errors or deficiencies are found, clearly explain what is wrong and why. If the step performs well on a criterion, explain why it 
+succeeds.]
+3. Final Judgment: [Provide the final judgment within \\boxed_score{{}}. Examples: \\boxed_score{{-3.0}} or \\boxed_score{{3.5}}.]
+Figure 8. Input prompt for PRINTS when the model is trained with GRPO for scoring ability and acts as a scorer at test-time.
+16
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+Prompt Template for PRM as Summarizer
+Instruction:
+You are a reasoning trace summarizer for multi-step information seeking problems. Your task is to incrementally build a concise summary of 
+an information-seeking process. Your summary should capture the process's state of knowledge, uncertainty, hypothesis, and next actions.
+Input Sources:
+# Information Seeking Problem - the original user question.
+# Historical Reasoning Trace Summary - the accumulated summary built from all previous reasoning steps and tool responses.
+# Previous Tool Response - the tool response from the immediately preceding step (not yet incorporated into Historical Summary).
+# Current Reasoning Step - the reasoning and tool interaction from the current step (not the complete reasoning trace).
+SUMMARIZATION RULES:
+- Keep essential information from the Previous Tool Response and Current Reasoning Step needed for the next action.
+- Incorporate what the current process believes, suspects, verifies, or is planning further verification.
+- For the Current Reasoning Step's action, summarize tool name and key parameters.
+- Preserve the Historical Reasoning Trace Summary unless explicitly contradicted or superseded. Justify any removals.
+- Do NOT infer or invent missing information. It is normal for reasoning to be incomplete.
+- Output the COMPLETE updated summary.
+[Input]:
+# Information Seeking Problem
+{problem}
+# Historical Reasoning Trace Summary
+{historical_summary}
+# Previous Tool Response
+{previous_tool_response}
+# Current Reasoning Step
+{current_reasoning}
+[Output format]:
+1. Analysis: [In 3-5 sentences, explain what key information from Previous Tool Response and Current Reasoning Step is being added, what (if 
+anything) from Historical Summary is being removed or updated and why, and why the resulting summary is sufficient for next steps.]
+2. Updated Summary: [Provide the complete summary within \\boxed_summary{{}} containing:
+- **Confirmed Knowledge**: Verified facts.
+- **Uncertainty**: What remains unknown.
+- **Previous Hypotheses**: Abandoned hypotheses (if relevant).
+- **Previous Action**: Previous tool calls with key parameters in the Historical Reasoning Trace Summary.
+- **Current Hypothesis**: Current working hypothesis in the Current Reasoning Step and Historical Reasoning Trace Summary.
+- **Current Action**: Most recent tool call with key parameters in the Current Reasoning Step.]
+Figure 9. Input prompt for PRINTS when the model is trained with SFT for summarization ability and acts as a summarizer at test-time.
+17
+
+PRINTS : Reward Modeling for Long-Horizon Information Seeking
+Step-level Score Evaluation
+InfoSeek Query
+Who composed the song that was performed by a rooster and a hamster in separate animated videos at separate tempos with different lyrics? Answer 
+using the format First name Last name.
+Best Agent Trajectory Step
+-
+Reasoning: 'Okay, let's try to figure out this question. First, I need to recall if there's any well-known song that fits this description. The mention of a 
+rooster and a hamster makes me think of children's songs or maybe something from a cartoon. But I'm not immediately recalling a specific song. 
+Maybe I should break it down. The key elements here are: composed a song, performed by a rooster and a hamster, separate animated videos, 
+different tempos and lyrics… Since I'm stuck, maybe I should use the available tools to search for the answer. The user has provided a Google search 
+function. Let me try that. I'll use the google_search function with the query: "song performed by rooster and hamster animated videos different 
+tempos composer". Let's see what comes up…'
+-
+Tool Call: {'function': 'google_search', 'arguments': {'q': ' 'song performed by rooster and hamster animated videos different tempos composer’}}
+PRInTS score evaluation
+…
+1. **Criteria Development**:  …
+2. **Analysis**: 
+-
+**Logical Validity**: The assistant correctly identifies the problem’s key elements (rooster/hamster, animated videos, different tempos/lyrics) and 
+considers plausible angles (children’s songs, educational videos, viral content). This demonstrates a structured approach.
+-
+**Tool Call Appropriateness**: The Google search query is specific and tailored to the problem, making it a strong tool call. The query includes all 
+critical details (e.g., "rooster and hamster," "different tempos," "composer").
+-
+**Progress Toward Answer**: The step is progressively moving toward the answer by combining analysis with targeted research. The assistant avoids 
+vague assumptions and instead focuses on actionable steps.  
+-
+**Confidence in Uncertainty**: The assistant acknowledges uncertainty (e.g., "I’m not immediately recalling a specific song") and uses the tool to 
+resolve it, which is appropriate. 
+3. **Final Judgment**: The assistant’s reasoning is well-structured, logically valid, and appropriately uses a tool call to address the problem. The step 
+balances analytical thinking with practical action.
+\boxed_score{2.0}
+InfoSeek Query
+Who composed the song that was performed by a rooster and a hamster in separate animated videos at separate tempos with different lyrics? Answer 
+using the format First name Last name.
+Worst Agent Trajectory Step
+-
+Reasoning: ‘Okay, let's tackle this question step by step. …I recall that "The Yellow Song" by The Yellow Album Leaf is a song where a rooster and a 
+hamster perform the song in different animated versions. The rooster's version is faster, and the hamster's is slower. The lyrics are also slightly 
+different between the two. The composer of this song is likely the same as the artist, The Yellow Album Leaf. But wait, The Yellow Album Leaf is a 
+project by Ben Schneider. Let me confirm that. A quick search in my mind: yes, Ben Schneider is the creator and composer behind The Yellow 
+Album Leaf. The song in question is part of their "Yellow Album" series, which includes various characters and their own versions of songs. So, the 
+answer should be Ben Schneider. Let me make sure there's no other composer associated with that specific song. Since The Yellow Album Leaf is his 
+project, and he composes the songs, it's safe to attribute the composition to him. Therefore, the first name is Ben and the last name is Schneider
+-
+Tool Call: {'function': ‘submit', 'arguments': {‘answer': ‘ ‘Ben Schneider’}}
+PRInTS score evaluation
+…
+1. **Criteria Development**:  …
+2. **Analysis**: 
+-
+**Logical Validity**: The assistant assumes the song is "The Yellow Song" by *The Yellow Album Leaf* without confirming its existence or relevance 
+to the described scenario. This leap in logic is unsupported by evidence.
+-
+**Evidence-Based Conclusion**: The assistant relies on unverified memory (e.g., "Ben Schneider is the creator of The Yellow Album Leaf") without 
+citing any sources or references. This undermines the reliability of the answer.
+-
+**Relevance to Problem**: The reasoning focuses on a specific project but fails to address the core question directly. The connection between the 
+described scenario and the song/composer is unclear.
+-
+**Confidence in Answer**: The assistant presents the answer with certainty, despite the lack of evidence. This overconfidence is problematic in an 
+information-seeking context.
+3. **Final Judgment**:  The reasoning step is speculative and lacks evidence, making it unsuitable for solving the problem. The conclusion is not 
+justified by the provided information.
+\boxed_score{-2.0}
+Figure 10. PRINTS step-level evaluation examples on a GAIA query. Among four candidate steps, we show the highest-scoring (top) and
+lowest-scoring (bottom) steps. The high-quality step acknowledges uncertainty and initiates an appropriate tool call to gather missing
+information, while the low-quality step makes unverified assumptions and confidently produces an unsupported answer without evidence.
+18

@@ -1,0 +1,1195 @@
+Be My Eyes: Extending Large Language Models to New Modalities
+Through Multi-Agent Collaboration
+James Y. Huang1∗
+Sheng Zhang2∗
+Qianchu Liu2
+Guanghui Qin2
+Tinghui Zhu3
+Tristan Naumann2
+Muhao Chen3
+Hoifung Poon2
+1University of Southern California
+2Microsoft Research
+3University of California, Davis
+huangjam@usc.edu
+shezhan@microsoft.com
+Abstract
+Large Language Models (LLMs) have demonstrated re-
+markable capabilities in challenging, knowledge-intensive
+reasoning tasks.
+However, extending LLMs to perceive
+and reason over a new modality (e.g., vision), often re-
+quires costly development of large-scale vision language
+models (VLMs) with LLMs as backbones. Smaller VLMs
+are more efficient and adaptable but often lack the broad
+knowledge and reasoning capabilities of frontier LLMs. In
+this work, we propose BEMYEYES , a modular, multi-
+agent framework for extending LLMs to multimodal reason-
+ing by orchestrating collaboration between efficient, adapt-
+able VLMs as perceivers and powerful LLMs as reasoners
+through conversations. We then introduce a data synthesis
+and supervised fine-tuning pipeline to train the perceiver
+agent to effectively collaborate with the reasoner agent. By
+combining the complementary strengths of perception and
+reasoning agents, BEMYEYES avoids the need for train-
+ing large-scale multimodal models, preserves the general-
+ization and reasoning capabilities of LLMs, and allows flex-
+ible extension to new domains and modalities. Experiments
+show that our framework unlocks the multimodal reason-
+ing capabilities for LLMs, enabling a lightweight and fully
+open-source solution, i.e. equipping text-only DeepSeek-
+R1 with Qwen2.5-VL-7B perceiver, to outperform large-
+scale proprietary VLMs such as GPT-4o on a wide range
+of knowledge-intensive multimodal tasks.
+These results
+demonstrate the effectiveness, modularity, and scalability
+of our multi-agent approach for building future multimodal
+reasoning systems.
+1. Introduction
+Large Language Models (LLMs) have demonstrated re-
+markable capabilities in natural language understanding,
+reasoning, and generation.
+Models such as GPT [24],
+*Equal Contributions.
+Score (%)
+DeepSeek-R1
+GPT-4
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+37.1
+30.9
+72.7
+68.3
+MathVista
+DeepSeek-R1
+GPT-4
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+36.8
+29.4
+57.2
+49.9
+MMMU-Pro
+GPT-4o
+Text-only model baselines
+Text-only model w. BeMyEyes
+Figure 1. Using BEMYEYES
+enables text-only models such as
+DeepSeek-R1 and GPT-4 to reach state-of-the-art performance on
+challenging multimodal benchmarks without modifying their pa-
+rameters. Grey bars denote text-only baselines, where models re-
+ceive only the benchmark questions without images. Dotted lines
+indicate GPT-4o performance.
+Qwen [34], and DeepSeek [9] illustrate how scaling model
+size, data, and compute can substantially enhance a model’s
+knowledge and reasoning abilities. Despite these advances,
+LLMs remain fundamentally unimodal, operating solely on
+textual inputs.
+While they excel at processing and rea-
+soning over language, many real-world tasks require inte-
+grating information across multiple modalities, such as vi-
+sion [27, 36, 37], video [8, 17, 29], and other sensory inputs.
+The ability to perceive and reason about non-textual infor-
+mation is crucial for developing general-purpose intelligent
+systems that can understand and interact with the physical
+world. Bridging this modality gap has therefore become a
+central research challenge in extending the capabilities of
+LLMs toward broader applications.
+A dominant approach to overcoming the unimodality of
+LLMs is to build multimodal language models (MLLMs),
+such as vision language models (VLMs), that couple pre-
+trained visual encoders with powerful LLM backbones.
+These multimodal systems [2, 20, 21, 40] jointly learn
+shared representations to enable vision-language alignment
+arXiv:2511.19417v1  [cs.CL]  24 Nov 2025
+
+and cross-modal reasoning. However, training or adapting
+such models typically requires substantial computational
+resources, large-scale multimodal datasets, and often non-
+trivial architectural modifications when extending to new
+modalities. In parallel, recent advances in multi-agent sys-
+tems have demonstrated the potential of agentic, collab-
+orative problem-solving in diverse scenarios such as tex-
+tual reasoning [5], code generation [11], and web brows-
+ing [30]. Inspired by these successes, we introduce a multi-
+agent framework for extending LLMs to new modalities
+with the help of specialized perceiver agents as the “eyes”
+of LLMs. In this paradigm, an LLM can act as a reason-
+ing agent that leverages its extensive world knowledge and
+advanced reasoning capabilities, while collaborating with
+perceiver agents that process and convey information from
+non-textual inputs. This approach effectively extends LLMs
+to new modalities without retraining, offering a more scal-
+able and flexible alternative to training large-scale MLLMs.
+In this work, we present BEMYEYES , a multi-agent
+framework designed to extend LLMs to new modalities
+orchestrating collaboration between efficient, adaptable
+VLMs as perceiver agents, and powerful LLMs as reasoner
+agents.
+The perceiver agent extracts and describes rele-
+vant visual information, while the reasoner agent interprets
+these descriptions and applies its extensive world knowl-
+edge and advanced reasoning capabilities to solve the given
+task. Through multi-turn conversation, the reasoner can re-
+quest clarifications or additional visual context, and refine
+its reasoning based on the perceiver’s responses. This col-
+laboration combines the complementary strengths of small
+VLMs and large LLMs: the perceiver serves as the “eyes”
+that ground the task in visual evidence, and the reasoner
+acts as an intelligent expert that drives decision making. To
+further improve collaboration, we introduce a data synthe-
+sis pipeline that allows us to train perceiver agents by dis-
+tilling strong perceptual and instruction-following capabili-
+ties from larger VLMs. As shown in Figure 1, BEMYEYES
+significantly improves the performance of text-only LLMs
+on multimodal reasoning, even surpassing large-scale mul-
+timodal models, without modifying their parameters.
+Our framework provides several key advantages. First, it
+substantially reduces the cost of developing powerful multi-
+modal models on top of existing LLMs, since only the much
+more compact perceiver agent needs to be adapted to sup-
+port new modalities. Second, it preserves the generalization
+capabilities of LLMs, allowing them to draw on their exten-
+sive knowledge and strong reasoning abilities when oper-
+ating over non-textual inputs. Third, the framework main-
+tains a modular design in which the perceiver and reasoner
+agents can be swapped independently. As more capable
+LLMs become available, they can be seamlessly integrated
+into BEMYEYES for advanced multimodal reasoning, and
+lightweight multimodal models that support new modalities
+can likewise be incorporated to extend task coverage with-
+out retraining large multimodal models. Our main contribu-
+tions are as follows:
+1. We propose a novel multi-agent framework for extend-
+ing LLMs to multimodal reasoning by enabling seamless
+collaboration between specialized perceiver agents and
+strong reasoner agents via multi-turn conversations.
+2. We design a data synthesis pipeline for training perceiver
+agents to collaborate effectively with reasoner agents on
+complex multimodal reasoning tasks.
+3. We demonstrate the effectiveness and generalizability
+of our framework across diverse tasks, models, and do-
+mains, establishing it as a modular, scalable, and flexible
+alternative to large-scale multimodal models.
+2. Method
+2.1. BEMYEYES
+Overview
+BEMYEYES is a multi-agent framework designed to ex-
+tend LLMs to new modalities through collaboration with
+small, adaptable VLMs acting as perceiver agents (Figure
+2). The perceiver agent focuses on interpreting and convey-
+ing visual information, while the reasoner agent, a large,
+frozen LLM, leverages its advanced knowledge and reason-
+ing capabilities to solve challenging tasks. This modular
+design allows LLMs to gain multimodal reasoning abilities
+without the need for expensive retraining or fine-tuning of
+large-scale multimodal models. Moreover, as more power-
+ful LLMs emerge, they can be seamlessly integrated into
+our framework and applied to multimodal tasks, ensuring
+scalability and adaptability of the system over time.
+To enable smooth collaboration between the two agents,
+we introduce an orchestration mechanism that defines their
+roles and conversational flow.
+Furthermore, we propose
+a data synthesis pipeline and supervised fine-tuning strat-
+egy that improve the perceiver’s perception and instruction-
+following capabilities in our multi-agent setting, leading to
+more effective collaboration with the reasoner agent.
+2.2. Perceiver Agent
+The primary role of the perceiver agent is to convey visual
+information to the reasoner agent and to ensure that the rea-
+soner’s outputs remain consistent with the visual evidence
+present in the input images. Since the perceiver’s responses
+constitute the sole communication channel through which
+the reasoner can infer visual context, it is essential that the
+perceiver agent accurately and comprehensively commu-
+nicate all relevant visual details. Moreover, the perceiver
+must actively respond to the reasoner’s requests for spe-
+cific visual information. To enable such effective collab-
+oration, the perceiver agent is prompted to be aware not
+only of the necessity of coordination with the reasoner but
+also of the reasoner’s inherent lack of direct visual percep-
+
+Multimodal 
+Input
+Which angiosperm 
+species is this?
+Cyperaceae
+Final output
+Instance Filtering
+Answerable 
+by text
+Unsuccessful 
+conversation
+Conversation Generation
+Teacher 
+Perceiver 
+Agent
+Reasoner 
+Agent
+Reasoner
+Agent
+(Frozen LLM)
+Data Synthesis
+Multi-Agent Framework
+Supervised Fine-tuning
+Perceiver
+Agent
+(Small adaptable VLM)
+Knowledge
+Reasoning
+Lack advanced
+knowledge/reasoning
+No perception
+capabilities
+Conversation
+Text
+Input
+Visual
+Input
+Answer
+Extraction
+Perception
+Follow-up
+discussions
+Reasoning
+process
+Visual
+Descriptions
+Question Generation
+Figure 2. Overview of the BEMYEYES
+framework. A perceiver agent (small, adaptable VLM) extracts and summarizes visual infor-
+mation from input images, which is then communicated to the reasoner agent (large, frozen LLM) through multi-turn conversations. We
+also propose a data synthesis and supervised fine-tuning pipeline that allows us to train the perceiver agent to effectively collaborate with
+the reasoner agent. BEMYEYES’s modular, multi-agent design decouples perception and reasoning, allowing text-only LLMs to perform
+multimodal reasoning without retraining, while enabling flexible integration of new perceiver or reasoner models.
+tion. This awareness encourages the perceiver to provide
+detailed, contextually rich descriptions of what it observes.
+In BEMYEYES, perceiver agents are instantiated using
+small VLMs capable of processing visual inputs. A ma-
+jor advantage of employing small VLMs as perceivers lies
+in their accessibility and computational efficiency, which
+facilitates easy development and adaptation of perceiver
+agents that can effectively collaborate with LLMs on new
+modalities. While a small VLM alone cannot match the
+performance of large-scale VLMs, its limitations are ef-
+fectively compensated by the more capable reasoner agent,
+which provides advanced reasoning capabilities over the
+multimodal information supplied by the perceiver.
+2.3. Reasoner Agent
+The reasoner agent is responsible for performing complex
+reasoning over the visual information provided by the per-
+ceiver agent. It is prompted to actively query and retrieve as
+much relevant visual detail as possible from the perceiver in
+order to solve the given task. Since the perceiver agent has
+limited reasoning capabilities, it may omit or overlook cer-
+tain visual details that are important for accurate problem-
+solving. To address this limitation, the reasoner agent is in-
+structed to request clarifications or additional descriptions
+from the perceiver agent when necessary, and to refine its
+reasoning based on the updated information.
+In BEMYEYES, reasoner agents are instantiated using
+LLMs that possess strong knowledge and reasoning ca-
+pabilities but lack native support for visual perception.
+This makes them ideal candidates for modality extension
+through multi-agent collaboration. By leveraging the per-
+ceiver–reasoner interaction, BEMYEYES effectively en-
+dows the LLM reasoner with multimodal reasoning abilities
+without requiring costly adaptation of large-scale VLMs.
+2.4. Orchestration
+Both the perceiver and reasoner agents are initialized with
+system prompts that define their respective roles and the
+overall problem setting. Each agent is made aware of the
+complementary expertise of the other: one specializes in
+perception and the other in reasoning. For a given mul-
+timodal reasoning problem with visual and textual inputs,
+only the perceiver agent initially receives the inputs from
+both modalities. The two agents then engage in an interac-
+tive, multi-turn conversation to solve the problem collabo-
+ratively. The reasoner agent typically initiates the dialogue
+by requesting relevant details about the question, including
+both visual and textual components. The agents alternate
+turns, exchanging information and clarifications, until the
+maximum number of turns is reached. Finally, the perceiver
+
+agent is prompted to output the final answer based on the
+discussions between the two agents.
+2.5. Data Synthesis
+While existing VLMs are generally capable of following
+regular system prompts, they are not explicitly optimized
+for our multi-agent setting, where they must coordinate with
+a separate LLM reasoner. As a result, we observe that they
+sometimes fail to adhere to their assigned roles, leading
+to redundant or confusing exchanges between agents [25].
+In other cases, the perceiver may overlook or misinterpret
+relevant visual details due to limited perception capabili-
+ties when handling complex visual instructions. However,
+no training data currently exists for fine-tuning perceiver
+agents in our collaborative multimodal reasoning scenar-
+ios. To address this gap and improve the perceiver’s ef-
+fectiveness in collaborating with the reasoner, we propose a
+data synthesis pipeline designed to distill the strong percep-
+tion and instruction-following abilities of larger VLMs into
+smaller perceiver agents.
+Our data synthesis pipeline consists of three key stages:
+1. Question Generation: We begin by collecting a di-
+verse set of images from publicly available datasets. To
+ensure coverage of knowledge- and reasoning-intensive
+cases while avoiding overlap with standard evaluation
+benchmarks, we randomly sample images from CoSyn-
+400K [35], a large collection of computer-generated
+charts, diagrams, and figures across 10 different cate-
+gories. We then prompt GPT-4o to generate multimodal
+reasoning questions that cannot be answered without vi-
+sual information.
+2. Conversation Generation: For each generated ques-
+tion, we instruct GPT-4o to produce answers under three
+distinct settings: (1) single-LLM, where only textual in-
+put is provided; (2) single-VLM, where both visual and
+textual inputs are provided; and (3) BEMYEYES, where
+GPT-4o is prompted to role-play as both perceiver and
+reasoner agents, simulating realistic multi-turn conversa-
+tions between them. We treat the answer from the single-
+VLM setting as the ground-truth label and sample up to
+a certain number of conversations from BEMYEYES, re-
+taining the one that leads to the correct answer. Due
+to resource constraints, we set the sampling budget to
+a maximum of eight conversations per question. Pre-
+liminary experiments indicate that using GPT-4o to role-
+play as the teacher perceiver model produces higher-
+quality data compared to weaker perceiver models such
+as Qwen2.5-VL, owing to GPT-4o’s superior perception
+and instruction-following capabilities.
+3. Instance Filtering: We discard instances that either (1)
+can be answered correctly without images, since these
+are trivial for multimodal reasoning, or (2) fail to pro-
+duce any conversations that lead to the correct answer
+under the BEMYEYES setting within the sampling bud-
+get, typically because the visual information is too com-
+plex or abstract to be effectively conveyed through text-
+based communication.
+The resulting dataset contains
+12,145 multimodal questions, each paired with corre-
+sponding images, answers, and simulated conversations
+between the perceiver and reasoner agents.
+2.6. Supervised Fine-tuning
+Using the synthesized dataset described above, we fine-tune
+the perceiver agent to improve its ability to collaborate ef-
+fectively with the reasoner. Specifically, the perceiver is
+trained on all of its responses within the multi-turn con-
+versations, conditioned on the full prior dialogue history.
+These responses include: (1) initial descriptions of the vi-
+sual and textual inputs, (2) follow-up replies to the rea-
+soner’s questions and solution attempts, and (3) the final
+answers produced after the discussion concludes. The ob-
+jective is to help the perceiver learn both context-aware vi-
+sual perception and role-consistent communication within
+the collaborative reasoning process. We optimize the per-
+ceiver using a standard cross-entropy loss over the gener-
+ated responses:
+LSFT = −
+T
+X
+t=1
+log Pθ(yt | y<t, x),
+where x denotes the input context (including prior conver-
+sation turns and visual inputs), and yt represents the target
+token at step t. This fine-tuning procedure enables the per-
+ceiver to align its perception and communication behaviors
+with the expectations of the reasoner agent, ultimately lead-
+ing to more coherent and effective multi-agent collaboration
+during inference. Note that BEMYEYES does not require
+any fine-tuning or architectural modification of the reasoner
+agent, making the framework both efficient for modality ex-
+tension and broadly compatible with open-source and pro-
+prietary LLMs alike.
+3. Experiments
+3.1. Benchmark
+We evaluate our framework on knowledge-intensive multi-
+modal reasoning tasks, which require deep understanding
+of visual content and advanced reasoning abilities to solve.
+MMMU [36] is a comprehensive benchmark for multi-
+modal reasoning covering college-level questions across
+multiple disciplines. The questions require advanced sub-
+ject knowledge and complex reasoning to solve.
+MMMU Pro [37] is an expanded and refined version of
+MMMU, featuring augmented candidate options and filter-
+ing out questions that can be answered without visual input.
+By eliminating questions that can be answered with textual
+
+Model
+MMMU
+MMMU Pro
+MathVista
+MathVision
+Single-LLM Baselines
+Qwen2.5-VL-7B (text-only)
+40.7
+22.8
+30.6
+25.4
+GPT-4
+48.9
+29.4
+30.9
+28.8
+DeepSeek-R1
+54.8
+36.8
+37.1
+42.6
+Single-VLM Baselines
+Qwen2.5-VL-7B
+54.0
+39.8
+65.1
+27.4
+GPT-4o
+68.3
+56.7
+65.6
+36.4
+Our Methods (using Qwen2.5-VL-7B as eyes)
+GPT-4 + BEMYEYES
+64.6
+49.9
+68.3
+32.8
+DeepSeek-R1 + BEMYEYES
+67.4
+57.2
+72.7
+48.5
+Table 1. Performance of BEMYEYES when using Qwen2.5-VL-7B as the perceiver agent on four multimodal reasoning benchmarks. The
+framework consistently improves multimodal reasoning, with DeepSeek-R1 outperforming large-scale multimodal models such as GPT-
+4o, demonstrating the effectiveness of BEMYEYES in extending LLM reasoning capabilities to new modalities.
+Model
+MMMU MMMU MathVista MathVision
+Pro
+Baselines
+InternVL3-8B (text-only)
+47.1
+25.7
+35.0
+26.6
+InternVL3-8B
+60.1
+44.5
+64.7
+29.2
+GPT-4o
+68.3
+56.7
+65.6
+36.4
+Our Methods (using InternVL3-8B as eyes)
+GPT-4 +
+62.7
+49.5
+70.7
+32.9
+DeepSeek-R1 +
+69.7
+58.5
+73.1
+50.6
+Table 2. Performance of BEMYEYES when using InternVL3-8B
+as the perceiver agent across four multimodal reasoning bench-
+marks. BEMYEYES consistently improves multimodal reasoning
+across all tasks, demonstrating that BEMYEYES is robust across
+different model pairings.
+shortcuts, this benchmark emphasizes model’s ability to in-
+tegrate and reason over both visual and textual information.
+MathVista [22] evaluates mathematical reasoning in visual
+contexts, requiring models to accurately interpret diagrams,
+charts, and other visual data while applying rigorous math-
+ematical problem-solving skills.
+MathVision [28] presents a highly challenging set of mul-
+timodal math problems sourced from real-world math com-
+petitions, pushing models to combine precise visual under-
+standing with advanced mathematical reasoning.
+3.2. Setup
+Models
+For the perceiver agent, we experiment with
+two VLM families: Qwen2.5-VL-7B [2] and InternVL3-
+8B [40]. For the reasoner agent, we use GPT-4 (text-only
+mode of GPT-4o) [24] and DeepSeek-R1 [9].
+Although
+GPT-4o is a multimodal model with native visual percep-
+tion, for the purpose of reasoner agent in BEMYEYES we
+use it as a text-only LLM, providing it only textual inputs
+during inference.
+In contrast, DeepSeek-R1 is a strictly
+text-only model with no visual perception capabilities, mak-
+ing it an ideal candidate for modality extension using our
+proposed multi-agent approach. This setup allows us to as-
+sess how effectively our framework can unlock multimodal
+reasoning abilities in LLMs that were originally unimodal.
+Baselines
+We compare the performance of BEMYEYES
+against two groups of baselines.
+Single-LLM baselines
+are restricted to text-only inputs, regardless of whether the
+underlying model natively supports visual inputs or not.
+Specifically, all visual content is removed, and only the tex-
+tual question is provided to the model. Single-VLM base-
+lines are out-of-the-box VLMs that process both textual and
+visual inputs directly. which represents the standard multi-
+modal approach.
+Implementation Details
+We train the perceiver agent
+with a learning rate of 5e−6 over 3 epochs. During eval-
+uation, the temperature is set to 0 to ensure deterministic
+outputs. The maximum output length per turn is limited to
+2048 tokens, and BEMYEYES is allowed up to 5 interaction
+turns. For thinking models like DeepSeek-R1, the thinking
+trace is capped at 4096 tokens using the force-exiting mech-
+anism described in Muennighoff et al. [23]. All models
+are evaluated under the zero-shot Chain-of-Thought (CoT)
+setting [14], and we report accuracy as the primary perfor-
+mance metric across all benchmarks.
+3.3. Main Results
+BEMYEYES unlocks LLMs’ capabilities for multimodal
+reasoning.
+As shown in Table 1, single-LLM baselines
+
+Model
+MMMU
+MMMU Pro
+Med
+Med
+Baselines
+GPT-4
+55.3
+32.2
+DeepSeek-R1
+56.0
+36.0
+Lingshu-7B
+65.3
+35.0
+GPT-4o
+78.0
+59.1
+Our Methods (using Lingshu-7B as eyes)
+GPT-4 + BEMYEYES
+74.0
+50.4
+DeepSeek-R1 + BEMYEYES
+76.7
+58.7
+Table 3. Performance of BEMYEYES on multimodal medical rea-
+soning tasks when using Lingshu-7B as the perceiver agent.
+Model
+MMMU MMMU MathVista MathVision
+Pro
+Qwen2.5-VL-7B
+54.0
+39.8
+65.1
+27.4
+Qwen2.5-VL-7B-SFT
+54.6
+40.6
+67.7
+26.8
+BEMYEYES (no SFT)
+62.7
+49.1
+65.1
+30.6
+BEMYEYES (single turn)
+64.0
+48.3
+67.2
+31.0
+BEMYEYES
+64.6
+49.9
+68.3
+32.8
+Table 4. Ablation results for BEMYEYES. Performance drops are
+observed when removing supervised fine-tuning (SFT) or restrict-
+ing the framework to single-turn conversations, demonstrating that
+both fine-tuning and multi-turn communication are crucial for ef-
+fective collaboration and robust multimodal reasoning.
+generally perform poorly on visual reasoning tasks, high-
+lighting the critical role of visual information. Some ques-
+tions can still be answered correctly using textual cues
+alone, but for most knowledge-intensive tasks, access to vi-
+sual inputs is essential. VLMs such as Qwen2.5-VL and
+GPT-4o show substantial performance gains when images
+are available. In contrast, text-only LLMs like DeepSeek-
+R1 are at a significant disadvantage, despite their supe-
+rior textual reasoning capabilities compared to other single-
+LLM baselines. BEMYEYES unlocks LLMs’ multimodal
+reasoning abilities by collaborating with a small perceiver
+agent.
+When paired with a Qwen2.5-VL-7B perceiver,
+GPT-4 recovers much of the performance of the fully mul-
+timodal GPT-4o. Furthermore, BEMYEYES significatnly
+boosts the performance of DeepSeek-R1 on multimodal
+tasks, even outperforming GPT-4o by 0.5%, 7.1%, and
+12.1% on MMMU Pro, MathVista, and MathVision, respec-
+tively. These results demonstrate that BEMYEYES effec-
+tively extends the reasoning and knowledge capabilities of
+text-only LLMs to multimodal tasks.
+BEMYEYES brings consistent improvements across
+model families.
+To evaluate the robustness of our frame-
+work, we train and test BEMYEYES using the same
+dataset and benchmarks but replace the perceiver agent with
+InternVL3-8B. As reported in Table 2, all previous observa-
+tions are consistent: BEMYEYES continues to provide sub-
+stantial performance gains for LLMs across all benchmarks.
+In particular, using InternVL3-8B as “eyes”, DeepSeek-R1
+consistently outperforms GPT-4o on all multimodal reason-
+ing tasks, demonstrating that our approach generalizes ef-
+fectively across different model families and is not limited
+to a specific model pairing.
+BEMYEYES generalizes well to specialized domains.
+To evaluate the generalizability of BEMYEYES to domain-
+specific applications, we test it on MMMU Med [36] and
+MMMU Pro Med [37]. These benchmarks require both pre-
+cise perception of medical imagery and advanced domain-
+specific knowledge reasoning. For the perceiver agent, we
+use Lingshu-7B [33], a variant of Qwen2.5-VL-7B special-
+izing in multimodal medical reasoning. We fine-tune this
+perceiver using the same synthetic data used for Qwen2.5-
+VL, without incorporating any medical-specific training
+data. As shown in Table 3, BEMYEYES maintains strong
+performance on par with GPT-4o on challenging medical
+reasoning tasks, demonstrating its ability to generalize ef-
+fectively to specialized domains. These results suggest that
+BEMYEYES provides a scalable and efficient alternative for
+extending LLMs to new domains without requiring large-
+scale domain-specific multimodal training.
+3.4. Ablations
+Supervised Fine-tuning promotes effective collabora-
+tion.
+To evaluate the impact of supervised fine-tuning
+(SFT) on the performance of BEMYEYES, we conduct
+an ablation study comparing (1) a non-SFT version of
+BEMYEYES, where the perceiver agent is used without any
+additional training, and (2) the fine-tuned perceiver agent
+evaluated as a standalone VLM. As shown in Table 4, ap-
+plying supervised fine-tuning consistently improves the per-
+formance of BEMYEYES, highlighting the crucial role of
+learning effective collaboration. Interestingly, this perfor-
+mance gain cannot be attributed merely to improvements
+in the perceiver’s individual reasoning ability. When eval-
+uated independently as a VLM, the perceiver shows mini-
+mal or no improvement across most benchmarks after fine-
+tuning. This suggests that supervised fine-tuning primar-
+ily enhances the perceiver’s ability to collaborate with the
+reasoner, refining its perception and communication, rather
+than simply improving its standalone reasoning capacity.
+Multi-turn conversation benefits collaborative problem
+solving.
+We further conduct an ablation study to examine
+the effect of multi-turn interaction between agents. Specif-
+ically, we evaluate BEMYEYES in a single-turn setting,
+where the system prompts and the orchestration process are
+slightly modified to restrict the conversation to one turn. In
+
+GPT-4o
+GPT-4 + 
+Qwen2.5-VL-7B
+0
+500
+980
+864
+688
+0
+100
+200
+300
+400
+500
+Intersection size
+511
+467
+230
+197
+104
+86
+72
+63
+(upper bound)
+Figure 3. Error breakdown on MMMU Pro. We group all ex-
+amples based on answer correctness under the single-perceiver,
+single-reasoner-with-vision, and BEMYEYES settings, respec-
+tively. The groups are represented by a three-light code signaling
+correct answers in each setting, and we order the groups based on
+their size. The bottom-left bar chart shows the total number of cor-
+rectly answered examples for each setting.
+this setting, the perceiver agent is allowed to respond only
+once, communicating all relevant visual information to the
+reasoner before the latter produces its final answer. This
+configuration removes the possibility of clarification, feed-
+back, or iterative refinement during reasoning. While most
+questions can still be answered correctly within a single turn
+thanks to the strong reasoning capabilities of the LLM rea-
+soner, a performance gap remains between single-turn and
+multi-turn BEMYEYES. This suggests that iterative com-
+munication plays an important role in improving the overall
+reasoning process.
+4. Discussion
+4.1. Error Breakdown
+To better understand the individual contributions of each
+agent in BEMYEYES, we conduct an error breakdown anal-
+ysis using examples from MMMU Pro. Each example is
+labeled based on the correctness of answers under three
+settings: (1) single-perceiver (Qwen2.5-VL-7B), (2) single-
+reasoner-with-vision (GPT-4o), and (3) BEMYEYES. This
+comparison provides a clearer view of how the perceiver
+and reasoner perform both individually and collaboratively,
+offering insights into the interplay between perception and
+reasoning in the multi-agent framework. As illustrated in
+Figure 3, we group all examples based on answer correct-
+ness across the three settings and order the groups based on
+their size.
+From this breakdown, we observe that more than half
+of the examples fall into the first two groups, representing
+cases that are either trivially easy or universally challenging,
+where all or none of the settings yield correct answers. The
+third-largest group includes cases where the perceiver alone
+would fail, but the reasoner successfully captures visual in-
+formation conveyed by the perceiver and recovers the cor-
+rect answer, demonstrating successful collaboration. Con-
+versely, the fourth-largest group captures instances where
+the fully multimodal reasoner would answer correctly in
+isolation, but is misled when reasoning jointly with the per-
+ceiver, often due to perception or communication errors. In-
+terestingly, a small portion of examples show disagreement
+between single-model and multi-agent predictions, where
+BEMYEYES ’s answer contradicts the consensus of its in-
+dividual models. These cases suggest behavioral inconsis-
+tencies introduced by multi-agent dynamics, both benefi-
+cial and detrimental, consistent with prior observations that
+multi-agent collaboration can improve reasoning or intro-
+duce new sources of error [5, 31].
+4.2. Case Study
+In Table 5, we showcase the responses generated by base-
+lines and BEMYEYES on a typical example from MMMU
+Pro. Qwen2.5-VL-7B fails to correctly identify the species
+shown in the image due to limited domain knowledge and
+reasoning capability, while GPT-4o can answer the ques-
+tion correctly. When GPT-4 is used as the reasoner agent
+within BEMYEYES, it can still infer the correct answer by
+leveraging the perceiver’s detailed visual descriptions. This
+demonstrates how effective communication and role spe-
+cialization in BEMYEYES enable the reasoner to compen-
+sate for its lack of direct visual perception through collabo-
+ration, achieving performance comparable to a fully multi-
+modal model.
+4.3. Limitations and Future Work
+While BEMYEYES demonstrates strong performance in ef-
+ficient and modular modality extension for LLMs, several
+open questions remain for future exploration. First, our ex-
+periments focus exclusively on vision as the target modality,
+although the framework is general and can naturally be ex-
+tended to other modalities such as audio and video. Second,
+a comparison against an upper bound established by a hypo-
+thetical, fully-trained multimodal DeepSeek-R1 would pro-
+vide deeper insights into the effectiveness of our approach;
+however, developing such large-scale models remains be-
+yond our current scope. Finally, given the recent success
+of reinforcement learning (RL) in improving multimodal
+reasoning [18], incorporating an RL-based training pipeline
+may further improve the effectiveness of BEMYEYES, an
+exciting direction we leave for future work.
+
+Question
+Model
+Response
+Which angiosperm species is this?
+Qwen2.5-VL-7B
+To determine the correct answer, let’s analyze the characteristics of the plant shown in the image: 1. The plant
+has long, narrow leaves, which are typical of grasses ...
+Given these characteristics, the plant appears to be a
+type of grass. Now, let’s match this with the given options:
+A. Poaceae - This is the family of grasses ...
+G.
+Cyperaceae - This is the family of sedge plants ... Based on the characteristics of the plant, the correct family is
+Poaceae. Answer: A
+GPT-4o
+To identify the angiosperm species in the illustration, let’s analyze the characteristics of the plant depicted: 1.
+**Leaf Structure** ... 3. **Growth Habit**: The plant appears to have a tufted growth habit with a basal
+cluster of leaves, which is characteristic of sedges (Cyperaceae) rather than true grasses (Poaceae). ... Based on
+these observations, the plant in the illustration is most likely from the Cyperaceae family, which includes sedges.
+Answer: G
+BEMYEYES
+Perceiver: The question is ... Description of the image: The image is a botanical illustration of a plant species. It
+shows several parts of the plant, including leaves, flowers, and roots. The leaves are long and narrow, resembling
+grass blades ... The overall appearance suggests a species that is likely aquatic or semi-aquatic, given the structure
+of the leaves and flowers. Based on this description, could you help identify the angiosperm species?
+Reasoner: Thank you for the detailed description. Let’s analyze the information to identify the angiosperm
+species: ... Given these characteristics, let’s consider the options: ... Based on the description, the plant seems to
+fit well with either Poaceae or Cyperaceae due to the leaf shape and flower structure.
+However, the aquatic or
+semi-aquatic hint leans more towards Cyperaceae, as sedges are often found in such environments. Therefore, the
+most likely answer is **G. Cyperaceae**.
+Table 5. Responses generated by baselines and BEMYEYES on an example from MMMU Pro. Qwen2.5-VL-7B by itself fails to reach
+the correct answer due to reasoning errors, while text-only GPT-4 reasoner in BEMYEYES is able to recover the correct reasoning traces
+based on the visual clues provided by the perceiver agent.
+5. Related Works
+Vision Language Models
+Large vision language models
+(VLMs) have received considerable attention for their abil-
+ity to process and reason across visual and textual modal-
+ities, enabling a wide range of applications.
+Recent ap-
+proaches [1, 15, 24] have focused on aligning visual and
+language representations through instruction fine-tuning.
+For example, BLIP-2 [16] and LLaVA [21] equip base
+LLMs with image encoders, while more recent works ex-
+tend this paradigm to video inputs [38], further enrich-
+ing the perceptual context available to MLLMs. Despite
+these advances, existing VLMs face notable limitations.
+They are often prone to knowledge conflicts [41], where
+visual reasoning may contradict prior textual knowledge,
+and exhibit language biases [26, 39], which can degrade
+reasoning performance. To mitigate language biases, prior
+works have proposed to disentangle visual perception and
+language reasoning [12, 18, 32], adopting a caption-then-
+reason paradigm for robust multimodal reasoning with a
+single VLM. However, none of these works explore the col-
+laboration of VLMs and LLMs for modality extension in a
+multi-agent setting.
+Modality Extension
+Modality extension is a key re-
+search area aimed at transforming LLMs, primarily de-
+signed for textual processing, into multimodal language
+models (MLLMs) capable of integrating and reasoning
+over additional modalities, such as vision [27, 36, 37] and
+video [8, 17, 29]. The dominant approach involves modality
+fine-tuning of a pre-trained LLM [2, 16, 20, 21, 40], lever-
+aging paired language–modality data along with modality-
+specific instruction datasets. This process serves two main
+objectives:
+(1) aligning the representations of the new
+modality with the pre-existing language space, and (2) en-
+abling the MLLM to follow modality-specific instructions
+effectively [21]. Despite its popularity, modality fine-tuning
+faces several notable limitations.
+MLLMs often demon-
+strate reduced reasoning capabilities compared to their text-
+only counterparts and can be more vulnerable to adver-
+sarial or malicious inputs [42]. Furthermore, the success
+of this approach critically depends on the availability of
+large-scale, high-quality modality-aligned datasets, which
+are costly and labor-intensive to construct.
+These chal-
+lenges motivate alternative approaches for extending LLMs
+to new modalities without full-scale retraining.
+Multi-Agent Collaboration
+Multi-agent collaboration
+enables multiple agents to work together to solve complex
+tasks that are difficult for a single agent to handle [7, 10, 11].
+Previous works have demonstrated the benefit of collabo-
+rative reasoning in a unimodal, multi-agent setting where
+discussion between agents offers diverse perspectives and
+more robust solutions [3, 4, 6, 13, 19]. Inspired by these
+successes, we believe multi-agent collaboration provides
+a alternative framework for overcoming the limitations of
+unimodal LLMs and extending them to new modalities by
+collaborating with specialized perceiver agents, while pre-
+serving the reasoning capabilities of LLMs and avoiding the
+cost of training large-scale MLLMs.
+
+6. Conclusion
+In this work, we introduced BEMYEYES, a modular
+multi-agent framework that extends large language models
+(LLMs) to new modalities through collaboration with small,
+efficient vision-language models (VLMs).
+Comprehen-
+sive experiments on multiple multimodal reasoning bench-
+marks demonstrate that BEMYEYES substantially improves
+the multimodal reasoning performance of text-only LLMs,
+achieving results that rival or surpass large-scale VLMs
+such as GPT-4o. These findings highlight the potential of
+multi-agent collaboration as a scalable and flexible alterna-
+tive to large-scale multimodal models.
+References
+[1] Jean-Baptiste Alayrac, Jeff Donahue, Pauline Luc, Antoine
+Miech, Iain Barr, Yana Hasson, Karel Lenc, Arthur Men-
+sch, Katherine Millican, Malcolm Reynolds, et al. Flamingo:
+a visual language model for few-shot learning.
+Advances
+in neural information processing systems, 35:23716–23736,
+2022. 8
+[2] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin
+Ge, Sibo Song, Kai Dang, Peng Wang, Shijie Wang, Jun
+Tang, et al.
+Qwen2.5-vl technical report.
+arXiv preprint
+arXiv:2502.13923, 2025. 1, 5, 8
+[3] Chi-Min Chan, Weize Chen, Yusheng Su, Jianxuan Yu, Wei
+Xue, Shanghang Zhang, Jie Fu, and Zhiyuan Liu. Chateval:
+Towards better LLM-based evaluators through multi-agent
+debate. In The Twelfth International Conference on Learning
+Representations, 2024. 8
+[4] Justin Chen, Swarnadeep Saha, and Mohit Bansal. Recon-
+cile: Round-table conference improves reasoning via con-
+sensus among diverse llms. In Proceedings of the 62nd An-
+nual Meeting of the Association for Computational Linguis-
+tics (Volume 1: Long Papers), pages 7066–7085, 2024. 8
+[5] Yilun Du, Shuang Li, Antonio Torralba, Joshua B Tenen-
+baum, and Igor Mordatch. Improving factuality and reason-
+ing in language models through multiagent debate. In Forty-
+first International Conference on Machine Learning, 2023.
+2, 7
+[6] Jacob Eisenstein, Reza Aghajani, Adam Fisch, Dheeru
+Dua, Fantine Huot, Mirella Lapata, Vicky Zayats, and
+Jonathan Berant.
+Don’t lie to your friends:
+Learning
+what you know from collaborative self-play. arXiv preprint
+arXiv:2503.14481, 2025. 8
+[7] Adam Fourney, Gagan Bansal, Hussein Mozannar, Cheng
+Tan, Eduardo Salinas, Friederike Niedtner, Grace Proeb-
+sting, Griffin Bassman, Jack Gerrits, Jacob Alber, et al.
+Magentic-one: A generalist multi-agent system for solving
+complex tasks. arXiv preprint arXiv:2411.04468, 2024. 8
+[8] Chaoyou Fu, Yuhan Dai, Yongdong Luo, Lei Li, Shuhuai
+Ren, Renrui Zhang, Zihan Wang, Chenyu Zhou, Yunhang
+Shen, Mengdan Zhang, et al.
+Video-mme: The first-ever
+comprehensive evaluation benchmark of multi-modal llms in
+video analysis. In Proceedings of the Computer Vision and
+Pattern Recognition Conference, pages 24108–24118, 2025.
+1, 8
+[9] Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song,
+Ruoyu Zhang, Runxin Xu, Qihao Zhu, Shirong Ma, Peiyi
+Wang, Xiao Bi, et al. Deepseek-r1: Incentivizing reasoning
+capability in llms via reinforcement learning. arXiv preprint
+arXiv:2501.12948, 2025. 1, 5
+[10] Taicheng Guo, Xiuying Chen, Yaqi Wang, Ruidi Chang,
+Shichao Pei, Nitesh V Chawla, Olaf Wiest, and Xian-
+gliang Zhang.
+Large language model based multi-agents:
+A survey of progress and challenges.
+arXiv preprint
+arXiv:2402.01680, 2024. 8
+[11] Md Ashraful Islam, Mohammed Eunus Ali, and Md Rizwan
+Parvez. Mapcoder: Multi-agent code generation for com-
+petitive problem solving. In Proceedings of the 62nd An-
+nual Meeting of the Association for Computational Linguis-
+tics (Volume 1: Long Papers), pages 4912–4944, 2024. 2,
+8
+[12] Mengzhao Jia, Zhihan Zhang, Wenhao Yu, Fangkai Jiao, and
+Meng Jiang. Describe-then-reason: Improving multimodal
+mathematical reasoning through visual comprehension train-
+ing. arXiv preprint arXiv:2404.14604, 2024. 8
+[13] Akbir Khan, John Hughes, Dan Valentine, Laura Ruis,
+Kshitij Sachan, Ansh Radhakrishnan, Edward Grefenstette,
+Samuel R Bowman, Tim Rockt¨aschel, and Ethan Perez. De-
+bating with more persuasive llms leads to more truthful an-
+swers. In International Conference on Machine Learning,
+pages 23662–23733. PMLR, 2024. 8
+[14] Takeshi Kojima, Shixiang Shane Gu, Machel Reid, Yutaka
+Matsuo, and Yusuke Iwasawa. Large language models are
+zero-shot reasoners.
+Advances in neural information pro-
+cessing systems, 35:22199–22213, 2022. 5
+[15] Junnan Li, Dongxu Li, Caiming Xiong, and Steven Hoi.
+Blip: Bootstrapping language-image pre-training for unified
+vision-language understanding and generation. In Interna-
+tional conference on machine learning, pages 12888–12900.
+PMLR, 2022. 8
+[16] Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi.
+Blip-2:
+Bootstrapping language-image pre-training with
+frozen image encoders and large language models. In In-
+ternational conference on machine learning, pages 19730–
+19742. PMLR, 2023. 8
+[17] Kunchang Li, Yali Wang, Yinan He, Yizhuo Li, Yi Wang,
+Yi Liu, Zun Wang, Jilan Xu, Guo Chen, Ping Luo, et al.
+Mvbench: A comprehensive multi-modal video understand-
+ing benchmark. In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages 22195–
+22206, 2024. 1, 8
+[18] Zongxia Li, Wenhao Yu, Chengsong Huang, Rui Liu,
+Zhenwen Liang, Fuxiao Liu, Jingxi Che, Dian Yu, Jor-
+dan Boyd-Graber, Haitao Mi, et al. Self-rewarding vision-
+language model via reasoning decomposition. arXiv preprint
+arXiv:2508.19652, 2025. 7, 8
+[19] Tian Liang, Zhiwei He, Wenxiang Jiao, Xing Wang, Yan
+Wang, Rui Wang, Yujiu Yang, Shuming Shi, and Zhaopeng
+Tu. Encouraging divergent thinking in large language mod-
+els through multi-agent debate. In Proceedings of the 2024
+conference on empirical methods in natural language pro-
+cessing, pages 17889–17904, 2024. 8
+
+[20] Ji Lin, Hongxu Yin, Wei Ping, Pavlo Molchanov, Moham-
+mad Shoeybi, and Song Han. Vila: On pre-training for vi-
+sual language models. In Proceedings of the IEEE/CVF con-
+ference on computer vision and pattern recognition, pages
+26689–26699, 2024. 1, 8
+[21] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee.
+Visual instruction tuning. Advances in neural information
+processing systems, 36:34892–34916, 2023. 1, 8
+[22] Pan Lu, Hritik Bansal, Tony Xia, Jiacheng Liu, Chunyuan Li,
+Hannaneh Hajishirzi, Hao Cheng, Kai-Wei Chang, Michel
+Galley, and Jianfeng Gao. Mathvista: Evaluating mathemat-
+ical reasoning of foundation models in visual contexts. arXiv
+preprint arXiv:2310.02255, 2023. 5
+[23] Niklas Muennighoff, Zitong Yang, Weijia Shi, Xiang Lisa Li,
+Li Fei-Fei, Hannaneh Hajishirzi, Luke Zettlemoyer, Percy
+Liang, Emmanuel Cand`es, and Tatsunori B Hashimoto. s1:
+Simple test-time scaling. In Proceedings of the 2025 Confer-
+ence on Empirical Methods in Natural Language Processing,
+pages 20286–20332, 2025. 5
+[24] OpenAI. Gpt-4v(ision) system card, 2024. 1, 5, 8
+[25] Timothy Ossowski, Danyal Maqbool, Jixuan Chen, Zefan
+Cai, Tyler J. Bradshaw, and Junjie Hu. COMMA: A commu-
+nicative multimodal multi-agent benchmark. Transactions
+on Machine Learning Research, 2025. 4
+[26] Fei Wang, Wenxuan Zhou, James Y Huang, Nan Xu, Sheng
+Zhang, Hoifung Poon, and Muhao Chen. mdpo: Conditional
+preference optimization for multimodal large language mod-
+els. In Proceedings of the 2024 Conference on Empirical
+Methods in Natural Language Processing, pages 8078–8088,
+2024. 8
+[27] Fei Wang, Xingyu Fu, James Y. Huang, Zekun Li, Qin Liu,
+Xiaogeng Liu, Mingyu Derek Ma, Nan Xu, Wenxuan Zhou,
+Kai Zhang, Tianyi Lorena Yan, Wenjie Jacky Mo, Hsiang-
+Hui Liu, Pan Lu, Chunyuan Li, Chaowei Xiao, Kai-Wei
+Chang, Dan Roth, Sheng Zhang, Hoifung Poon, and Muhao
+Chen. Muirbench: A comprehensive benchmark for robust
+multi-image understanding. In The Thirteenth International
+Conference on Learning Representations, 2025. 1, 8
+[28] Ke Wang, Junting Pan, Weikang Shi, Zimu Lu, Houxing
+Ren, Aojun Zhou, Mingjie Zhan, and Hongsheng Li. Mea-
+suring multimodal mathematical reasoning with math-vision
+dataset.
+Advances in Neural Information Processing Sys-
+tems, 37:95095–95169, 2024. 5
+[29] Haoning Wu, Dongxu Li, Bei Chen, and Junnan Li.
+Longvideobench: A benchmark for long-context interleaved
+video-language understanding. Advances in Neural Informa-
+tion Processing Systems, 37:28828–28857, 2024. 1, 8
+[30] Qingyun Wu, Gagan Bansal, Jieyu Zhang, Yiran Wu, Beibin
+Li, Erkang Zhu, Li Jiang, Xiaoyun Zhang, Shaokun Zhang,
+Jiale Liu, Ahmed Hassan Awadallah, Ryen W White, Doug
+Burger, and Chi Wang. Autogen: Enabling next-gen LLM
+applications via multi-agent conversations. In First Confer-
+ence on Language Modeling, 2024. 2
+[31] Andrea Wynn, Harsh Satija, and Gillian Hadfield. Talk isn’t
+always cheap: Understanding failure modes in multi-agent
+debate. arXiv preprint arXiv:2509.05396, 2025. 7
+[32] Jiaer Xia, Yuhang Zang, Peng Gao, Yixuan Li, and
+Kaiyang Zhou.
+Visionary-r1: Mitigating shortcuts in vi-
+sual reasoning with reinforcement learning. arXiv preprint
+arXiv:2505.14677, 2025. 8
+[33] Weiwen Xu, Hou Pong Chan, Long Li, Mahani Aljunied,
+Ruifeng Yuan, Jianyu Wang, Chenghao Xiao, Guizhen Chen,
+Chaoqun Liu, Zhaodonghui Li, et al. Lingshu: A general-
+ist foundation model for unified multimodal medical under-
+standing and reasoning. arXiv preprint arXiv:2506.07044,
+2025. 6
+[34] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang,
+Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao, Chengen
+Huang, Chenxu Lv, et al. Qwen3 technical report. arXiv
+preprint arXiv:2505.09388, 2025. 1
+[35] Yue Yang, Ajay Patel, Matt Deitke, Tanmay Gupta, Luca
+Weihs, Andrew Head, Mark Yatskar, Chris Callison-Burch,
+Ranjay Krishna, Aniruddha Kembhavi, et al. Scaling text-
+rich image understanding via code-guided synthetic multi-
+modal data generation.
+arXiv preprint arXiv:2502.14846,
+2025. 4
+[36] Xiang Yue, Yuansheng Ni, Kai Zhang, Tianyu Zheng, Ruoqi
+Liu, Ge Zhang, Samuel Stevens, Dongfu Jiang, Weiming
+Ren, Yuxuan Sun, et al. Mmmu: A massive multi-discipline
+multimodal understanding and reasoning benchmark for ex-
+pert agi.
+In Proceedings of the IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, pages 9556–
+9567, 2024. 1, 4, 6, 8
+[37] Xiang Yue, Tianyu Zheng, Yuansheng Ni, Yubo Wang,
+Kai Zhang, Shengbang Tong, Yuxuan Sun, Botao Yu, Ge
+Zhang, Huan Sun, et al. Mmmu-pro: A more robust multi-
+discipline multimodal understanding benchmark.
+arXiv
+preprint arXiv:2409.02813, 2024. 1, 4, 6, 8
+[38] Hang Zhang, Xin Li, and Lidong Bing. Video-llama: An
+instruction-tuned audio-visual language model for video un-
+derstanding. In Proceedings of the 2023 Conference on Em-
+pirical Methods in Natural Language Processing: System
+Demonstrations, pages 543–553, 2023. 8
+[39] Yi-Fan Zhang, Weichen Yu, Qingsong Wen, Xue Wang,
+Zhang Zhang, Liang Wang, Rong Jin, and Tieniu Tan. De-
+biasing multimodal large language models. arXiv preprint
+arXiv:2403.05262, 2024. 8
+[40] Jinguo Zhu, Weiyun Wang, Zhe Chen, Zhaoyang Liu, Shen-
+glong Ye, Lixin Gu, Hao Tian, Yuchen Duan, Weijie Su,
+Jie Shao, et al. Internvl3: Exploring advanced training and
+test-time recipes for open-source multimodal models. arXiv
+preprint arXiv:2504.10479, 2025. 1, 5, 8
+[41] Tinghui Zhu, Qin Liu, Fei Wang, Zhengzhong Tu, and
+Muhao Chen.
+Unraveling cross-modality knowledge con-
+flicts in large vision-language models.
+arXiv preprint
+arXiv:2410.03659, 2024. 8
+[42] Tinghui Zhu, Kai Zhang, Muhao Chen, and Yu Su. Is extend-
+ing modality the right path towards omni-modality? arXiv
+preprint arXiv:2506.01872, 2025. 8
+
+A. Prompt
+Prompt for Single-Model Baselines
+Answer the preceding multiple choice question.
+The last line of your
+response should be of the following format:
+‘‘Answer:
+$LETTER’’ (without
+quotes) where LETTER is one of the options.
+Think step by step before
+answering.
+System Prompt for the Perceiver Agent
+Your task is to answer a given multiple choice question about an image with
+the help of the expert.
+The expert does not have access to the question,
+the options, or the image, so you should state the exact question and the
+options, and provide a detailed description of the image to the expert.
+System Prompt for the Reasoner Agent
+Your task is to help the client answer a multiple choice question about an
+image.
+Only the client have access to the question, the options, and the
+image, so you should try to gather from the client as much information as
+needed to answer the question.
+Make sure you fully understand the question
+and verify details about the image that may be relevant to each option before
+answering the question.
+Prompt for Question and Image Descriptions
+Hi, I’m the expert here.
+I heard you have a multiple choice question about
+an image and I can help you with that.
+Could you state the exact question,
+the options, and provide a detailed description of the image?
+Prompt for Answer Extraction
+Now it’s time to write the final answer.
+Your response should be of the
+following format:
+‘‘Answer:
+$LETTER’’ (without quotes) where LETTER is one
+of the options.

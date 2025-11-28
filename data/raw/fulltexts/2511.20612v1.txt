@@ -1,0 +1,916 @@
+Proceedings of Machine Learning Research vol vvv:1–21, 2025
+Sparse-to-Field Reconstruction via
+Stochastic Neural Dynamic Mode Decomposition
+Yujin Kim
+YK826@CORNELL.EDU
+Sarah Dean
+SDEAN@CORNELL.EDU
+Department of Computer Science, Cornell University, Ithaca, NY, USA.
+Abstract
+Many consequential real-world systems, like wind fields and ocean currents, are dynamic and hard to model.
+Learning their governing dynamics remains a central challenge in scientific machine learning. Dynamic
+Mode Decomposition (DMD) provides a simple, data-driven approximation, but practical use is limited by
+sparse/noisy observations from continuous fields, reliance on linear approximations, and the lack of prin-
+cipled uncertainty quantification. To address these issues, we introduce Stochastic NODE–DMD, a proba-
+bilistic extension of DMD that models continuous-time, nonlinear dynamics while remaining interpretable.
+Our approach enables continuous spatiotemporal reconstruction at arbitrary coordinates and quantifies pre-
+dictive uncertainty. Across four benchmarks, a synthetic setting and three physics-based flows, it surpasses a
+baseline in reconstruction accuracy when trained from only 10% observation density. It further recovers the
+dynamical structure by aligning learned modes and continuous-time eigenvalues with ground truth. Finally,
+on datasets with multiple realizations, our method learns a calibrated distribution over latent dynamics that
+preserves ensemble variability rather than averaging across regimes. Our code is available here.
+Keywords: system identification, dynamic mode decomposition, neural ODEs, uncertainty quantification,
+stochastic dynamics learning, sparse observations
+1. Introduction
+Data-driven identification of high-dimensional systems—inferring dynamics from sequential data—is a core
+challenge in scientific machine learning (Brunton et al., 2016; Raissi et al., 2019; Lusch et al., 2018). Ap-
+plications span large-scale phenomena such as weather and climate (Shi et al., 2015; Rasp et al., 2020;
+Kurth et al., 2023) and finer-scale neuroscience problems like brain imaging reconstruction (Lee et al.,
+2021; Mechelli et al., 2005; Misra and Pessoa, 2025). Beyond scientific value, system identification un-
+derpins planning and control in open environments: wind-field models aid balloon navigation and UAV
+control (Bellemare et al., 2020; Sydney et al., 2013), ocean-current models guide marine robots (Vasilije-
+vi´c et al., 2017; Wiggert et al., 2022), and traffic-flow models inform autonomous driving (Campbell et al.,
+2010). In these applications, probabilistic modeling improves robustness and long-horizon stability.
+Existing approaches fall into three groups: physics-based, operator-theoretic (Koopman-based), and
+black-box. Physics-based models (Brunton et al., 2016; Raissi et al., 2019) leverage governing equations
+and are interpretable, but can be noise-sensitive, expensive at scale, and rarely probabilistic. Operator meth-
+ods grounded in spectral/Koopman theory (Mezi´c, 2005)—including DMD (Rowley et al., 2009; Schmid,
+2010a; Tu, 2013; Lusch et al., 2018) and neural operators (Lu et al., 2019; Li et al., 2020b; Kovachki et al.,
+2023)—yield interpretable linear surrogates (Kutz et al., 2016a) but are constrained by linear evolution and
+© 2025 Y. Kim & S. Dean.
+arXiv:2511.20612v1  [cs.LG]  25 Nov 2025
+
+KIM DEAN
+grid-based operations, limiting performance with sparse observations and strong nonlinearities. Hybrid ef-
+forts that pair neural implicit representations (Mildenhall et al., 2021; Niemeyer et al., 2022; Müller et al.,
+2022) with optimized DMD (Askham and Kutz, 2018; Sashidhar and Kutz, 2022) (e.g., (SaraerToosi et al.,
+2025)) expand expressivity yet remain fundamentally linear and deterministic. Black-box sequential models
+(Chen et al., 2018; Pathak et al., 2018; Kidger et al., 2020) scale well and are resolution-agnostic (Brunton
+et al., 2020), but often lack uncertainty quantification, struggle to generalize, destabilize over long hori-
+zons, and may violate physics (Chen et al., 2018; Kidger et al., 2020; Brunton et al., 2020). Probabilistic
+variants (Krishnan et al., 2015; Doerr et al., 2018; Alvarez et al., 2013) add uncertainty quantification but
+demand more data and computation and reduce interpretability.
+In many dynamical systems, stochasticity reflects both imperfect observation and unmodeled dynamics
+(e.g., measurement noise, environmental perturbations). Moreover, practical constraints—high experimental
+costs, physical inaccessibility, and sensor limitations—lead to sparse observations. Consequently, a method
+that is (i) physically interpretable, provides (ii) uncertainty quantification, and learns effectively from (iii)
+sparse, noisy datasets is needed. This paper introduces Stochastic Neural Ordinary Differential Equation
+Dynamic Mode Decomposition (Stochastic NODE-DMD), a deep probabilistic model for system identifi-
+cation using DMD. We focus on stochastic system identification from sparse and nonlinear datasets.
+Prior work has developed probabilistic frameworks for DMD (Takeishi et al., 2017) and neural implicit
+representations for spatial bases (SaraerToosi et al., 2025). However, neither addresses the joint challenges
+of continuous spatiotemporal reconstruction with temporally coherent uncertainty quantification from sparse
+observations. Our method advances beyond these approaches by (1) replacing fixed spatial bases with an
+implicit neural encoder that enables continuous reconstruction from arbitrary sparse measurements, and (2)
+introducing a stochastic Neural ODE (Chen et al., 2018; Tzen and Raginsky, 2019; Li et al., 2020a) for
+latent dynamics that maintains long-term temporal coherence. This unified framework provides uncertainty
+quantification for both measurement noise and dynamics variance across multiple realizations.
+We evaluate Stochastic NODE-DMD on four datasets: a synthetic dataset with linear mode evolution
+and added noise, and three physics-based benchmarks including the Gray-Scott reaction-diffusion model for
+chemical dynamics (Pearson, 1993), Navier-Stokes equations for modeling vorticity flow, and flow past a
+cylinder (Brunton et al., 2020). Using only 10% of fixed datapoints across sequences to simulate sparsity,
+we assess reconstruction quality and dynamics retrieval. Comparisons of learned modes and coefficients
+against ground-truth parameters demonstrate the model’s reliability, while tests on datasets with multiple
+dynamics highlight effective uncertainty quantification.
+2. Background and Problem Formulation
+2.1. Problem setting
+Consider a continuous-time nonlinear dynamical system with state x(t) governed by dynamics f:
+˙x(t) = f(x(t)),
+x(t) ∈X,
+(1)
+In many applications, such as fluid dynamics or wave propagation, the overall state x(t) is as a continuous
+function over a spatial domain. With spatial coordinate s ∈Ω⊂Rd, x(s, t) ∈C is the value of the state
+2
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+at coordinate s and time t, and X = L2(Ω) is the function space of square-integrable fields over the spatial
+domain Ω. As a result, Eq. (1) typically manifests as a partial differential equation (PDE), though it is
+commonly approximated by discretization for numerical simulation. In particular, a grid of Ωis defined,
+denoted SΩ⊂Ωwith |SΩ| = n. Then the system is approximated with a finite dimensional state in Cn and
+corresponding approximate dynamics. For an ϵ grid, we typically require n to scale like vol(Ω)/ϵd, so even
+in this finite dimensional approximation, the state is high dimensional.
+We instead consider observations that are spatially sparse, such as measurements from a few fixed me-
+teorological or oceanographic stations. Define a finite set of spatial coordinates S = {s1, . . . , sm} ⊂Ωand
+let x(S, t) ∈Cm denote the values of the state at those coordinates at time t. We observe noisy measure-
+ments at discrete times tk (k = 0, . . . , p −1) as yk = x(S, tk) + ηk, where ηk ∈Cm represents additive
+measurement noise. The resulting dataset consists of the observation sequence {yk}p−1
+k=0, such as time-
+indexed sensor readings. The goal is to learn a low-dimensional and interpretable model that captures the
+underlying spatiotemporal dynamics, enables prediction of fields x(s, t) at arbitrary coordinates s (including
+unseen full-resolution grids), and quantifies uncertainty due to factors like noise, subsampling, and model
+mismatch. To this end, we formulate the problem as inferring a stochastic dynamic mode decomposition
+over continuous space by modeling the mode coefficient as a latent state.
+2.2. Linear Evolution and Dynamic Mode Decomposition
+While the governing dynamics in Eq. (1) are nonlinear and infinite-dimensional, many phenomena of interest
+can be well represented in a low dimensional manner. This is achieved by projecting the spatiotemporal data
+onto a set of spatial modes Wi, yielding time-dependent mode coefficients ϕi:
+x(s, t) ≈
+r
+X
+i=1
+ϕi(t)Wi(s),
+yk ≈
+r
+X
+i=1
+ϕi,kwi + ηk,
+(2)
+where modes wi = Wi(S) ∈Cm have ϕi,k ∈C representing their temporal amplitude at time tk and r is
+the number1 of modes. Under an additional assumption of linear mode evolution, the coefficients evolve as:
+˙ϕi(t) = λiϕi(t),
+ϕi,k+1 = eλi∆tϕi,k,
+(3)
+with complex eigenvalue λi = αi + jβi encoding growth rate αi and frequency βi. This linear structure,
+while an approximation, enables predictive modeling and spectral analysis of complex systems (Rowley
+et al., 2009; Schmid, 2010a). This approximation is theoretically grounded in Koopman operator the-
+ory (Mezi´c, 2005), which lifts nonlinear dynamics into a linear (infinite-dimensional) space of observables.
+Dynamic Mode Decomposition (DMD) is a tractable approach to linear dynamics on high or infinite
+dimensional states. Given an observation yk ∈Cm at times tk, collection of sequential observation data
+pair Y and Y ′ are defined as Y = [y0, y1, . . . , yp−1] ∈Cm×p and Y ′ = [y1, y2, . . . , yp] ∈Cm×p.
+DMD computes a matrix A such that Y ′ ≈AY , from which the eigenvalues µi and mode matrix W ∈
+1. In standard DMD, the maximum number of computable modes is limited by the rank of the data matrix. However, it is common
+to truncate to a smaller r by retaining only the dominant singular values from the SVD step, as this reduced-rank approximation
+is sufficient to capture the essential dynamics in many systems of interest (Tu, 2013; Schmid, 2010b).
+3
+
+KIM DEAN
+Cm×r (with r effective modes) are obtained. The discrete eigenvalues satisfy µi ≈eλi∆t, linking DMD
+to the continuous linear evolution in Eq. (3). In practice, operating on vectorized, fixed-grid snapshots
+provides computational simplicity but reduces flexibility on irregular or continuous spatial domains; the
+linear-evolution assumption yields clear mode structure yet can leave nonlinear residuals unmodeled in
+complex systems; and the standard deterministic formulation emphasizes point estimates over calibrated
+uncertainty, which can be challenging under sparse sensors, noise, or missing data.
+2.3. Probabilistic DMD as a Generative Model
+To incorporate uncertainty and enable principled probabilistic inference, DMD can be reformulated as a
+latent-variable generative model (Takeishi et al., 2017). In this framework, the mode coefficients from the
+linear evolution (Section 2.2) are treated as latent variables ϕi,k ∈C. For each pair of consecutive snapshots
+(yk, yk+1), the conditional likelihoods are defined as:
+yk | {ϕi,k}r
+i=1 ∼CN
+ r
+X
+i=1
+ϕi,kwi, σ2Im
+!
+,
+yk+1 | {ϕi,k}r
+i=1 ∼CN
+ r
+X
+i=1
+eλi∆tϕi,kwi, σ2Im
+!
+,
+(4)
+with standard complex Gaussian priors ϕi,k ∼CN(0, 1). Maximizing the marginal likelihood recovers
+classical DMD in the noise-free limit. However, because the generative model is defined pairwise—with
+independent latent states ϕk for each transition—the global linear evolution in Eq. (3) is not enforced across
+time steps. This breaks long-term dynamical consistency, potentially leading to accumulating errors in
+multi-step forecasting and unstable mode amplitude trajectories under noise or missing data.
+2.4. Nonlinear State-Space Formulation for Stochastic NODE–DMD
+We extend the probabilistic generative model of Bayesian DMD (Takeishi et al., 2017) into a nonlinear
+state-space framework supporting continuous-time evolution and uncertainty quantification. Let ϕk ∈Cr
+be the low-dimensional latent state vector encoding r modes (with r ≪m), Λ = diag(λ1, . . . , λr) ∈Cr×r
+the diagonal matrix of eigenvalues, and W ∈Cm×r the mode matrix. Then:
+ϕk+1 = eΛ∆tϕk + fθ(ϕk, tk)∆t + ζk,
+ζk ∼CN(0, τ 2∆t · Ir),
+(5)
+yk = Wϕk + ηk,
+ηk ∼CN(0, σ2Im),
+(6)
+where fθ is a neural network capturing nonlinear residual dynamics (parameterized by θ), ζk represents
+process noise, and ηk denotes observation noise.
+To derive a differentiable continuous-time model, set tk = k∆t and take the limit ∆t →0. The discrete
+increment ζk = τ · ∆Bk with ∆Bk ∼CN(0, ∆t · Ir) converges in distribution to a Brownian increment,
+yielding the stochastic differential equation:
+dϕt =
+ Λϕt + fθ(ϕt, t)
+
+dt + τ dBt.
+(7)
+Equation (7) thus defines a neural stochastic differential equation combining linear evolution drift, nonlinear
+correction, and process noise. Λϕt corresponds to the classical linear evolution, while the neural residual
+fθ provides adaptive corrections for nonlinearity and model mismatch. In the limit fθ →0 and τ 2 →0, the
+formulation reduces to deterministic DMD.
+4
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+Figure 1: Overview of the Stochastic NODE–DMD architecture. At time step k, subsampled measure-
+ments yk and set of spatial coordinates S are fed into the Latent Encoder, which outputs
+eigenvalues Λ and the latent distribution p(ϕk) . The Neural ODE evolves this distribution
+forward to time k + 1. The predicted latent state distribution p( ˆϕk+1) is then combined with spa-
+tial modes from the Mode Extractor W to reconstruct the distribution of subsampled field at
+time k + 1, enabling uncertainty-aware, grid-free forecasting.
+3. Stochastic Neural Ordinary Differential Equation DMD (NODE–DMD)
+We extend the probabilistic DMD framework proposed by Takeishi et al. (2017), by incorporating continuous-
+time nonlinear latent evolution via Neural ODEs with stochastic diffusion (Chen et al., 2018; Tzen and
+Raginsky, 2019). We also build upon NeuralDMD (NDMD) (SaraerToosi et al., 2025) which integrates
+neural implicit representation for sparse reconstruction. Our proposed method, termed Stochastic Neural
+ODE DMD (NODE-DMD), learns uncertainty-aware dynamics within a generative modeling framework. It
+combines the linear spectral structure of DMD with data-driven nonlinear corrections, and supports sparse,
+noisy observations. Figure 1 illustrates the overall architecture of Stochastic NODE–DMD. Given subsam-
+pled measurements yk at fixed spatial coordinates S, the model predicts the state distribution at time k + 1.
+Inputs may originate from the dataset (“teacher forcing” with yk) or prior model predictions (autoregressive
+forecasting from ˆyk).
+There are three main components: the Mode Extractor outputs spatial mode functions, and the
+Latent Encoder outputs eigenvalues Λ and the initial latent distribution CN(µϕk, Σϕk). Both de-
+pend on a positional encoding γ(s). The stochastic Neural ODE block evolves this distribution for-
+ward in continuous time. The predicted latent state distribution p( ˆϕk+1) = CN(µϕk+1, Σϕk+1) is com-
+bined with the mode function Wψ(γ(s)) to generate field prediction at arbitrary coordinates ˆy(s, tk+1) =
+Pr
+i=1 ˆϕk+1,i [Wψ(γ(s))]i. By using ˆyk+1 = ˆy(S, tk+1), this architecture enables uncertainty-aware, multi-
+step forecasting from sparse and noisy observations.
+5
+
+KIM DEAN
+3.1. Mode Extractor and Latent Encoder with Positional Encoding
+To enable reconstruction at arbitrary coordinates s ∈Ω, we parameterize spatial modes using a neural im-
+plicit representation Wψ (Mildenhall et al., 2021; Müller et al., 2022), parameterized by ψ. To effectively
+encode raw spatial coordinates and enable the network to capture high-frequency details in continuous do-
+mains, we apply a positional encoding γ : Rd →R2Ld (where d is the coordinate dimensionality and L
+is the number of frequency bands) to individual coordinates before feeding them into the relevant mod-
+ules (Tancik et al., 2020; Mildenhall et al., 2021). This encoding transforms each coordinate dimension sj
+as γ(sj) =
+
+sj, sin(20πsj), cos(20πsj), . . . , sin(2L−1πsj), cos(2L−1πsj)
+
+. We compute the encoded set
+γ(S) = {γ(si)}m
+i=1, which is used as input to the Mode Extractor. The pair (yk, γ(S)) is used as
+input to the Latent Encoder which determines the mode coefficient ϕ as probabilistic latent state using
+variational inference encoding (Kingma and Welling, 2013).
+3.2. Stochastic Neural ODE for Latent Evolution
+The stochastic Neural ODE enforces linear evolution across time steps while allowing nonlinear correc-
+tions and intrinsic uncertainty propagation. It evolves the latent mode state ϕ(t) ∈Cr continuously via the
+SDE in Eq. (7), where the linear drift is encoded by Λ, the nonlinear residual is modeled by fθ, and the dif-
+fusion term τ dBt captures intrinsic uncertainty. To overcome the independent pairwise-transition limitation
+of the generative model in Bayesian DMD (Takeishi et al., 2017), we propagate the distribution of ϕ with
+a stochastic Neural ODE, allowing data-driven corrections and uncertainty transport. Furthermore, we
+reinforce temporal continuity using the consistency loss in Sec. 3.3. We discretize the SDE over substeps
+of δt with an uncertainty-aware Euler–Maruyama scheme (Kloeden and Pearson, 1977). Implementation
+details, including multi-substep updates and covariance propagation, are given in Appendix A.
+3.3. Training Objective and Rollout Strategy
+The model is trained end-to-end using a composite loss function that balances reconstruction accuracy,
+latent regularization, and temporal consistency. (Full mathematical details are provided in Appendix B). For
+a transition from time tk to tk+1, let yk+1 ∈Cm be the target observation, (ˆµy, ˆσ2
+y) the predicted mean
+and variance of the reconstructed field, and (µϕ, σ2
+ϕ), (ˆµϕ, ˆσ2
+ϕ) the latent distributions from the Latent
+Encoder and Stochastic Neural ODE, respectively.
+• Reconstruction Loss: A Gaussian negative log-likelihood from p(ˆyk+1) = (ˆµy, ˆσ2
+y) to yk+1 encourages
+accurate field prediction while adapting to data uncertainty.
+• Latent KL Regularization: A KL divergence term regularizes the latent mode coefficients ˆϕi toward a
+standard complex Gaussian prior.
+• Consistency Loss: The latent distribution matching loss aligns the encoder-estimated distribution p(ϕk+1 |
+yk+1, γ(S)) with the SDE-propagated distribution p( ˆϕk+1 | ϕk) using MSE and KL-divergence.
+The total loss is a weighted sum of these three loss terms. We train the model end-to-end with a curriculum
+that gradually transitions inputs from ground truth (yk) to model predictions (ˆyk), stabilizing training and
+enabling robust long-horizon autoregressive forecasts; details are provided in Appendix C.
+6
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+4. Experiments
+Models.
+We evaluated Stochastic NODE–DMD on four datasets and benchmarked it against Neural DMD
+(NDMD) (SaraerToosi et al., 2025), which learns DMD components via a neural implicit representation. For
+a fair comparison, we set the mode rank to r = 4 for Synthetic Sequence task and r = 8 for all other tasks,
+and aligned key training hyperparameters such as the number of epochs and batch size across methods.
+Simulated dynamical systems.
+We evaluate Stochastic NODE–DMD on four simulated systems, ranging
+from a linear synthetic sequence with known ground truth to nonlinear PDE-governed fluid flows. In Fig. 2,
+the second column shows the ground-truth field for each task. All systems are discretized on structured
+grids and evolved for T = 50–150 time steps to capture salient dynamics and to enable both short- and
+long-horizon evaluation. In the sparse-observation experiments (Sec. 4.1 and 4.2), we train with 10% fixed
+spatial sensors to emulate sparse measurements and evaluate reconstructions on the full grid.
+• Synthetic Sequence: Four predefined spatial modes with exponential temporal evolution (Eq. (2)) and
+additive observation noise. This mirrors common synthetic setups used to validate DMD/Koopman meth-
+ods (Dawson et al., 2016; Askham and Kutz, 2018; Zhang et al., 2017) preserving the ground-truth modes
+and eigenvalues. The dataset uses a 32 × 32 grid and sequence length T = 50 (Fig. 2(a)).
+• Gray-Scott Reaction-Diffusion: A coupled PDE system modeling two reacting and diffusing chemical
+species (Pearson, 1993). The dataset uses a 100 × 100 grid and sequence length T = 100 (Fig. 2(b)).
+• 2D Navier-Stokes Spectral Vorticity: Incompressible 2D flow in vorticity using torch-cfd (Cao et al.,
+2024). The dataset uses a 100 × 100 grid and sequence length T = 50 (Fig. 2(c)).
+• 2D Flow Past a Cylinder: Viscous incompressible flow around a circular cylinder, governed by the
+Navier-Stokes equations simulated using torch-cfd (Cao et al., 2024) with finite volume method and
+pressure projection. The dataset uses a 128 × 128 grid and sequence length T = 150. (Fig. 2(d)).
+Details of parameters, initial conditions, numerical schemes, and implementation notes are provided in
+Appendix D.
+4.1. Reconstructing continuous spatiotemporal dynamics from sparse observations.
+We evaluate whether NODE–DMD can infer missing spatiotemporal information from sparse observations
+while remaining reliable to the underlying dynamics. To this end, only 10% of spatial locations are used as
+fixed sensors and observed over the entire sequence.
+Qualitative Results.
+Figure 2 visualizes the final rollout segment for each task. For NODE–DMD we
+report both 1-step (teacher-forced) and m-step (autoregressive) settings, whereas NDMD is evaluated in
+m-step. With only sparse measurements, NODE–DMD preserves coherent pattern and sharp phase align-
+ment, whereas NDMD produces blurred reconstructions that lose fine-scale structures. The Cylinder Flow
+task highlights characteristic behaviors: 1-step NODE–DMD captures sharp geometric detail and phase
+alignment, whereas in m-step prediction, it maintains plausible geometry but exhibits phase lag due to accu-
+mulated frequency misalignment in long-horizon prediction. By contrast, Neural DMD tends to average out
+the vortices shedding. Learning spatial modes as continuous functions of coordinates enables interpolation
+at unobserved locations and effectively super-resolves missing regions, mitigating the ambiguity induced by
+fixed sparse sensors.
+7
+
+KIM DEAN
+Figure 2: Qualitative reconstruction results from sparse observations. Row labels list the task and roll-
+out length T (final time step). Columns: (1) training data—10% of fixed spatial points sampled
+from the ground truth, (2) ground-truth full field, (3) NODE–DMD 1-step (teacher-forced), (4)
+NODE–DMD m-step (autoregressive), and (5) NDMD m-step.
+Quantitative results.
+Table 1 reports the time-averaged per-pixel L1 error. On the near-linear, mode-
+separable Synthetic DMD Sequence task, NODE–DMD is comparable to NDMD. On the more nonlinear
+systems—Gray-Scott, Spectral Vorticity, and Cylinder Flow—NODE–DMD achieves consistently lower
+1-step error than NDMD, and shows comparable error in longer m-step forecasts.
+As expected, m-step rollouts generally underperform 1-step because autoregressive recovery proceeds
+open-loop from the first frame, so small modeling errors accumulate over time. On Cylinder, periodicity
+makes pointwise L1 highly phase-sensitive: small frequency bias causes phase drift and is penalized without
+time-shift alignment, increasing the m-step error. Note that the smaller error achieved by NDMD comes at
+the cost of “averaging out” uncertainty in the phase as shown in Fig. 2. We further analyze the role of
+stochastic variance in Section 4.3.
+8
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+System
+DMD SEQUENCE
+GRAY–SCOTT
+VORTICITY FLOW
+CYLINDER FLOW
+horizon
+1-step
+m-step
+1-step
+m-step
+1-step
+m-step
+1-step
+m-step
+NDMD
+n/a
+0.0442
+n/a
+0.0049
+n/a
+0.0047
+n/a
+0.0467
+NODE–DMD
+0.0466
+0.0455
+0.0046
+0.0076
+0.0024
+0.0024
+0.0067
+0.0473
+Table 1: L1 error of full snapshot reconstruction from sparse (10%) observations
+4.2. Recovering Ground-Truth Dynamics from Noisy, Sparse Observations
+We test whether NODE–DMD recovers continuous-time dynamics from noisy sequences observed at fixed
+10% sensors. Additional details are presented in Appendix E; here we report qualitative results.
+Fig. 3 visualizes mode portraits at a random time step (t=14). For each mode k, we draw isocontours
+of the instantaneous spatial contribution |Wk(x) ϕk(t)|. To ensure comparability across time and between
+GT/predictions, we fix absolute contour levels per mode using the GT sequence: pool |Wk(x)ϕk(t)| over all
+(x, t) and set levels to the (30, 60, 90)-th percentiles of that pooled distribution.2 Portraits in GT mode (left
+side in Fig. 3) and portraits predicted by the model (right side in Fig. 3) exhibit matched high-contribution
+regions, indicating that the model organizes spatial energy consistently with the ground-truth dynamics.
+4.3. Learning a distribution over dynamics across realizations
+We test whether NODE–DMD learns a posterior over spatiotemporal fields that captures variability across
+realizations of the same system (identical initial condition, different dynamics parameters). We train two
+models on the Vorticity Flow benchmark at a lower resolution than in Section 4.1. To isolate dynamics
+uncertainty from sparse-observation effects, training uses fully observed spatiotemporal fields (no sensor
+subsampling). For evaluation, we visualize how a massless object would move in each flow field. To track its
+trajectory, we recover velocities from vorticity using the classical streamfunction–vorticity formulation for
+2D incompressible flow on a periodic domain, implemented via FFT-based Poisson inversion; see Hussaini
+and Zang (1986); Boyd (2001); Kundu et al. (2024) for details.
+Figure 4 compares two training regimes. On the left, from a single realization, the posterior concen-
+trates and the N=10 sampled trajectories cluster tightly around the mean drift, indicating limited epistemic
+variability when trained on one realization only. On the right, training on a dataset of 10 realizations (same
+initial state but different dynamics parameters) yields a posterior that captures inter-realization variability:
+the ensemble exhibits a wider spread while preserving the mean drift. In other words, NODE–DMD does not
+collapse to an averaged, time-invariant pattern but learns a distribution that covers the family of dynamics
+induced by the training realizations.
+5. Conclusion
+We introduced Stochastic NODE–DMD, a probabilistic and interpretable framework for system identifica-
+tion that (i) reformulates DMD as a generative model, (ii) employs a neural implicit representation to enable
+2. A spatially constant GT mode (e.g., mode 1) yields nearly flat |Wk| and degenerate isocontours; such cases may be omitted as
+in Fig. 3(a).
+9
+
+KIM DEAN
+Figure 3: Mode-portrait overlays at absolute lev-
+els.
+Colored contours show per-mode
+isocontours of |Wk(x) ϕk(t)| at thresh-
+olds fixed once per mode from the GT se-
+quence (30/60/90-th percentiles). Back-
+grounds show the corresponding field
+(Left: ground-truth mode portrait; Right:
+model-predicted mode portrait).
+Figure 4: Particle trajectories from velocity field.
+From posterior samples (Red) vs. ground
+truth (Gray). Left: Model trained on a
+single vorticity-field realization. Right:
+Model trained on 10 realizations.
+grid-free, continuous spatial reconstruction from sparse observations, and (iii) augments the linear DMD
+drift with a stochastic Neural ODE to capture nonlinear residuals while propagating uncertainty. In doing
+so, the method preserves the spectral interpretability of DMD yet extends its applicability to sparse, noisy,
+and strongly nonlinear settings.
+Across four benchmarks (one synthetic; reaction–diffusion, vorticity flow, cylinder flow), the method
+reconstructs from 10% fixed sensors, maintains coherent geometry and phase in long-horizon rollouts, and
+recovers principal dynamical factors (modes and eigenvalues). Training over multiple realizations learns a
+calibrated distribution over dynamics rather than collapsing to time-averaged patterns. Our proposed method
+is competitive on near-linear cases and stronger on more nonlinear systems, indicating that combining linear
+spectral structure with learned nonlinear corrections improves robustness under sparsity and noise while
+retaining interpretability.
+Limitations and future work.
+Scaling to large, real-world settings will benefit from faster latent-SDE
+solvers and memory-/parallel-aware training, as well as temporal regularization and physics-informed priors
+to further improve long-horizon stability. An important potential application of this framework is modeling
+dynamic open environment for planning and control, such as balloons and UAVs operating in wind-fields.
+Such settings often include irregular, sparse sensor networks which may be augmented through online data
+assimilation or active sensing. We hope that our method for tractable, uncertainty-aware reconstruction and
+forecasting can interface directly with downstream planning and control in autonomous systems.
+10
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+References
+Mauricio A. Alvarez, David Luengo, and Neil D. Lawrence. Linear latent force models using gaussian
+processes. IEEE Transactions on Pattern Analysis and Machine Intelligence, 35(11):2693–2705, 2013.
+Travis Askham and J Nathan Kutz. Variable projection methods for an optimized dynamic mode decompo-
+sition. SIAM Journal on Applied Dynamical Systems, 17(1):380–416, 2018.
+Marc G Bellemare, Salvatore Candido, Pablo Samuel Castro, Jun Gong, Marlos C Machado, Subhodeep
+Moitra, Sameera S Ponda, and Ziyu Wang. Autonomous navigation of stratospheric balloons using rein-
+forcement learning. Nature, 588(7836):77–82, 2020.
+John P Boyd. Chebyshev and Fourier spectral methods. Courier Corporation, 2001.
+Steven L Brunton, Joshua L Proctor, and J Nathan Kutz. Discovering governing equations from data by
+sparse identification of nonlinear dynamical systems. Proceedings of the National Academy of Sciences,
+113(15):3932–3937, 2016.
+Steven L Brunton, Bernd R Noack, and Petros Koumoutsakos. Machine learning for fluid mechanics. Annual
+Review of Fluid Mechanics, 52:477–508, 2020.
+Mark Campbell, Magnus Egerstedt, Jonathan P How, and Richard M Murray. Autonomous driving in urban
+environments: approaches, lessons and challenges. Philosophical Transactions of the Royal Society A:
+Mathematical, Physical and Engineering Sciences, 368(1928):4649–4672, 2010.
+Shuhao Cao, Francesco Brarda, Ruipeng Li, and Yuanzhe Xi. Spectral-refiner: Accurate fine-tuning of
+spatiotemporal fourier neural operator for turbulent flows. arXiv preprint arXiv:2405.17211, 2024.
+Ricky TQ Chen, Yulia Rubanova, Jesse Bettencourt, and David K Duvenaud. Neural ordinary differential
+equations. Advances in neural information processing systems, 31, 2018.
+Scott TM Dawson, Maziar S Hemati, Matthew O Williams, and Clarence W Rowley. Characterizing and
+correcting for the effect of sensor noise in the dynamic mode decomposition. Experiments in Fluids, 57
+(3):42, 2016.
+Andreas Doerr, Christian Daniel, Martin Schiegg, Duy Nguyen-Tuong, Stefan Schaal, Marc Toussaint, and
+Sebastian Trimpe. Probabilistic recurrent state-space models. arXiv preprint arXiv:1801.10395, 2018.
+M Yousuff Hussaini and Thomas A Zang. Spectral methods in fluid dynamics. Technical report, 1986.
+Patrick Kidger, James Morrill, James Foster, and Terry Lyons. Neural controlled differential equations for
+irregular time series. Advances in neural information processing systems, 33:6696–6707, 2020.
+Diederik P Kingma and Max Welling. Auto-encoding variational bayes. arXiv preprint arXiv:1312.6114,
+2013.
+11
+
+KIM DEAN
+Peter E Kloeden and RA Pearson. The numerical solution of stochastic differential equations. The ANZIAM
+Journal, 20(1):8–12, 1977.
+Nikola Kovachki, Zongyi Li, Burigede Liu, Kamyar Azizzadenesheli, Kaushik Bhattacharya, Andrew Stu-
+art, and Anima Anandkumar. Neural operator: Learning maps between function spaces with applications
+to pdes. Journal of Machine Learning Research, 24(89):1–97, 2023.
+Rahul G. Krishnan, Uri Shalit, and David Sontag. Deep kalman filters. arXiv preprint arXiv:1511.05121,
+2015.
+Pijush K Kundu, Ira M Cohen, David R Dowling, and Jesse Capecelatro. Fluid mechanics. Elsevier, 2024.
+Thorsten Kurth, Shashank Subramanian, Peter Harrington, Jaideep Pathak, Morteza Mardani, David Hall,
+Andrea Miele, Karthik Kashinath, and Anima Anandkumar.
+Fourcastnet: Accelerating global high-
+resolution weather forecasting using adaptive fourier neural operators. In Proceedings of the platform
+for advanced scientific computing conference, pages 1–11, 2023.
+J Nathan Kutz, Steven L Brunton, Bingni W Brunton, and Joshua L Proctor. Dynamic mode decomposition:
+data-driven modeling of complex systems. SIAM, 2016a.
+J Nathan Kutz, Steven L Brunton, Bingni W Brunton, and Joshua L Proctor. Dynamic mode decomposition:
+data-driven modeling of complex systems. SIAM, 2016b.
+Mi Hyun Lee, Nambeom Kim, Jaeeun Yoo, Hang-Keun Kim, Young-Don Son, Young-Bo Kim, Seong Min
+Oh, Soohyun Kim, Hayoung Lee, Jeong Eun Jeon, et al. Multitask fmri and machine learning approach
+improve prediction of differential brain activity pattern in patients with insomnia disorder. Scientific
+reports, 11(1):9402, 2021.
+Xuechen Li, Ting-Kam Leonard Wong, Ricky T Q Chen, and David Duvenaud. Scalable gradients for
+stochastic differential equations. International Conference on Artificial Intelligence and Statistics, pages
+3870–3882, 2020a.
+Zongyi Li, Nikola Kovachki, Kamyar Azizzadenesheli, Burigede Liu, Kaushik Bhattacharya, Andrew Stu-
+art, and Anima Anandkumar. Fourier neural operator for parametric partial differential equations. arXiv
+preprint arXiv:2010.08895, 2020b.
+Lu Lu, Pengzhan Jin, and George E Karniadakis. Deeponet: Learning nonlinear operators for identify-
+ing differential equations based on the universal approximation theorem of operators. arXiv preprint
+arXiv:1910.03193, 2019.
+Bethany Lusch, J Nathan Kutz, and Steven L Brunton. Deep learning for universal linear embeddings of
+nonlinear dynamics. Nature Communications, 9(1):4950, 2018.
+Andrea Mechelli, Cathy J Price, Karl J Friston, and John Ashburner. Voxel-based morphometry of the
+human brain: methods and applications. Current Medical Imaging, 1(2):105–113, 2005.
+12
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+Igor Mezi´c. Spectral properties of dynamical systems, model reduction and decompositions. Nonlinear
+Dynamics, 41(1):309–325, 2005.
+Ben Mildenhall, Pratul P Srinivasan, Matthew Tancik, Jonathan T Barron, Ravi Ramamoorthi, and Ren Ng.
+Nerf: Representing scenes as neural radiance fields for view synthesis. Communications of the ACM, 65
+(1):99–106, 2021.
+Joyneel Misra and Luiz Pessoa. Brain dynamics and spatiotemporal trajectories during threat processing.
+bioRxiv, pages 2024–04, 2025.
+Thomas Müller, Alex Evans, Christoph Schied, and Alexander Keller. Instant neural graphics primitives
+with a multiresolution hash encoding. ACM transactions on graphics (TOG), 41(4):1–15, 2022.
+Michael Niemeyer, Jonathan T Barron, Ben Mildenhall, Mehdi SM Sajjadi, Andreas Geiger, and Noha Rad-
+wan. Regnerf: Regularizing neural radiance fields for view synthesis from sparse inputs. In Proceedings
+of the IEEE/CVF conference on computer vision and pattern recognition, pages 5480–5490, 2022.
+Jaideep Pathak, Brian Hunt, Michelle Girvan, Zhixin Lu, and Edward Ott. Model-free prediction of large
+spatiotemporally chaotic systems from data: A reservoir computing approach. Physical Review Letters,
+120(2):024102, 2018.
+John E Pearson. Complex patterns in a simple system. Science, 261(5118):189–192, 1993.
+Maziar Raissi, Paris Perdikaris, and George E Karniadakis. Physics-informed neural networks: A deep
+learning framework for solving forward and inverse problems involving nonlinear partial differential
+equations. Journal of Computational Physics, 378:686–707, 2019.
+Stephan Rasp, Peter D Dueben, Sebastian Scher, Jonathan A Weyn, Soukayna Mouatadid, and Nils Thuerey.
+Weatherbench: A benchmark data set for data-driven weather forecasting. Journal of Advances in Mod-
+eling Earth Systems, 12(11):e2020MS002203, 2020.
+Clarence W Rowley, Igor Mezi´c, Shervin Bagheri, Philipp Schlatter, and Dan S Henningson. Spectral
+analysis of nonlinear flows. Journal of fluid mechanics, 641:115–127, 2009.
+Ali SaraerToosi, Renbo Tu, Kamyar Azizzadenesheli, and Aviad Levis. Neural dynamic modes: Com-
+putational imaging of dynamical systems from sparse observations. arXiv preprint arXiv:2507.03094,
+2025.
+Diya Sashidhar and J Nathan Kutz. Bagging, optimized dynamic mode decomposition for robust, stable
+forecasting with spatial and temporal uncertainty quantification. Philosophical Transactions of the Royal
+Society A, 380(2229):20210199, 2022.
+Peter J Schmid. Dynamic mode decomposition of numerical and experimental data. Journal of fluid me-
+chanics, 656:5–28, 2010a.
+13
+
+KIM DEAN
+Peter J. Schmid. Dynamic mode decomposition of numerical and experimental data. J. Fluid Mech., 656:
+5–28, 2010b.
+Xingjian Shi, Zhourong Chen, Hao Wang, Dit-Yan Yeung, Wai-Kin Wong, and Wang-chun Woo. Convolu-
+tional lstm network: A machine learning approach for precipitation nowcasting. In Advances in Neural
+Information Processing Systems, volume 28, 2015.
+Nitin Sydney, Brandon Smyth, and Derek A Paley. Dynamic control of autonomous quadrotor flight in an
+estimated wind field. 52nd IEEE Conference on Decision and Control, pages 3609–3616, 2013.
+Naoya Takeishi, Yoshinobu Kawahara, Yasuo Tabei, and Takehisa Yairi. Bayesian dynamic mode decom-
+position. In Proceedings of the Twenty-Sixth International Joint Conference on Artificial Intelligence
+(IJCAI-17), pages 2814–2821, 2017.
+Matthew Tancik, Pratul Srinivasan, Ben Mildenhall, Sara Fridovich-Keil, Nithin Raghavan, Utkarsh Singhal,
+Ravi Ramamoorthi, Jonathan Barron, and Ren Ng. Fourier features let networks learn high frequency
+functions in low dimensional domains. Advances in neural information processing systems, 33:7537–
+7547, 2020.
+Jonathan H Tu. Dynamic mode decomposition: Theory and applications. PhD thesis, Princeton University,
+2013.
+Belinda Tzen and Maxim Raginsky. Neural stochastic differential equations: Deep latent gaussian models
+in the diffusion limit. arXiv preprint arXiv:1905.09883, 2019.
+Antonio Vasilijevi´c, Ðula Na ¯d, Filip Mandi´c, Nikola Miškovi´c, and Zoran Vuki´c. Coordinated navigation
+of surface and underwater marine robotic vehicles for ocean sampling and environmental monitoring.
+IEEE/ASME transactions on mechatronics, 22(3):1174–1184, 2017.
+Marius Wiggert, Manan Doshi, Pierre FJ Lermusiaux, and Claire J Tomlin. Navigating underactuated agents
+by hitchhiking forecast flows. In 2022 IEEE 61st Conference on Decision and Control (CDC), pages
+2417–2424. IEEE, 2022.
+Hao Zhang, Scott Dawson, Clarence W Rowley, Eric A Deem, and Louis N Cattafesta. Evaluating the
+accuracy of the dynamic mode decomposition. arXiv preprint arXiv:1710.00745, 2017.
+14
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+Appendix A. Stochastic Neural ODE procedure
+We evolve the latent state by the SDE in Eq. (7). For implementation we work in R2r via real–imag stacking
+and use the real lift ΛR of Λ. Over ∆t, we apply an uncertainty-aware Euler–Maruyama with p substeps δt.
+See Algorithm 1 for the full procedure.
+Algorithm 1: Stochastic Neural ODE Integration with Uncertainty Propagation
+Input: Initial latent mean µϕt ∈Cr, covariance Σϕt ∈Cr×r, eigenvalues Λ, neural drift fθ, diffusion τ,
+time step δt, horizon ∆t
+Output: Final latent distribution CN(µϕt+∆t, Σϕt+∆t)
+for p = 0, 1, . . . , P −1 ;
+// where tp = t + pδt, ∆t = Pδt
+do
+δ ←Λµϕtp + fθ(µϕtp, tp) // Total drift
+µϕtp+1 ←µϕtp + ∆t · δ // Mean update
+J ←∇ϕ(Λϕ + fθ(ϕ, tp))
+
+ϕ=µϕtp
+); // Jacobian of drift
+A ←I + ∆t · J
+Σϕtp+1 ←AΣϕtpAH + ∆t · τ 2I // Covariance propagation
+end
+return CN(µϕt+∆t, Σϕt+∆t)
+Appendix B. Training Loss Function
+For a transition from time tk to tk+1, let yk+1 ∈Cm be the target observation, (ˆµy, ˆσ2
+y) the predicted mean
+and variance of the reconstructed field, and (µϕ, σ2
+ϕ), (ˆµϕ, ˆσ2
+ϕ) the latent distributions from the Latent
+Encoder and Stochastic Neural ODE, respectively.
+The total loss is
+L = wrecon · Lrecon + wkl · Lkl + wcons · Lcons,
+(8)
+with weights wrecon = 3, wkl = 10−3, wcons = 0.15.
+• Reconstruction Loss: A Gaussian negative log-likelihood encourages accurate field prediction while
+adapting to data uncertainty:
+Lrecon = 1
+2
+"
+log ˆσ2
+y + (yk+1 −ˆµy)2
+exp(log ˆσ2
+y) + log(2π)
+#
+.
+• Latent KL Regularization: A KL divergence term regularizes the latent mode coefficients ˆϕi toward
+a standard complex Gaussian prior, preventing overfitting and promoting structured representations:
+Lkl = −1
+2
+X
+i
+ 1 + log ˆσ2
+ϕ −ˆµ2
+ϕ −exp(log ˆσ2
+ϕ)
+
+.
+15
+
+KIM DEAN
+• Consistency Loss: Latent distribution matching loss aligns the encoder-estimated distribution p(ϕk+1 |
+yk+1, γ(S)) with the SDE-propagated distribution p( ˆϕk+1 | ϕk) to enforce temporal consistency:
+Lcons = MSE(µϕ, ˆµϕ) + κ · KL
+ CN(µϕ, σ2
+ϕ) ∥CN(ˆµϕ, ˆσ2
+ϕ)
+
+,
+where κ = 0.001 scales the variance term.
+Appendix C. Training Detail
+The model is trained end-to-end using gradient descent on the training dataset. Due to its recursive structure,
+we can select either ground-truth observations yk or model predictions ˆyk as inputs during training. To
+stabilize the process and enable robust multi-step forecasting, we apply a curriculum learning schedule that
+transitions from teacher forcing (using yk) to autoregressive mode (using ˆyk). For each training batch, we
+uniformly select teacher forcing mode with probability ϵ applying it to all sequences and timesteps in the
+batch) or autoregressive mode with probability 1 −ϵ, where ϵ decays linearly from 1 to 0 over the course of
+training. In fully autoregressive mode, the model reconstructs the entire sequence of duration T given only
+the initial observation.
+Appendix D. Simulation Dataset Details
+D.1. Synthetic DMD Sequence
+We construct a synthetic dataset based on the principles of DMD, where the underlying dynamics are gener-
+ated from a known set of modes, eigenvalues, and initial coefficients. This allows direct comparison between
+learned Koopman modes and ground-truth DMD components. The state at each time step is defined as a
+linear combination of spatial modes W(x) modulated by complex exponentials. Let
+m0(x, y) = sin
+
+π
+2 (x+1)
+
+cos
+
+π
+2 (y+1)
+
+,
+m1(x, y) = cos
+ π(x+1)
+
+sin
+ π(y+1)
+
+,
+m2(x, y) = sin(2πx) sin(2πy),
+m3(x, y) = 0.5,
+and define W(x) =
+
+m0(x), m1(x), m2(x), m3(x)
+⊤. The field is a linear combination
+I(x, t) = W(x)⊤ϕ(t),
+ϕk(t) = bk exp
+ (αk + jωk) t ∆teff
+
+,
+with ∆teff = 0.1 (implemented via a fixed time-scaling so that sequences share identical temporal factors
+across experiments).
+We use
+α = [−0.01, −0.05, −0.20, −0.01],
+ω = [2.00, 4.00, 1.00, 0.30],
+b = [1.0+0.5j, 0.8−0.3j, 0.7+0.2j, 0.2+0.0j].
+16
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+The domain is a uniform 32×32 grid over [−1, 1] × [−1, 1] (n=1024). At each time t, only 10% of grid
+points (a single, time-invariant random index set) are observed to emulate sparse sensing. Observations are
+corrupted by i.i.d. complex Gaussian noise η ∼NC(0, σ2) with σ = 0.1:
+yt(xi) = I(xi, t) + ηi,t.
+We roll out T=100 steps with timestamps t = 0, . . . , T−1. For evaluation, we also retain the full noiseless
+fields I(x, t). The ground-truth discrete-time eigenvalues used for comparison are
+µk = exp
+ (αk + jωk) ∆teff
+
+.
+D.2. Gray-Scott Reaction-Diffusion Model
+The Gray-Scott model simulates the interaction of two chemical species u and v through reaction, diffusion,
+and feed/kill processes, exhibiting rich pattern formation such as spots, waves, and mazes. The evolution is
+governed by the coupled PDEs:
+∂u
+∂t = Du∇2u −uv2 + F(1 −u),
+(9)
+∂v
+∂t = Dv∇2v + uv2 −(F + k)v,
+(10)
+with periodic boundary conditions. The Laplacian is approximated using finite differences with nearest-
+neighbor rolls. We use parameters Du = 2 × 10−4, Dv = 1 × 10−5, F = 0.035, k = 0.065, known to
+produce wave-like and spotted patterns (Pearson, 1993). A small perturbation is added to F at initializa-
+tion (σ = 10−3) to break symmetry.
+The system is simulated on a 100 × 100 grid over [−1, 1] × [−1, 1], with spatial step ∆x = 0.01. Initial
+conditions are wave-modulated fields:
+u(x, y, 0) = 0.9 + 0.1 sin(4πx) cos(2πy),
+v(x, y, 0) = 0.1 + 0.05 sin(πx).
+(11)
+Only 10% of spatial points are observed. The concentration of species v is used as the observable.
+D.2.1. 2D NAVIER-STOKES VORTICITY FLOW (SPECTRAL METHOD)
+We simulate incompressible 2D fluid flow using the Navier-Stokes equations in vorticity-stream function
+form, using (Cao et al., 2024). The vorticity ω = ∇× u evolves as:
+∂ω
+∂t + (u · ∇)ω = ν∇2ω,
+(12)
+with u = ∇⊥ψ and ∇2ψ = −ω. The initial vorticity field is a filtered random field with peak wavenumber
+k = 2, ensuring smooth, coherent structures. The simulation uses the torch-cfd library with Crank-
+Nicolson + RK4 time stepping, viscosity ν = 10−3, and domain [0, 2π] × [0, 2π].
+The grid resolution is 128×128 (coordinates normalized to [−1, 1]×[−1, 1]). Time step is ∆t = 10−3,
+with snapshots saved every 100 steps (∼∆tsave = 0.1), yielding 100 snapshots over T = 10.0. The flow
+develops vortex streets and turbulent-like structures.
+17
+
+KIM DEAN
+D.2.2. 2D NAVIER-STOKES FLOW PAST A CYLINDER
+We simulate viscous incompressible flow around a circular cylinder using (Cao et al., 2024), modeling the
+von Kármán vortex street. The Navier-Stokes equations are:
+∂u
+∂t + (u · ∇)u = −∇p + ν∇2u,
+(13)
+∇· u = 0,
+(14)
+The grid is 100 × 100 in [−1, 1] × [−1, 1]. Viscosity is ν = 1/500, time step ∆t = 10−3, and snapshots
+are saved every 150 steps over T = 2.0. The vorticity field exhibits periodic shedding behind the cylinder.
+Spatial observations are densely available (full cropped grid), but only vorticity is used as the observable.
+Appendix E. Recovering Ground-Truth Dynamics from Noisy, Sparse Observations
+We evaluate the model trained in Sec. 4.2 and report (i) spatial mode similarity and (ii) continuous-time
+eigenvalue accuracy.
+E.1. Metric details
+Mode similarity
+(simcos(c
+W, WGT)). Learned modes c
+W ∈CN×r are matched to ground-truth modes
+W ∈CN×r by solving a linear assignment (Hungarian) problem over permutations π that maximizes per-
+mode cosine similarity after a phase correction eiθk:
+cos(k) = ⟨c
+W:,k, eiθkW:,π(k)⟩
+∥c
+W:,k∥∥W:,π(k)∥
+∈[0, 1].
+We report the mean per-pair cosine similarity.
+Eigenvalue accuracy
+(|bλ −λGT|). Pairs (bλi, λj) follow the mode assignment. Because ϕk(t) evolves un-
+der a Neural ODE, we estimate continuous-time eigenvalues using a log-ratio estimator (Tu, 2013; Schmid,
+2010b; Kutz et al., 2016b):
+bλk(t) =
+1
+∆t Log
+ϕk(t + ∆t)
+ϕk(t)
+
+,
+bλk = mediant bλk(t),
+with a time-consistent branch choice. We then report the mean absolute complex difference.
+E.2. Quantitative results.
+Table 2 compares the proposed NODE–DMD and NDMD on mode agreement and spectral accuracy.
+Mode similarity. Our average cosine is 0.708 (per-mode 0.589, 0.811, 0.628, 0.807), while NDMD
+records 0.767 on average, reflecting very high alignment on three modes (0.999, 0.999, 0.996) and a lower
+value on one mode (0.074). Overall, NDMD attains a slightly higher per-mode cosine, whereas our method
+exhibits a more even alignment across modes. Since the cosine is computed per mode and is sensitive to
+18
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+Metric
+mode 0
+mode 1
+mode 2
+mode 3
+Avg.
+simcos( ˆW, WGT)NODE-DMD
+0.589
+0.811
+0.628
+0.807
+0.708
+simcos( ˆW, WGT)NDMD
+0.0741
+0.999
+0.999
+0.996
+0.7674
+|bλ −λGT|NODE-DMD
+0.060
+0.985
+1.248
+0.135
+0.607
+|bλ −λGT|NDMD
+0.266
+1.0198
+1.937
+3.8754
+1.7748
+λGT
+−0.01+2.0j
+−0.05+4.0j
+−0.20+1.0j
+−0.01+0.3j
+bλNODE-DMD
+−0.22+1.03j
+−0.03+2.75j
+−0.25+0.88j
+0.05+0.32j
+bλNDMD
+−0.002+0.033j
+0+0j
+−0+0.06j
+0.002+0.125j
+Table 2: Mode agreement and continuous-time eigenvalue errors. Cosine similarity is computed after
+permutation and per-mode phase alignment. Eigenvalue errors are absolute complex differences
+after optimal assignment.
+basis rotations within a shared subspace, these differences do not necessarily imply a gap in reconstruction
+quality.
+Eigenvalue accuracy. Our average absolute complex error is 0.607, compared to 1.775 for NDMD.
+NDMD’s estimates are closer to low/near-zero frequencies, yielding larger differences from the ground-truth
+spectrum. By contrast, our estimates preserve the overall ordering and scales of damping and frequency.
+Given that reconstructions follow y(t) = W ϕ(t) and long-horizon behavior is largely governed by spectral
+factors in ϕ(t) (phase and amplitude growth), these results suggest that, despite a slightly lower per-mode
+cosine, the improved spectral estimates of our method are particularly beneficial for stable, long-horizon
+evolution.
+Side note (fair comparison with NDMD). Neural DMD (NDMD) parameterizes one DC mode with
+eigenvalue 0+0j and r/2 complex-conjugate pairs. For real-field reconstruction it uses only the positive
+member with a factor 2 Re(·) (since z + z∗= 2 Re z). For a like-for-like comparison, we evaluate NDMD
+using the single DC mode and the three positive members of the conjugate pairs (the 2 Re(·) form is equiv-
+alent to summing both members). Eigenvalue metrics are computed on the positive-branch eigenvalues
+accordingly. We also note that the ground-truth decomposition includes a spatial DC component, which
+aligns well with NDMD’s dedicated DC mode; thus this setting is, if anything, slightly favorable to NDMD.
+Despite these architectural differences, this protocol is intended to keep the comparison as fair as possible.
+Appendix F. Resolution flexibility Experiment
+A key advantage of NODE–DMD is its grid-free formulation, which allows the model to reconstruct the full
+spatial field at arbitrary position without requiring retraining. To evaluate this, we compare NODE–DMD
+with NDMD (SaraerToosi et al., 2025) under low- and high-resolution reconstruction settings. For each
+task, we downsample the field to a (50 × 50) grid for the low-resolution experiment and upsample it to a
+(200 × 200) grid for the high-resolution experiment. All models are trained only on the original resolution
+data with 10% spatial sampling.
+19
+
+KIM DEAN
+Figure 5: Reconstruction results at the final time step for low-resolution (50×50) and high-resolution
+(200×200) grids for the Gray–Scott system (first row), Vorticity flow (second row), and Cylinder
+flow (third row). Visualizations are generated using NDMD and the 1-step NODE–DMD model.
+LOW RESOLUTION
+HIGH RESOLUTION
+Method
+NDMD
+NODE
+DMD(1)
+NODE
+DMD(m)
+NDMD
+NODE
+DMD(1)
+NODE
+DMD(m)
+GRAY–SCOTT
+0.0048(−2.0%)
+0.0047(+2.2%)
+0.0078(+2.6%)
+0.0047(−4.1%)
+0.0045(−2.2%)
+0.0075(−1.3%)
+VORTICITY FLOW
+0.0047(0%)
+0.0024(0%)
+0.0024(0%)
+0.0047(0%)
+0.0024(0%)
+0.0024(0%)
+CYLINDER FLOW
+0.0507(+8.6%)
+0.0064(−4.5%)
+0.0462(−2.3%)
+0.0530(+13.5%)
+0.0067(0%)
+0.0477(+0.8%)
+Table 3: L1 reconstruction error and its relative change under different spatial resolutions. NODE–DMD(1)
+and NODE–DMD(m) denote 1-step and m-step prediction variants, respectively.
+Percentage
+change is computed with respect to the original-resolution full-field reconstruction error reported
+in Table 1, where negative values indicate error reduction and positive values indicate error in-
+crease.
+20
+
+SPARSE-TO-FIELD RECONSTRUCTION VIASTOCHASTIC NEURAL DYNAMIC MODE DECOMPOSITION
+Figure 5 presents qualitative reconstruction results at the final time step for the three benchmark systems.
+Table 3 reports the average per-pixel L1error over the full temporal rollout for low and high resolutions,
+along with the percentage change relative to the original-resolution reconstruction error reported in Table 1.
+Negative percentages indicate error reduction, and positive values indicate error increase.
+Across all tasks, NODE–DMD exhibits consistently small positive changes in reconstruction error when
+the target resolution differs from the training resolution compared to NDMD. These results highlight the
+robustness of NODE–DMD to changes in grid density and demonstrate that its continuous implicit repre-
+sentation enables stable full-field reconstruction, independent of the resolution at which the field is queried.
+21

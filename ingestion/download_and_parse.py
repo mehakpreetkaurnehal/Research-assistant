@@ -7,6 +7,10 @@ import arxiv
 import fitz   # PyMuPDF
 from tqdm import tqdm
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 RAW_METADATA_CSV  = "data/raw/arxiv_metadata.csv"
 DOWNLOAD_FOLDER    = "data/raw/pdfs"
 PARSED_TEXT_FOLDER = "data/raw/fulltexts"
@@ -69,7 +73,7 @@ def main():
 
     for idx, row in tqdm(df.iterrows(), total=total, desc="Download & parse"):
         paper_id = str(row["id"])
-        print(f"\nProcessing {idx+1}/{total} → paper_id: {paper_id}")
+        print(f"\nProcessing {idx+1}/{total} -> paper_id: {paper_id}")
 
         search = arxiv.Search(id_list=[paper_id])
         results_gen = client.results(search)

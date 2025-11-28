@@ -7,6 +7,10 @@
 import os
 import pandas as pd
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 RAW_METADATA_CSV   = "data/raw/arxiv_metadata.csv"
 SUMMARY_TEXT_FOLDER= "data/raw/summaries"
 
@@ -27,7 +31,7 @@ def prepare_summary_files():
         # Write summary text
         with open(path, "w", encoding="utf-8") as f:
             f.write(summary)
-    print(f"✔ Written summaries for {len(df)} papers in {SUMMARY_TEXT_FOLDER}")
+    print(f" Written summaries for {len(df)} papers in {SUMMARY_TEXT_FOLDER}")
 
 if __name__ == "__main__":
     prepare_summary_files()

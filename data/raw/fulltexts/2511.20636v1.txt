@@ -1,0 +1,877 @@
+Image2Gcode: Image-to-G-code Generation for
+Additive Manufacturing Using
+Diffusion-Transformer Model
+Ziyue Wang,† Yayati Jadhav,‡ Peter Pak,‡ and Amir Barati Farimani∗,‡
+†Department of Materials Science and Engineering, Carnegie Mellon University,
+Pittsburgh, PA, USA
+‡Department of Mechanical Engineering, Carnegie Mellon University, Pittsburgh, PA, USA
+E-mail: barati@cmu.edu
+Abstract
+Mechanical design and manufacturing workflows conventionally begin with con-
+ceptual design, followed by the creation of a detailed computer-aided design (CAD)
+model and fabrication through material-extrusion (MEX) printing. This process re-
+quires converting CAD geometry into machine-readable G-code through slicing and
+path planning.
+While each step is well established, the dependence on CAD mod-
+eling remains a major bottleneck: constructing object-specific 3D geometry is slow,
+expertise-intensive, and poorly suited to rapid or ad hoc prototyping scenarios. Even
+minor design variations typically necessitate manual updates in CAD software, making
+iteration time-consuming, designer-dependent, and difficult to scale. To address this
+limitation, we introduce Image2Gcode, an end-to-end data-driven framework that by-
+passes the CAD stage and generates printer-ready G-code directly from images and part
+drawings. Instead of relying on an explicit 3D model, a hand-drawn or captured 2D
+image serves as the sole input. The framework first extracts slice-wise structural cues
+1
+arXiv:2511.20636v1  [cs.LG]  25 Nov 2025
+
+from the image and then employs a denoising diffusion probabilistic model (DDPM)
+over G-code sequences, parameterized by a one-dimensional convolutional network.
+Through iterative denoising, the model transforms Gaussian noise into coherent, exe-
+cutable print-move trajectories with corresponding extrusion parameters, establishing
+a direct and interpretable mapping from visual input to native toolpaths. By produc-
+ing structured G-code directly from 2D imagery, Image2Gcode eliminates the need for
+CAD or STL intermediates, lowering the entry barrier for additive manufacturing and
+accelerating the design-to-fabrication cycle. This approach supports low-overhead, on-
+demand prototyping from simple sketches or visual references and integrates naturally
+with upstream 2D-to-3D reconstruction modules to enable a fully automated pipeline
+from concept to physical artifact. The result is a flexible, computationally efficient
+framework that advances accessibility and responsiveness in design iteration, repair
+workflows, and distributed manufacturing contexts.
+Introduction
+Additive manufacturing (AM), commonly known as 3D printing, has democratized digital
+fabrication by enabling the direct conversion of virtual designs into physical co mponents
+through layer-by-layer material deposition.1 Unlike traditional subtractive methods that
+shape parts by removing material from solid stock, AM fabricates structures additively,
+achieving intricate geometries often unattainable through conventional techniques.2 This
+approach maximizes material efficiency while accelerating the design-to-production cycle,
+enabling rapid prototyping and the fabrication of complex, customized components.3 These
+advantages have driven widespread AM adoption across diverse application domains over
+the past decade, including healthcare,4–6 medical devices,7,8 aerospace,9 and numerous other
+industries.10–12
+Among various AM techniques, Material Extrusion (MEX) has emerged as the most
+widely adopted process due to its low equipment cost, operational simplicity, and compati-
+2
+
+bility with diverse thermoplastic materials.13,14 MEX operates by extruding heated thermo-
+plastic filament through a nozzle, depositing material layer-by-layer to construct parts from
+the bottom up. This accessibility has catalyzed the growth of open-source initiatives such as
+RepRap15,16 which have democratized 3D printing technology by enabling individuals, small
+businesses,17 and research laboratories18,19 to develop and customize hardware, significantly
+expanding both the applications and reach of additive manufacturing.20
+Despite these advances in hardware accessibility, the path from design concept to printed
+part remains constrained by a multi-stage workflow that demands specialized expertise at
+each step. The conventional AM pipeline begins with creating a 3D model in computer-
+aided design (CAD) software. This CAD model is then exported as a triangulated mesh file,
+which is subsequently processed by slicing software that divides the geometry into discrete
+horizontal layers. The slicer converts each layer into G-code, a low-level computer numerical
+control (CNC) programming language that specifies precise machine instructions for nozzle
+movement, material extrusion rates, and toolpath trajectories. These instructions are then
+transmitted directly to the 3D printer for physical fabrication.21,22 Each stage in this pipeline
+introduces significant barriers: CAD modeling requires technical proficiency and familiarity
+with complex software interfaces, mesh processing demands understanding of resolution and
+file format considerations,23 slicing necessitates knowledge of print parameters and process
+optimization,24–26 and iterative design refinement requires repeated cycles through the en-
+tire workflow.21,27 Compounding these challenges, most slicing tools remain fundamentally
+rule-based, with path planning and parameter configurations rigidly defined and lacking gen-
+eralizability across different machines, materials, or geometries.28 Parameter sets optimized
+for one specific printer or material often lead to inefficiency, defects, or even print failure
+when applied to different contexts.29 This friction between creative vision and physical re-
+alization presents a substantial challenge, particularly for users lacking CAD expertise or
+those seeking rapid prototyping capabilities.
+These constraints become particularly pronounced in applications demanding rapid turnaround
+3
+
+or on-demand responsiveness. The mandatory requirement for a valid 3D model fundamen-
+tally undermines MEX’s potential for quick, context-driven production, especially when tar-
+get geometries are simple or highly situational.30,31 In customized small-batch manufacturing,
+each new geometry necessitates complete workflow reconfiguration, creating throughput bot-
+tlenecks that severely limit scalability.32 Educational and research laboratory environments
+face similar challenges, where substantial time is spent on pre-processing activities (CAD
+modeling, file conversion, slicing configuration) than on the actual printing process itself.33
+These limitations collectively expose a critical paradox: the CAD-to-G-code workflow,
+despite its technical maturity and widespread adoption, has emerged as the primary barrier
+preventing MEX from achieving its potential as an agile, accessible, and user-responsive
+manufacturing technology due to its inherent dependence on upfront CAD modeling, rigid
+parameter selection, and repeated manual intervention. Addressing these fundamental lim-
+itations requires moving beyond the rigid, rule-based paradigm that currently defines the
+AM workflow.
+Deep learning has emerged as a transformative approach capable of overcoming such
+constraints, demonstrating remarkable success in domains ranging from computer vision and
+natural language processing to scientific computing.34,35 Unlike conventional methods that
+rely on manually designed heuristics and predefined parameter sets, deep learning leverages
+large-scale datasets and hierarchical neural architectures to automatically discover complex
+patterns and representations directly from data.36,37 Within the engineering design and man-
+ufacturing domains, deep learning has catalyzed a paradigm shift by enabling data-driven
+approaches to traditionally knowledge-intensive tasks. Deep learning has transformed me-
+chanical design from generating 3D CAD models.38,39
+Among deep learning approaches, generative models have garnered particular attention
+for their ability to synthesize novel designs and bypass traditional modeling workflows. Early
+generative architectures, notably Variational Autoencoders (VAEs)40 and Generative Ad-
+versarial Networks (GANs),41 demonstrated promising capabilities in learning complex data
+4
+
+distributions and generating new samples. VAEs employ an encoder-decoder architecture
+with probabilistic latent representations to generate diverse outputs, while GANs leverage
+adversarial training between generator and discriminator networks to produce high-fidelity
+samples.39,42 However, both architectures suffer from fundamental limitations that hinder
+their practical deployment in engineering applications. VAEs typically produce blurry, low-
+fidelity outputs due to their pixel-wise reconstruction losses and distributional assumptions,
+failing to capture fine geometric details critical for manufacturing.42,43 GANs, despite gen-
+erating sharper images, exhibit severe training instability, mode collapse where only limited
+design variations are produced, and lack of diversity in generated samples.42,43 Further-
+more, both architectures struggle with conditional generation tasks, provide limited control
+over specific design attributes, and require careful hyperparameter tuning that often fails to
+generalize across different design domains.39 These deficiencies significantly constrain their
+applicability to precision-critical manufacturing contexts where geometric accuracy, design
+diversity, and controllable generation are paramount requirements.
+To address these limitations, Denoising Diffusion Probabilistic Models (DDPMs) have
+emerged as a superior alternative, demonstrating remarkable capabilities in generating high-
+quality, diverse samples with stable training dynamics.44,45 Unlike VAEs and GANs, diffu-
+sion models operate through a fundamentally different paradigm in which they gradually
+add Gaussian noise from a tractable distribution to data through a forward diffusion pro-
+cess until the data becomes pure noise, then learn to reverse this process through iterative
+denoising steps that progressively recover the original data distribution.44 This iterative
+refinement mechanism allows diffusion models to capture fine-grained details and complex
+spatial relationships that single-pass generative approaches fail to resolve.43 Building on these
+advantages, DDPMs have recently been extended to the domain of three-dimensional geome-
+try generation, where they have shown promising results in synthesizing complex shapes and
+structures.46–48 These models have been successfully applied to tasks ranging from generating
+molecular conformations49 and protein structures50 to creating 3D print-ready mechanical
+5
+
+structures and lattice geometries.51
+However, despite their success in image generation, DDPMs face significant challenges
+when applied to 3D structure generation for manufacturing applications.
+The iterative
+denoising process that enables high-quality image synthesis becomes computationally pro-
+hibitive for volumetric representations, requiring hundreds to thousands of forward passes
+through the network for a single geometry.51 Moreover, standard diffusion formulations strug-
+gle to enforce geometric constraints such as structural connectivity, mechanical feasibility,
+and manufacturing tolerances that are critical for functional mechanical designs.52 The con-
+tinuous nature of diffusion processes also proves problematic for discrete geometric entities
+such as mesh connectivity and topological features, often resulting in artifacts or requiring
+post-processing steps that diminish the end-to-end learning.53
+Furthermore, conventional generative approaches typically output intermediate CAD rep-
+resentations that must still undergo separate slicing, path planning, and parameter optimiza-
+tion stages before becoming manufacturable, introducing cumulative errors and workflow
+complexity at each step.
+These limitations highlight the need for alternative paradigms
+that can more directly bridge the gap between design intent and executable manufacturing
+instructions.
+A particularly compelling direction is the use of deep learning to establish end-to-end
+learning frameworks for G-code generation. Rather than decomposing the workflow into iso-
+lated stages of slice, path planning, and parameter configuration, end-to-end models can be
+designed to bypass the CAD intermediate altogether, learning to map observable representa-
+tions directly to executable machine instructions.30,54 This approach exploits the strengths
+of data-driven modeling, where patterns of effective extrusion rates, nozzle trajectories, and
+infill strategies are not explicitly prescribed, but instead emerge from the training distribu-
+tion. The end-to-end paradigm reduces the cumulative errors introduced in intermediate
+steps, streamlines the workflow, and allows the system to optimize holistically for print
+quality, efficiency, and robustness.55
+6
+
+Hand Drawn 
+Object Photo
+Input
+…
+…
+Preprocessing
+Noise
+…
+DinoV2
+U-Net
+Generated 
+Toolpath
+3D Print
+DDPM
+a
+b
+c
+d
+e
+i
+iii
+ii
+Figure 1: Image2Gcode Overview. Our end-to-end framework generates printer-ready
+G-code toolpaths directly from visual inputs. (a) The system accepts object photographs
+and hand-drawn sketches. (b) Preprocessing extracts geometric boundaries from input im-
+ages. (c) A Denoising Diffusion Probabilistic Model (DDPM) comprises (i) a pre-trained
+DinoV2 vision encoder that extracts multi-scale semantic features, (ii) a 1D U-Net decoder
+conditioned on these features via cross-attention that progressively denoises sequences to gen-
+erate toolpaths, and (iii) Gaussian noise initialization during inference. (d) The predicted
+G-code defines continuous extrusion trajectories capturing geometry-specific infill patterns.
+(e) Physical parts fabricated via MEX.
+Motivated by these challenges, we introduce Image2Gcode, an end-to-end framework that
+circumvents CAD representation by directly mapping visual inputs to executable manufac-
+turing instructions. Our approach accepts diverse inputs including hand-drawn sketches and
+cross-sectional images, generating printer-ready material extrusion (MEX) toolpaths with-
+out intermediate 3D model reconstruction or conventional slicing operations. As show in
+Figure 1, our framework employs a Denoising Diffusion Probabilistic Model (DDPM) that
+integrates a pre-trained frozen DinoV256 vision encoder with a 1D U-Net decoder through
+multi-scale cross-attention. This design enables the U-Net to synthesize G-code sequences
+conditioned on hierarchical visual features extracted by DinoV2, progressively denoising from
+random initialization to coherent toolpaths. Critically, our data-driven formulation learns
+to predict the most probable infill patterns and extrusion strategies directly from observed
+manufacturing data rather than relying on hand-crafted heuristics. We demonstrate that
+7
+
+this direct image-to-instruction paradigm achieves practical viability for geometrically con-
+strained parts while significantly reducing computational overhead and workflow complexity
+compared to conventional CAD-dependent pipelines. The remainder of this paper details
+our methodology, experimental validation, and analysis of the framework’s capabilities and
+limitations.
+Methodology
+The Image2Gcode framework comprises three primary components: a preprocessing mod-
+ule that extracts geometric features and trajectory sequences from sliced layers, a denoising
+diffusion probabilistic model that generates toolpath sequences conditioned on visual fea-
+tures, and a post-processing module that converts the generated sequences into validated,
+printer-ready G-code instructions.
+Dataset and Preprocessing
+The Image2Gcode framework is trained and evaluated using the Slice-100K dataset, a multi-
+modal collection containing over 100,000 aligned STL-G-code pairs.57 Each training sample
+comprises a single rendered slice image paired with its corresponding layer toolpath repre-
+sented as trajectory keypoints, enabling supervised learning of the slice-to-toolpath mapping
+as illustrated in Figure 2.
+8
+
+Extrusion Rate
+Extrusion Rate
+Layer Slice 
+Tool Trajectory
+Trajectory Key Points
+Extrusion Rate
+Extrusion Rate
+Figure 2: Preprocessing pipeline. Visualization illustrating the extraction of slice-level
+training pairs. For each layer (left column), the corresponding G-code toolpath is visualized
+with complete trajectories (middle column) and extracted key points colored by normal-
+ized extrusion rate (right column).
+Point colors encode the normalized extrusion values
+E ∈[−1, 1], where darker values indicate higher material deposition rates. This representa-
+tion captures both spatial trajectory information through (X, Y ) coordinates and material
+deposition characteristics through the extrusion channel E.
+The preprocessing pipeline extracts individual layers from each mesh-gcode pair to con-
+struct slice-level training data. For each STL file, the corresponding G-code is parsed to
+9
+
+identify layer boundaries by detecting Z-axis changes in the toolpath. The parser detects
+coordinate system modes (e.g., G90/G91 for positioning, M82/M83 for extrusion) and converts
+all commands to a consistent absolute coordinate system. Motion commands G1 are retained
+to extract (X, Y, E) coordinates, where X and Y define the in-plane nozzle position and E
+specifies the cumulative extrusion amount. When extruder reset commands G92 are present,
+the cumulative extrusion offset is adjusted accordingly. Using the Z-coordinates extracted
+from the G-code, the corresponding STL mesh is sliced at identical heights using PyVista,
+ensuring precise alignment between each rendered slice image and its toolpath sequence.
+Each slice projected along the +Z axis to produce grayscale images at 224 × 224 resolution.
+For each layer, the extracted G-code forms an N × 3 sequence X0 = {(Xi, Yi, Ei)}N
+i=1
+representing the toolpath. Normalization is applied separately to the spatial and extrusion
+channels to account for their distinct geometric properties.
+The (X, Y ) coordinates are
+centered by the midpoint of the layer’s bounding box and scaled by the larger dimension to
+preserve aspect ratio, mapping both channels to [−1, 1]. The extrusion values E are first
+converted to absolute units and then normalized independently per layer using min-max
+scaling to [−1, 1]. This separate normalization strategy ensures that spatial geometry and
+material deposition are treated as distinct features during training. Sequences are padded
+or truncated to a fixed length Nmax with zeros, and a binary mask M ∈{0, 1}Nmax marks
+valid steps.
+This slice-based formulation decomposes 3D printing into independent 2D generation
+tasks, where the model learns to map cross-sectional geometry to toolpath keypoints on a
+per-layer basis. This strategy offers significant computational advantages, by operating on
+2D slice representations rather than full volumetric data substantially reduces memory re-
+quirements and inference time, treating each layer as an independent sample dramatically
+increases data efficiency during training, and the per-layer formulation naturally accommo-
+dates variable layer heights and heterogeneous geometric complexity throughout the build
+without additional architectural modifications.
+10
+
+Model Architecture
+…
+Conditioning Image
+Linear Projection 
+…
+<cls>
+Transformer 
+Encoder
+…
+MLP
+Norm
+Norm
+Self Attention
++
++
+QKV
+QKV
+QKV
+QKV
+Input Noise
+Generated Trajectory 
+Key Points
+DDPM Network 
+Conditioning 
+Network 
+Figure 3: Model Architecture. The framework consists of a conditioning network and
+DDPM denoising network. The conditioning network processes input slice images through
+linear projection and a frozen DinoV2 transformer encoder to extract multi-scale visual
+features.
+The DDPM network uses a 1D U-Net with cross-attention mechanisms (QKV
+blocks) that fuse these visual features with trajectory sequences at multiple scales. The
+transformer block detail (right) shows the standard architecture with normalization, self-
+attention, and MLP layers connected via residual connections.
+Slice Encoder
+The visual encoder employs DinoV2,58 a self-supervised vision foundation model with a
+Vision Transformer (ViT) backbone,59 to extract hierarchical geometric features from slice
+11
+
+images for conditioning the DDPM network. As illustrated in Figure 3, the input image is
+partitioned into fixed-size patches, with each patch linearly projected into a token embed-
+ding. Positional embeddings are added to preserve spatial information, and the resulting
+token sequence is processed by the transformer encoder to produce contextualized patch
+representations that capture both local geometric details and global structural relationships.
+DinoV2 was trained on 142 million curated images using a student-teacher framework with
+multi-crop augmentation and center-temperature regularization, yielding robust visual rep-
+resentations without task-specific supervision. Leveraging these pretrained features provides
+several advantages for toolpath generation. First, DinoV2’s representations inherently en-
+code geometric primitives, edge structures, and spatial relationships that are directly relevant
+to interpreting slice geometry. Second, the pretrained features generalize effectively to out-
+of-distribution slice geometries not encountered during pretraining. Third, transfer learning
+dramatically reduces data requirements and training time compared to learning visual rep-
+resentations from scratch on the relatively smaller Slice-100K dataset. The architecture uses
+the DinoV2-Small configuration with 14×14 patch size, 384-dimensional embeddings, and
+12 transformer layers. For 224×224 input images, this produces a 16×16 spatial grid of
+256 patch tokens that serve as multi-scale conditioning signals for the denoising network.
+The encoder is partially frozen during training, with only the final two transformer layers
+fine-tuned to adapt high-level features to the toolpath generation task while preserving the
+robust low-level geometric representations learned during pretraining.
+Denoising Diffusion Probabilistic Model
+The denoising diffusion probabilistic model serves as the generative core of the framework,
+learning to synthesize trajectory keypoints conditioned on the visual features extracted by
+the DinoV2 encoder. The model operates directly on the normalized keypoint representation
+˜X0 ∈RNmax×3, where each keypoint consists of (X, Y, E) coordinates. The input keypoint
+sequence is first embedded into a higher-dimensional feature space through a 1 × 1 convo-
+12
+
+lution that projects each three-dimensional coordinate to Cin = 128 channels. Unlike many
+sequence models, no explicit per-step positional encoding is applied to the keypoints, as or-
+dering information is inherently captured through the 1D convolutions, residual connections,
+and self-attention mechanisms within the U-Net backbone. The only sinusoidal embedding
+injected into the sequence pathway is the diffusion timestep t, which modulates all residual
+blocks to inform the network of the current noise level during the denoising process.
+The forward diffusion process follows the standard DDPM formulation, gradually cor-
+rupting the clean keypoints X0 with Gaussian noise over T = 500 timesteps according to
+q(Xt|X0) = N(√¯αtX0, (1 −¯αt)I), where ¯αt = Qt
+s=1 αs controls the noise schedule. Rather
+than predicting the noise term as in many diffusion implementations, the network directly
+reconstructs the clean keypoints X0 from their noisy observation Xt conditioned on slice fea-
+tures c. The training objective uses a masked L2 loss to account for variable-length keypoint
+sequences, defined as
+Ldiff = EX0,t,c
+"
+1
+P
+i Mi
+Nmax
+X
+i=1
+Mi
+X0,i −ˆXθ,i(Xt, t, c)
+
+2
+2
+#
+,
+(1)
+where c denotes the slice features from DinoV2, ˆXθ(Xt, t, c) represents the predicted clean
+keypoints conditioned on both the noisy input and visual features, and the binary mask
+M ∈{0, 1}Nmax excludes padded positions from the loss computation.
+The generator architecture is a 1D U-Net with input channels of 128 and channel mul-
+tipliers (2, 2, 4, 6, 8) across five resolution scales. Each stage comprises residual blocks with
+GroupNorm and SiLU activations, strided convolutions for spatial downsampling in the en-
+coder, and linear upsampling with skip connections in the decoder. The diffusion timestep
+t is encoded via sinusoidal positional encoding, passed through a small MLP, and injected
+into each residual block through affine modulation (FiLM conditioning). This architecture
+was selected after systematic comparison of multiple channel configurations during early
+development.
+13
+
+The conditioning mechanism operates through multi-scale cross-attention layers inte-
+grated at multiple depths of the U-Net, enabling hierarchical fusion between visual features
+and keypoint representations.
+At each cross-attention layer, the keypoint features serve
+as queries Q ∈RN×dq, while all P = 256 DinoV2 patch tokens provide keys and values
+K, V ∈RP×dk. The attention mechanism computes
+Attention(Q, K, V ) = softmax
+QK⊤
+√dh
+
+V,
+(2)
+with head dimension dh = 32.
+The number of attention heads scales with the channel
+width at deeper layers to maintain computational efficiency.
+This cross-attention design
+allows each keypoint in the sequence to attend to the entire spatial field of the slice image,
+injecting global geometric context while preserving the sequential structure through residual
+connections. Conditioning dropout is disabled to ensure deterministic alignment between
+visual features and generated keypoints during training.
+Post-Processing and G-code Generation
+During inference, the DDPM generates trajectory keypoints by starting from pure Gaussian
+noise and iteratively denoising over T = 500 steps using the same noise schedule as training.
+The model outputs a normalized keypoint sequence in the range [−1, 1] with shape [B, 3, L],
+where B is the batch size, 3 represents the (X, Y, E) channels, and L is the sequence length.
+A predicted binary mask identifies valid keypoints, allowing padded positions to be excluded
+from subsequent processing.
+The normalized representation provides significant flexibility for adapting generated tool-
+paths to different manufacturing contexts. Since the spatial coordinates (X, Y ) are normal-
+ized while preserving aspect ratio during preprocessing, the generated geometry can be
+uniformly scaled to arbitrary physical dimensions simply by adjusting the denormalization
+scale factor without requiring model retraining or affecting the structural integrity of the
+14
+
+toolpath. Similarly, the normalized extrusion channel E enables straightforward adaptation
+to different printer specifications. Extrusion parameters vary substantially across material
+extrusion systems due to differences in nozzle diameter, filament material properties, layer
+height settings, and extruder calibration. By storing the denormalization parameters sep-
+arately, the same generated keypoint sequence can be scaled by printer-specific extrusion
+multipliers to accommodate these hardware variations, effectively decoupling the learned
+geometric relationships from machine-dependent material deposition rates.
+The post-processing module performs denormalization using the cached parameters from
+preprocessing. The (X, Y ) coordinates are scaled by the layer bounding box dimensions and
+translated by the stored midpoint offset to restore physical positions in millimeters. The
+extrusion values E are denormalized using the cached min-max parameters and then option-
+ally scaled by an additional printer-specific multiplier to account for hardware characteris-
+tics. The denormalized keypoints are then formatted into standard G-code commands, with
+each keypoint (Xi, Yi, Ei) converted to a G1 linear motion command of the form G1 X{X i}
+Y{Y i} E{E i} F{feedrate}. The feedrate parameter is set based on the target printer’s
+recommended print speed. The sequence is prefixed with initialization commands includ-
+ing coordinate mode specification (G90 for absolute positioning, M82 for absolute extrusion),
+temperature settings, and homing procedures, while standard shutdown commands includ-
+ing retraction and motor disabling are appended at the end. Basic validation checks ensure
+coordinates remain within physical build limits and verify monotonic extrusion progression
+throughout the layer, producing a complete single-layer toolpath ready for manufacturing
+execution.
+Implementation
+The model is implemented in PyTorch and trained across multiple GPUs with a per-GPU
+batch size of 64.
+Training runs for 800 epochs using the AdamW optimizer with ini-
+tial learning rate 1 × 10−4 and weight decay 10−2.
+The learning rate is adjusted via
+15
+
+ReduceLROnPlateau scheduler monitoring validation loss with reduction factor 0.9, patience
+20 epochs, and minimum rate 10−8. Gradient clipping is applied for stability, while mixed
+precision training and gradient checkpointing are disabled.
+The diffusion model uses x0-prediction with a cosine noise schedule over T = 500
+timesteps. The reconstruction loss is mean squared error on (X, Y, E) channels with fixed
+weights [1.3, 1.3, 0.4] to account for their different physical scales, multiplied by SNR-based
+timestep weighting.
+Results and Discussion
+Input Slice
+Ground Truth Tool 
+Path
+Generated Tool 
+Path
+3D Print
+Figure 4: Generated samples. Qualitative results on validation samples from Slice-100K.
+For each geometry, the model generates structurally coherent toolpaths from input slice im-
+ages. Generated toolpaths (third column) demonstrate accurate boundary reproduction and
+learned infill pattern selection, with physical prints (rightmost column) validating manufac-
+turability and dimensional fidelity across diverse geometric primitives and infill strategies.
+16
+
+Generation Quality on Validation Data
+To evaluate generation capabilities, inference is performed on the held-out 10% validation
+split from Slice-100K. The model generates trajectory keypoints through iterative denoising
+over 500 timesteps, starting from pure Gaussian noise conditioned on input slice images.
+Figure 5 presents representative results showing the input slice, ground-truth toolpath, gen-
+erated toolpath, and corresponding physical print for each sample.
+The generated toolpaths demonstrate strong geometric fidelity with accurately captured
+boundary geometry, well-closed perimeters, and faithful reproduction of sharp corners and
+geometric transitions. The model successfully infers diverse infill strategies from the training
+distribution, including honeycomb cellular structures, rectilinear line fill, organic patterns,
+and diagonal hatching that adapt to specific boundary geometry. These structures exhibit
+logical spatial organization with consistent orientation and appropriate density, reflecting
+learned trade-offs between material efficiency and structural integrity.
+Physical fabrication validates the manufacturability of generated toolpaths. Printed parts
+maintain dimensional accuracy comparable to ground-truth designs with continuous surface
+quality and no layer delamination or severe under-extrusion. Minor discrepancies appear in
+high-curvature regions as slight variations in corner smoothing and local segment ordering,
+while occasional weaker bonding at perimeter-infill junctions suggests sensitivity to tran-
+sient extrusion dynamics. These artifacts do not significantly compromise overall structural
+integrity.
+The conditioning mechanism effectively bridges visual input and sequential generation,
+enabling the model to maintain global geometric constraints while selecting context-appropriate
+infill architectures without explicit rule-based programming. This demonstrates that the
+data-driven approach successfully learns the relationship between boundary geometry and
+manufacturable internal structures directly from observed examples.
+17
+
+Generalization to Real-World Inputs
+Input Image
+Pre-Processing
+Generated Tool 
+Path
+3D Print
+Figure 5: Generalization to real-world inputs:
+Photographs of physical objects (rows
+1-2) and hand-drawn sketches (rows 3-4).
+The preprocessing module extracts boundary
+geometry from raw images, enabling the model to generate manufacturable toolpaths despite
+significant distribution shift from synthetic training data. Physical prints validate successful
+generalization across diverse input modalities.
+To assess the model’s ability to generalize beyond synthetic training data, inference is per-
+formed on photographs of physical objects and hand-drawn sketches. These inputs represent
+significant distribution shifts from the rendered slice images in Slice-100K, testing the ro-
+bustness of the learned visual-to-toolpath mapping. Input images undergo preprocessing
+to extract boundary geometry through edge detection and contour extraction, producing
+binary silhouettes compatible with the model’s expected input format. Figure 5 presents
+results showing the original input, preprocessed boundary, generated toolpath, and corre-
+18
+
+sponding physical print.
+The model successfully generates manufacturable toolpaths from diverse real-world inputs
+including a photograph of a wooden bowl, a circular makeup compact, and hand-drawn
+sketches of geometric primitives. Despite the domain gap between photographic textures,
+lighting variations, hand-drawn irregularities, and the clean synthetic slices seen during
+training, the conditioning network extracts robust geometric features that enable coherent
+toolpath generation. The generated paths maintain well-defined perimeters that accurately
+follow the extracted boundaries while synthesizing contextually appropriate infill patterns
+including diagonal hatching and concentric shells.
+Physical fabrication demonstrates practical viability across all test cases. The printed
+parts exhibit dimensional fidelity to the input geometry with structurally sound infill that
+provides mechanical integrity. The bowl and circular geometries print successfully despite
+their non-polygonal boundaries, while the hand-drawn sketches translate into clean geometric
+parts despite imperfect input linework.
+This generalization capability suggests that the
+pretrained DinoV2 encoder provides sufficiently abstract geometric representations to bridge
+the domain gap between synthetic training data and real-world visual inputs, enabling direct
+image-to-manufacturing workflows without retraining or domain adaptation.
+19
+
+Novel Infill Pattern Generation
+Input
+Ground Truth Key Points 
+Generated Key Points 
+Ground Truth Tool Path
+Generated Truth Tool Path
+Overlap
+Figure 6: Novel infill pattern. Generation demonstrating diversity in the learned dis-
+tribution. Ground truth toolpaths (columns 2-3) employ concentric and spiral strategies,
+while generated toolpaths (columns 4-5) produce alternative valid patterns including diag-
+onal hatching and mixed infill architectures. The overlap visualization (column 6) shows
+ground truth in red and generated paths in green, revealing distinct topological approaches
+that achieve comparable spatial coverage.
+Toolpath generation is inherently a many-to-one mapping problem where multiple valid
+infill strategies can satisfy the same geometric boundary constraints. To evaluate whether
+the model learns a distribution of valid solutions rather than memorizing specific training
+examples, we analyze cases where generated toolpaths deviate substantially from ground
+truth while maintaining structural validity. Figure 6 presents comparative visualizations
+showing input geometry, ground truth keypoints and toolpath, generated keypoints and
+toolpath, and spatial overlap between the two strategies.
+The results demonstrate that the model generates structurally coherent infill patterns
+that differ significantly from the ground truth training examples. For the circular geometry
+(row 1), the ground truth exhibits a concentric spiral pattern originating from the center,
+while the model generates a diagonal rectilinear hatching pattern with perimeter shells.
+For the C-shaped geometry (row 2), the ground truth uses concentric shells following the
+boundary curvature, whereas the generated toolpath employs a mixed strategy with diagonal
+infill and boundary-conforming perimeters. Despite these topological differences, both gen-
+20
+
+erated strategies produce manufacturable toolpaths with appropriate perimeter definition
+and space-filling infill coverage.
+The overlap visualization (rightmost column) reveals that while the spatial trajectories
+differ substantially in local path geometry, both strategies achieve comparable material de-
+position coverage within the boundary constraints. This behavior indicates that the diffusion
+model has learned the underlying geometric and manufacturing constraints rather than sim-
+ply memorizing specific toolpath sequences from the training data. The ability to generate
+diverse valid solutions suggests the model captures a distribution over feasible infill strategies
+conditioned on boundary geometry, enabling adaptive pattern selection based on the learned
+trade-offs between printing efficiency, structural integrity, and geometric constraints present
+in the training distribution.
+21
+
+Travel Distance Analysis
+Ground Truth Travel Distance 
+Mean Predicted Travel Distance
+95% Confidence bands
+Figure 7: Reduction in travel distance. Kernel density estimation of travel distances
+comparing ground truth from heuristic slicers (dashed black) versus model predictions (solid
+blue) averaged across three independent runs. The predicted distribution shows a statisti-
+cally significant 2.40% reduction in mean travel distance while maintaining distributional
+alignment, indicating learned path efficiency. The narrow 95% bootstrap confidence band
+demonstrates high generation consistency.
+To quantitatively assess toolpath efficiency, we analyze the distribution of total travel dis-
+tances across validation samples. Travel distance represents the cumulative length of all
+nozzle movements during layer fabrication, encoding information about perimeter tracing,
+infill density, and path planning efficiency. Figure 7 presents kernel density estimates com-
+paring ground truth travel distances from the Slice-100K dataset (generated by heuristic
+slicing algorithms) against mean predictions averaged across three independent generation
+runs, with 95% bootstrap confidence intervals.
+The distributions exhibit strong alignment with near-identical shapes and tail behavior,
+both peaking around 350-400 units. However, statistical analysis reveals a consistent left-
+ward shift in the predicted distribution. The mean predicted travel distance is 417.73 units
+22
+
+compared to 427.98 units for ground truth, representing a 2.40% reduction. The narrow
+bootstrap confidence band indicates high reproducibility across independent runs, demon-
+strating that this reduction is consistent rather than stochastic.
+This reduction suggests that the data-driven approach learns to generate more compact
+toolpath patterns while maintaining spatial coverage requirements. Since the model was
+trained on heuristic slicing outputs, the observed efficiency gain indicates the diffusion pro-
+cess captures underlying geometric regularities in the training distribution and synthesizes
+paths that achieve comparable coverage with reduced redundancy. The slight broadening of
+the predicted distribution relative to ground truth reflects the stochastic nature of diffusion
+sampling, which explores multiple valid solutions within the learned manifold.
+Critically, successful physical fabrication of all generated toolpaths (as demonstrated in
+Figures 4 and 5) validates that this distance reduction does not compromise manufactura-
+bility, structural integrity, or geometric fidelity. The generated parts exhibit no evidence of
+insufficient coverage, weak bonding zones, or structural defects that might arise from overly
+aggressive path simplification. However, comprehensive mechanical testing would be required
+to fully characterize whether reduced travel distance translates to equivalent or improved
+structural performance compared to heuristic baselines. The observed efficiency represents a
+promising direction for data-driven toolpath optimization, suggesting that learned generative
+models can discover compact path planning strategies directly from manufacturing data.
+Limitations and Future Work
+The current framework operates exclusively on 2D slice representations, limiting its applica-
+tion to geometries with constant or slowly varying cross-sections along the build direction.
+This slice-based formulation cannot directly handle complex 3D geometries with significant
+topological changes between layers, intricate internal cavities, or features requiring globally
+coordinated toolpath planning across multiple layers. Additionally, accuracy varies under
+elevated geometric complexity and fine-scale features, with measurable deviations arising
+23
+
+from limited dataset diversity, computational constraints on model capacity, and the ab-
+sence of explicit volumetric context that would inform interlayer relationships and global
+path consistency.
+Future work will address these limitations through expanded data coverage, enhanced
+modeling capacity, and architectural extensions toward full 3D awareness. A hierarchical
+generation pipeline offers a promising direction wherein a coarse-level model first generates
+key cross-sections at critical Z-heights for a target 3D geometry, followed by the current slice-
+to-toolpath model operating on each layer independently. This decomposition would enable
+true 3D object fabrication while leveraging the computational efficiency of 2D generation at
+the layer level.
+Extending conditioning mechanisms represents another critical avenue for improvement.
+Incorporating explicit control over infill density, pattern type, material budget constraints,
+and mechanical performance requirements would enable task-specific toolpath optimization.
+Such conditioning could be implemented through additional input channels or learned em-
+beddings that modulate the diffusion process. Furthermore, integrating multiview or depth
+information during conditioning, or adopting volumetric representations for the generative
+model itself, would provide explicit 3D spatial context to improve cross-layer coherence and
+enable more sophisticated path planning strategies. These extensions would enhance both
+the geometric fidelity and manufacturing versatility of the framework while maintaining the
+data-driven flexibility demonstrated in the current 2D implementation.
+Conclusion
+This work presents Image2Gcode, an end-to-end framework that generates printer-ready
+toolpaths directly from visual inputs without requiring intermediate CAD representations
+or rule-based slicing. By leveraging a denoising diffusion probabilistic model conditioned on
+pretrained visual features from DinoV2, the framework learns to synthesize manufacturable
+24
+
+trajectory keypoints that capture both geometric boundary constraints and contextually
+appropriate infill strategies directly from observed manufacturing data. The slice-based for-
+mulation decomposes 3D printing into independent 2D generation tasks, reducing computa-
+tional overhead while maintaining flexibility for variable layer heights and diverse geometric
+complexity. Experimental results demonstrate robust generalization from synthetic training
+data to real-world photographs and hand-drawn sketches, with physical fabrication validat-
+ing the structural integrity and dimensional accuracy of generated toolpaths.
+The proposed framework enables several practical use cases in rapid manufacturing work-
+flows. For design iteration and prototyping, users can generate physical parts directly from
+concept sketches or reference photographs without CAD modeling expertise, significantly
+reducing the barrier to entry for additive manufacturing. In educational contexts, the direct
+image-to-part pipeline provides an intuitive interface for learning manufacturing principles
+without the overhead of traditional CAD-CAM toolchains. The normalized representation
+allows seamless adaptation to different printer configurations and material systems through
+simple scaling of spatial and extrusion parameters, facilitating deployment across heteroge-
+neous manufacturing environments.
+A particularly promising direction involves integration with autonomous manufacturing
+frameworks such as LLM-3D Print,24 which employs multi-agent LLM systems for defect de-
+tection, process monitoring, and adaptive parameter control in additive manufacturing. The
+current Image2Gcode framework generates toolpaths based solely on geometric condition-
+ing, but incorporating natural language interfaces through LLMs would enable higher-level
+reasoning about manufacturing objectives. For instance, an LLM agent could interpret user
+specifications such as “optimize for minimum print time while maintaining 80% infill densit”
+or “prioritize surface finish on top layer” and translate these objectives into conditioning sig-
+nals for the diffusion model. This could be implemented through learned embeddings that
+modulate the denoising process based on LLM-extracted manufacturing intent, or through
+iterative refinement where LLM agents evaluate generated toolpaths and provide feedback
+25
+
+for regeneration. Such integration would bridge the gap between human design intent, auto-
+mated visual-to-toolpath generation, and process-level optimization, creating a comprehen-
+sive AI-driven manufacturing pipeline from concept to fabrication.
+Future extensions toward full 3D awareness, explicit process parameter conditioning,
+and tighter integration with multi-agent manufacturing systems will further enhance the
+framework’s versatility and robustness, advancing the vision of accessible, intelligent, and
+adaptive additive manufacturing workflows.
+−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−−
+References
+(1) Yadroitsev, I.; Yadroitsava, I.; Du Plessis, A.; MacDonald, E. Fundamentals of laser
+powder bed fusion of metals; Elsevier, 2021.
+(2) Faludi, J.; Bayley, C.; Bhogal, S.; Iribarne, M. Comparing environmental impacts of
+additive manufacturing vs traditional machining via life-cycle assessment. Rapid Pro-
+totyping Journal 2015, 21, 14–33.
+(3) Jin, Z.; Zhang, Z.; Demir, K.; Gu, G. X. Machine learning for advanced additive man-
+ufacturing. Matter 2020, 3, 1541–1556.
+(4) Buj-Corral, I.; Tejo-Otero, A.; Fenollosa-Art´es, F. Use of FDM technology in healthcare
+applications: recent advances. Fused Deposition Modeling Based 3D Printing 2021,
+277–297.
+(5) Giannatsis, J.; Dedoussis, V. Additive fabrication technologies applied to medicine and
+health care: a review. The International Journal of Advanced Manufacturing Technology
+2009, 40, 116–127.
+26
+
+(6) Amaya-Rivas, J. L.; Perero, B. S.; Helguero, C. G.; Hurel, J. L.; Peralta, J. M.; Flo-
+res, F. A.; Alvarado, J. D. Future trends of additive manufacturing in medical applica-
+tions: An overview. Heliyon 2024, 10, e26641.
+(7) da Silva, L. R. R.; Sales, W. F.; Campos, F. d. A. R.; de Sousa, J. A. G.; Davis, R.;
+Singh, A.; Coelho, R. T.; Borgohain, B. A comprehensive review on additive manufac-
+turing of medical devices. Progress in Additive Manufacturing 2021, 6, 517–553.
+(8) Haghiashtiani, G.; Qiu, K.; Zhingre Sanchez, J. D.; Fuenning, Z. J.; Nair, P.;
+Ahlberg, S. E.; Iaizzo, P. A.; McAlpine, M. C. 3D printed patient-specific aortic
+root models with internal sensors for minimally invasive applications. Science advances
+2020, 6, eabb4641.
+(9) Najmon, J. C.; Raeisi, S.; Tovar, A. Review of additive manufacturing technologies
+and applications in the aerospace industry. Additive manufacturing for the aerospace
+industry 2019, 7–31.
+(10) Lacroix, R.; Timonina-Farkas, A.; Seifert, R. W. Utilizing additive manufacturing and
+mass customization under capacity constraints. Journal of Intelligent Manufacturing
+2023, 34, 281–301.
+(11) Stano, G.; Percoco, G. Additive manufacturing aimed to soft robots fabrication: A
+review. Extreme Mechanics Letters 2021, 42, 101079.
+(12) O’Neill, P. F.; Ben Azouz, A.; Vazquez, M.; Liu, J.; Marczak, S.; Slouka, Z.;
+Chang, H. C.; Diamond, D.; Brabazon, D. Advances in three-dimensional rapid proto-
+typing of microfluidic devices for biological applications. Biomicrofluidics 2014, 8.
+(13) Sapkota, A.; Ghimire, S. K.; Adanur, S. A review on fused deposition modeling (FDM)-
+based additive manufacturing (AM) methods, materials and applications for flexible
+fabric structures. Journal of Industrial Textiles 2024, 54, 1–51.
+27
+
+(14) Gibson, I.; Rosen, D. W.; Stucker, B.; Khorasani, M.; Rosen, D.; Stucker, B.; Kho-
+rasani, M. Additive manufacturing technologies; Springer, 2021; Vol. 17.
+(15) Sells, E.; Bailard, S.; Smith, Z.; Bowyer, A.; Olliver, V. Handbook of Research in Mass
+Customization and Personalization: (In 2 Volumes); World Scientific, 2010; pp 568–
+580.
+(16) Jones, R.; Haufe, P.; Sells, E.; Iravani, P.; Olliver, V.; Palmer, C.; Bowyer, A. RepRap–
+the replicating rapid prototyper. Robotica 2011, 29, 177–191.
+(17) Laplume, A.; Anzalone, G. C.; Pearce, J. M. Open-source, self-replicating 3-D printer
+factory for small-business manufacturing. The International Journal of Advanced Man-
+ufacturing Technology 2016, 85, 633–642.
+(18) Pearce, J. M. Building research equipment with free, open-source hardware. Science
+2012, 337, 1303–1304.
+(19) Pearce, J. M. Open-source lab: how to build your own hardware and reduce research
+costs; Newnes, 2013.
+(20) Staribratov, I.; Manolova, N. 3D technologies in STEAM education. Discover Education
+2024, 3, 92.
+(21) Pamidi, A. S.; Spano, M. B.; Weiss, G. A. A practical guide to 3D printing for chemistry
+and biology laboratories. Current Protocols 2024, 4, e70036.
+(22) Montalti, A.; Ferretti, P.; Santi, G. M. From CAD to G-code: Strategies to minimizing
+errors in 3D printing process. CIRP Journal of Manufacturing Science and Technology
+2024, 55, 62–70.
+(23) Chen, K. J.; Elkaseer, A.; Scholz, S. G.; Hagenmeyer, V. On the correlation between
+pre-processing workflow and dimensional accuracy of 3D printed parts in high-precision
+Material Jetting. Additive Manufacturing 2024, 91, 104335.
+28
+
+(24) Jadhav, Y.; Pak, P.; Farimani, A. B. Llm-3D print: large language models to monitor
+and control 3D printing. arXiv preprint arXiv:2408.14307 2024,
+(25) Vyavahare, S.; et al. Fused deposition modelling: a review. Rapid Prototyping Journal
+2020, 26, 176–201.
+(26) Kristiawan, R. B.; Imaduddin, F.; Ariawan, D.; Ubaidillah; Arifin, Z. A review on the
+fused deposition modeling (FDM) 3D printing: Filament processing, materials, and
+printing parameters. Open Engineering 2021, 11, 639–649.
+(27) Macdonald, E.; Salas, R.; Espalin, D.; Perez, M.; Aguilera, E.; Muse, D.; Wicker, R. B.
+3D printing for the rapid prototyping of structural electronics. IEEE access 2014, 2,
+234–242.
+(28) Jin, Y.; He, Y.; Fu, G.; Qiu, J. A parallel-based path generation method for fused
+deposition modeling. The International Journal of Advanced Manufacturing Technology
+2015, 77, 927–937.
+(29) Aruanno, B.; Paoli, A.; Razionale, A. V.; Tamburrino, F. Effect of printing parameters
+on extrusion-based additive manufacturing using highly filled CuSn12 filament. The
+International Journal of Advanced Manufacturing Technology 2023, 128, 1101–1114.
+(30) Panico, A.; Corvi, A.; Collini, L.; Sciancalepore, C. Multi-objective optimization of
+FDM 3D printing parameters set via design of experiments and machine learning algo-
+rithms. Scientific Reports 2025, 15, 16753.
+(31) Kartal, F.; et al. Mechanical performance optimization in FFF 3D printing using
+Taguchi design and machine learning approach with PLA/walnut shell composite. Jour-
+nal of Vinyl and Additive Technology 2025, 31, 622–638.
+(32) Daminabo, S. C.; Goel, S.; Grammatikos, S. A.; Yazdani Nezhad, H.; Thakur, V. K.
+29
+
+Fused deposition modeling-based additive manufacturing (3D printing): techniques for
+polymer material systems. Materials Today Chemistry 2020, 16, 100248.
+(33) Nath, P.; Olson, J. D.; Mahadevan, S.; Lee, Y.-T. T. Optimization of fused filament
+fabrication process parameters under uncertainty to maximize part geometry accuracy.
+Additive Manufacturing 2020, 35, 101331.
+(34) LeCun, Y.; Bengio, Y.; Hinton, G. Deep learning. Nature 2015, 521, 436–444.
+(35) Schmidhuber, J. Deep learning in neural networks: An overview. Neural Networks
+2015, 61, 85–117.
+(36) Silver, D. et al. Mastering the game of Go without human knowledge. Nature 2017,
+550, 354–359.
+(37) Brown, T. B. et al. Language Models are Few-Shot Learners. Advances in Neural In-
+formation Processing Systems 2020, 33, 1877–1901.
+(38) Koch, S.; Matveev, A.; Jiang, Z.; Williams, F.; Artemov, A.; Burnaev, E.; Alexa, M.;
+Zorin, D.; Panozzo, D. ABC: A Big CAD Model Dataset for Geometric Deep Learning.
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recogni-
+tion (CVPR). 2019; pp 9593–9603.
+(39) Regenwetter, L.; Srivastava, A.; Gutfreund, D.; Ahmed, F. Beyond Statistical Similar-
+ity: Rethinking Metrics for Deep Generative Models in Engineering Design. Computer-
+Aided Design 2023, 165, 103609.
+(40) Kingma, D. P.; Welling, M. Auto-Encoding Variational Bayes. Proceedings of the 2nd
+International Conference on Learning Representations (ICLR). 2014.
+(41) Goodfellow, I. J.; Pouget-Abadie, J.; Mirza, M.; Xu, B.; Warde-Farley, D.; Ozair, S.;
+Courville, A.; Bengio, Y. Generative Adversarial Networks. Advances in Neural Infor-
+mation Processing Systems (NeurIPS). 2014.
+30
+
+(42) Bond-Taylor, S.; Leach, A.; Long, Y.; Willcocks, C. G. Deep Generative Modelling:
+A Comparative Review of VAEs, GANs, Normalizing Flows, Energy-Based and Au-
+toregressive Models. IEEE Transactions on Pattern Analysis and Machine Intelligence
+2022, 44, 7327–7347.
+(43) Yang, B.; Liu, Y.; Li, W.; Lan, S.; Dou, L.; Zhu, X.; Li, Q.; Nan, C.-W.; Lin, Y.-H.
+Balancing Polarization and Breakdown for High Capacitive Energy Storage by Mi-
+crostructure Design. Advanced Materials 2024, 36, e2403400.
+(44) Ho, J.; Jain, A.; Abbeel, P. Denoising Diffusion Probabilistic Models. arXiv preprint
+arXiv:2006.11239 2020,
+(45) Song, J.; Meng, C.; Ermon, S. Denoising Diffusion Implicit Models. arXiv preprint
+arXiv:2010.02502 2020,
+(46) Luo, S.; Hu, W. Diffusion probabilistic models for 3d point cloud generation. Proceed-
+ings of the IEEE/CVF conference on computer vision and pattern recognition. 2021;
+pp 2837–2845.
+(47) Li, X.; Wang, H.; Tseng, K.-K. Gaussiandiffusion: 3d gaussian splatting for denoising
+diffusion probabilistic models with structured noise. arXiv preprint arXiv:2311.11221
+2023,
+(48) Liu, Z.; Feng, Y.; Black, M. J.; Nowrouzezahrai, D.; Paull, L.; Liu, W. Meshdiffusion:
+Score-based generative 3d mesh modeling. arXiv preprint arXiv:2303.08133 2023,
+(49) Zhang, W.; Wang, X.; Smith, J.; Eaton, J.; Rees, B.; Gu, Q. Diffmol: 3d structured
+molecule generation with discrete denoising diffusion probabilistic models. ICML 2023
+Workshop on Structured Probabilistic Inference {\&} Generative Modeling. 2023.
+(50) Yim, J.; St¨ark, H.; Corso, G.; Jing, B.; Barzilay, R.; Jaakkola, T. S. Diffusion mod-
+31
+
+els in protein structure and docking. Wiley Interdisciplinary Reviews: Computational
+Molecular Science 2024, 14, e1711.
+(51) Jadhav, Y.; Berthel, J.; Hu, C.; Panat, R.; Beuth, J.; Barati Farimani, A. Generative
+lattice units with 3d diffusion for inverse design: Glu3d. Advanced Functional Materials
+2024, 34, 2404165.
+(52) Zhang, J.; Chen, S.; Martin, R. J.; Liu, B.; Zhang, R.; Xiao, D. Conditional diffusion
+models for the inverse design of lattice structures. Structural and Multidisciplinary
+Optimization 2025, 68, 58.
+(53) Wang, C.; Peng, H.-Y.; Liu, Y.-T.; Gu, J.; Hu, S.-M. Diffusion models for 3D generation:
+A survey. Computational Visual Media 2025, 11, 1–28.
+(54) Liu, Y.; Li, Y.; Cao, J. Deep learning in additive manufacturing: From monitoring to
+design. npj Computational Materials 2023, 9, 15.
+(55) Feng, Q.; Maier, W.; M¨ohring, H. Application of machine learning to optimize process
+parameters in fused deposition modeling of PEEK material. Procedia CIRP 2022, 107,
+1–8.
+(56) Oquab, M.; Darcet, T.; Moutakanni, T.; Vo, H.; Szafraniec, M.; Khalidov, V.; Fernan-
+dez, P.; Haziza, D.; Massa, F.; El-Nouby, A.; others Dinov2: Learning robust visual
+features without supervision. arXiv preprint arXiv:2304.07193 2023,
+(57) Jignasu, A.; Marshall, K. O.; Mishra, A. K.; Rillo, L. N.; Ganapathysubrama-
+nian, B.; Balu, A.; Hegde, C.; Krishnamurthy, A. Slice-100K: A Multimodal Dataset
+for Extrusion-based 3D Printing. 2024.
+(58) Oquab, M.; Darcet, T.; Moutakanni, T.; others DINOv2: Learning Robust Visual
+Features without Supervision. arXiv preprint arXiv:2304.07193 2023,
+32
+
+(59) Dosovitskiy, A. An image is worth 16x16 words: Transformers for image recognition at
+scale. arXiv preprint arXiv:2010.11929 2020,
+33

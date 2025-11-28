@@ -1,0 +1,1781 @@
+Flash-DMD: Towards High-Fidelity Few-Step Image Generation with Efficient
+Distillation and Joint Reinforcement Learning
+Guanjie Chen1,2*
+Shirui Huang2*
+Kai Liu2
+Jianchen Zhu2
+Xiaoye Qu3
+Peng Chen2
+Yu Cheng4†
+Yifu Sun2†
+1Shanghai Jiao Tong University
+2Tencent
+3Huazhong University of Science and Technology
+4The Chinese University of Hong Kong
+chenguanjie@sjtu.edu.cn
+yifusun@tencent.com
+Figure 1. Samples from 4-step Flash-DMD on SDXL and SD3-Medium. Flash-DMD takes less than 3% training cost of DMD2 [52].
+Abstract
+Diffusion Models have emerged as a leading class of gen-
+erative models, yet their iterative sampling process re-
+mains computationally expensive. Timestep distillation is
+a promising technique to accelerate generation, but it of-
+ten requires extensive training and leads to image quality
+degradation. Furthermore, fine-tuning these distilled mod-
+els for specific objectives, such as aesthetic appeal or user
+preference, using Reinforcement Learning (RL) is notori-
+ously unstable and easily falls into reward hacking.
+In
+*Equal Contribution.
+†Corresponding Authors.
+this work, we introduce Flash-DMD, a novel framework
+that enables fast convergence with distillation and joint
+RL-based refinement. Specifically, we first propose an ef-
+ficient timestep-aware distillation strategy that significantly
+reduces training cost with enhanced realism, outperforming
+DMD2 with only 2.1% its training cost. Second, we intro-
+duce a joint training scheme where the model is fine-tuned
+with an RL objective while the timestep distillation train-
+ing continues simultaneously. We demonstrate that the sta-
+ble, well-defined loss from the ongoing distillation acts as
+a powerful regularizer, effectively stabilizing the RL train-
+ing process and preventing policy collapse. Extensive ex-
+periments on score-based and flow matching models show
+1
+arXiv:2511.20549v1  [cs.CV]  25 Nov 2025
+
+that our proposed Flash-DMD not only converges signif-
+icantly faster but also achieves state-of-the-art generation
+quality in the few-step sampling regime, outperforming ex-
+isting methods in visual quality, human preference, and text-
+image alignment metrics. Our work presents an effective
+paradigm for training efficient, high-fidelity, and stable gen-
+erative models. Codes are coming soon.
+1. Introduction
+Diffusion models [8, 12, 16, 33, 37] have demonstrated
+remarkable success in text-to-image generation in recent
+years. Numerous iterative denoising steps poses a signif-
+icant obstacle to real-time or resource-constrained deploy-
+ment. To address this issue, various diffusion distillation
+techniques have been developed to distill multi-step teacher
+diffusion models into efficient student models that can pro-
+duce comparable image quality in just one or a few infer-
+ence steps [3, 10, 23, 26, 27, 45, 52, 53]. However, most ex-
+isting distillation methods require thousands of GPU hours
+for training. This significantly limits its accessibility to re-
+search groups and institutions with limited resources, and
+hinders rapid deployment in practical applications.
+Among existing distillation methods, Distribution Match-
+ing Distillation (DMD) methods [10, 26, 52, 53] stand out
+for their superior generative quality, leveraging variational
+score distillation objectives [54] to align the output distribu-
+tions of student and teacher models. However, this objective
+function suffers from unstable training and a tendency to
+mode seeking. Some approaches have employed adversar-
+ial methods to mitigate these problems. DMD2 [52] pro-
+poses latent adversarial regulations with real images and
+designs a Two-Time scale Update Rule (TTUR) to stabi-
+lize training, but it combines the GAN [40, 41] framework
+with DMD in a naive manner, neglecting the timestep aware
+feature of timestep distilled diffusion models, and the fake
+score µfake is trained both to discriminate real and gener-
+ated images, but also to track the distribution changes of
+student models. These design compromises its efficiency in
+matching the distribution of teacher models. Furthermore,
+DM loss is inefficient in the latter part of distillation as it
+is hard to guide detailed learning, preventing it from effec-
+tively guiding the student diffusion model. These observa-
+tions motivate our core research questions:
+Q1 In the early phase, how can we more effectively
+coordinate distribution matching with perceptual re-
+alism enhancement to accelerate convergence?
+Q2 In the later phase, how can we more effectively
+refine the student model for better visual details and
+perceptual fidelity in a direct way?
+To address the inefficiencies of the distribution matching
+methods, we proposed Flash-DMD, a twofold method in
+the few-step distillation task that outperforms DMD2 with
+a much smaller training cost, while achieving superior per-
+ceptual realism. Specifically, our Flash-DMD follows dif-
+ferent principles in the early and later generation phases.
+In the early phase, as the denoising performance at differ-
+ent timesteps varies, the distillation target should also differ.
+To this end, we decouple the adversarial training and distri-
+bution matching frameworks with timestep aware strategy.
+Specifically, at high-noise timesteps, the denoising model’s
+primary objective is to learn global composition and struc-
+ture from the teacher. Considering DM loss is effective to
+process noisy latents, we use a pure DM loss to align the
+student model with the teacher model’s output distribution.
+At low-noise timesteps, the model focuses on refining fine-
+grained details and enhancing perceptual realism. Thus, we
+use Pixel-GAN to match the distribution of real images and
+improve the photorealism of the generated images. In the
+later phase, we further optimize generation quality to align
+with human preferences. Previous reinforcement learning
+works on few-step distilled models [30, 36] suffer from the
+reward hacking phenomenon, which produces “oil paint-
+ing” artifacts. We combine the Distillation framework with
+latent reinforcement learning designed especially for few-
+step models to refine the their handling of fine-grained de-
+tails efficiently. The framework can effectively alleviating
+reward hacking problem.
+By combining faster convergence in the early phase with
+joint finer optimization in the latter phase, we demonstrate
+the efficiency and superior performance of our method of
+distilling from SDXL to produce high-quality, realistic im-
+ages. In particular, our method achieves the highest human
+preference scores while requiring the lowest training cost in
+DMD series methods to date.
+To summarize, our main contributions are threefold:
+• At the first stage, we decouple the training objectives of
+Distribution Matching series via a timestep-aware strat-
+egy to efficiently distill the fundamental distribution of
+the teacher model in low-SNR timesteps and refine per-
+ceptual quality and texture in high-SNR timesteps, and
+we counteract the mode-seeking of the DM loss with
+Pixel-GAN that robustly enhances realism. We also im-
+prove the score estimator for fastest convergence and sta-
+bilized distillation. In this stage, we achieve the best per-
+formance with only 2.1% training cost of DMD2.
+• At the next stage, we design reinforcement learning
+specifically for the distilled model and integrate it into the
+distillation process. These innovations eliminate the need
+for separate reinforcement and distillation phases, signif-
+icantly reducing computational training costs, avoiding
+reward-hacking and achieving the best fine-grained de-
+tails and perceptual fidelity in few steps of generation.
+• By combining stages 1 and 2, we propose Flash-DMD.
+Extensive experiments demonstrate that our method
+2
+
+Figure 2. Overview of our proposed Flash-DMD. We decouple the distillation objective by timestep into a Diffusion Matching loss and an
+adversarial loss. During high-noise timesteps, the DMD loss enables rapid alignment with the teacher model, while at low-noise timesteps
+and on real images, Pixel-GAN loss is employed to enhance realism and texture details. This design achieves a more efficient distillation.
+Building upon this, we further introduce a reinforcement strategy specifically tailored for few-step distilled models, which seamlessly
+integrates with the distillation objective to achieve superior and more stable performance.
+achieves superior performance compared to both the
+teacher model and baseline in terms of image quality, hu-
+man preference, and text-image alignment metrics. Our
+method exhibits strong generalization ability on both
+score-based diffusion and flow matching models.
+2. Related Work
+Diffusion Models.
+Diffusion models[5, 12, 32, 37, 43]
+are a powerful family of generative models that have
+demonstrated state-of-the-art performance across diverse
+generative tasks. In text-to-image task, diffusion models
+operate through two primary stages: a forward process and
+a reverse process. The forward process disturbs the real im-
+age x0 ∼Preal with noise ϵ ∼N(0, I) by a stochastic
+equation, at each timestep t ∈{1 . . . T}:
+xt = √αtxt−1 +
+√
+1 −αtϵt−1
+(1)
+where α determines the noise level and finally xT will reach
+N(0, I).
+The reverse process then solve the probability
+flow(SDE) ordinary differential equation to reconstruct x0.
+The SDE forward of the denoising diffusion probabilistic
+model (DDPM) is solved as follows, where µθ and Σθ refer
+to the predicted mean and covariance:
+pθ(xt−1|xt) = N(xt−1; µθ(xt, t), Σθ(xt, t)),
+(2)
+The prediction is performed by blocks of transformer[13] or
+UNet[38] networks; Generating a complete image requires
+iterating this reverse step numerous times, making it a time-
+consuming process. In this work, we focus on distilling the
+solution of the reverse process more efficiently.
+Diffusion Distillation.
+Progressive Distillation [23, 29,
+39] reduce inference steps in diffusion models by iteratively
+halving them, ultimately producing a one-step generator.
+Although effective, this iterative process is computation-
+ally expensive and is constrained by the preceding teacher
+model’s quality, leading to compounding errors. Consis-
+tency Distillation [27, 28] enforces a consistency constraint
+for the diffusion models, stipulating that any point on a
+given trajectory will revert to its starting point. However, it
+leads to performance degradation in the few-step inference.
+To migrate the issue, recent works [36, 45, 59] have seg-
+mented the trajectory and progressively perform distillation
+on timestep segments. Adversarial Distillation introduces
+a discriminator to align the few-step student’s output with
+the multi-step teacher’s, either at the pixel level [41] or la-
+tent level [40], DMD2 [52]. DMD2 [52] also uses latent
+adversarial training to match real-world data distribution,
+but its straightforward combination of adversarial loss and
+distribution matching may introduce conflicting objectives
+3
+
+that can hinder overall distillation efficiency. Score Dis-
+tillation was adapted for the distillation of diffusion mod-
+els themselves [9, 31, 53]. An early approach, Distribu-
+tion Matching Distillation (DMD) [53], aims to minimize
+the KL-divergence between the teacher and student distribu-
+tions. DMD2 [52] replaced regression loss with adversarial
+loss for better realism. Building on this, Adversarial Distri-
+bution Matching (ADM) [26] introduced a GAN framework
+with Hinge loss, while SenseFlow [10] optimized scorers
+and discriminators for efficient distillation of larger models.
+Reinforcement Learning in T2I Generation.
+Rein-
+forcement learning is rapidly migrating to image genera-
+tion tasks to align large-scale diffusion models with hu-
+man feedback.
+Direct Preference Optimization (DPO)
+[17, 20, 21, 30, 44, 57] and Group Relative Policy Opti-
+mization (GRPO) [11, 19, 25, 46, 50, 55] are two popu-
+lar paradigms. The former methods construct offline or on-
+line win-lose pairs and back-propagate the preference order
+by the Bradley-Terry formed objectives. The latter meth-
+ods sample a group of images on the SDE/mixed ODE-
+SDE trajectory, calculate the normalized advantage within
+the group, and constrain the policy generation direction.
+However, current research on performing RL on few-step
+models remains quite limited. Pairwise Sample Optimiza-
+tion (PSO)[30] strengthens the relative likelihood margin
+between the training and reference sets.
+3. Methodology
+3.1. Preliminary
+Given pretrained diffusion model Tϕ(xt, t) as teacher
+model, where xt is noisy sample at timestep t ∼U(1, T),
+DMD [53] and DMD2 [52] distill it into few-step efficient
+generator Gθ(xt, t) by minimizing the reverse KL diver-
+gence between the teacher model’s distribution pτ and the
+few-step generator’s distribution pgen. DMD series meth-
+ods estimate pτ through score estimator µτ(xt, t), and pgen
+is tracked with estimator µgen(xt, t). Score function of the
+diffused distribution is:
+s(xt, t) = −xt −αtµ(xt, t)
+σ2
+t
+;
+(3)
+where αt, σt > 0 are scalars determined by the noise sched-
+ule. sgen and sτ are vector fields that point towards a higher
+density of distribution. Gradient of Distribution Matching
+objective w.r.t. θ is,
+∇θLDMD = −Ez,t
+
+sτ(Gθ(·)) −sgen(Gθ(·))dGθ(·)
+dθ
+
+, (4)
+where z ∼N(0, I), t ∼U(0, T). In addition to the Distri-
+bution Matching objective, DMD2 introduces the combina-
+tion with adversarial training with real images. Gradient of
+generator’s adversarial objective w.r.t. θ is,
+∇θLAdvGen = Ez,t
+
+log D (Gθ(·)) dGθ(·)
+dθ
+
+,
+(5)
+where D is the discrimator forward process. The score es-
+timator of teacher Tϕ(·) is itself, the generator’s score es-
+timator µψ
+gen(·) is initialized with Tϕ(·), and is dynamiclly
+updated to track pgen with diffusion loss:
+LDiffusion = Ext−1,t,ϵ∼N (0,I)[∥µψ
+gen(xt, t) −ϵ∥2
+2],
+(6)
+DMD2 reuses the parameter ψ of µψ
+gen(xt, t) and extra train-
+able heads to distinguish pgen and real image distribution
+preal, gradient of their adversarial objective w.r.t. ψ is,
+P (·) = log D (·) dD (·)
+dψ
+,
+∇ψLAdvDisc = Ez,t,x∼preal [P (x) −P (Gθ(·))] ,
+(7)
+3.2. Training Inefficiency of DMD Series
+Despite their impressive performance, methods in the DMD
+series are characterized by significant computational over-
+head during distillation. This is evident in the extensive
+training schedules required by prominent models. For in-
+stance, the original DMD[53] required 20, 000 iterations
+with a batch size of 2,304 to distill Stable Diffusion v1.5
+[37] for single-step generation. Similarly, DMD2 [52] used
+24, 000 iterations to distill SDXL [33] for four-step gen-
+eration, and ADM [26] used 16, 000 iterations for single-
+step SDXL distillation. Given the strong empirical results
+and open-source implementation of DMD2, we select it as
+the foundation for our investigation into these inefficiencies.
+One primary source of inefficiency in DMD2 stems from its
+optimization strategy. As noted by [6], DMD2 simultane-
+ously optimizes the model using two distinct gradients: a
+distribution-matching gradient (Eq. (4)) and an adversarial
+gradient (Eq. (5)). A direct summation of these gradients
+can introduce conflicting objectives, potentially steering the
+model toward a suboptimal state. This conflict can degrade
+both the accuracy of the distribution matching and the per-
+ceptual quality of the generated images, thereby hindering
+efficient convergence. A second challenge lies in the dual
+role assigned to the generator’s score estimator. It is tasked
+with two demanding objectives: tracking the output distri-
+bution of Gθ(·)(Eq. (6)) and discriminating between real and
+generated samples (Eq. (7)). To stabilize this complex dy-
+namic, a two-time scale update rule (TTUR) is employed in
+DMD2, where score estimator is updated five times for ev-
+ery single update of the generator Gθ(·). This significantly
+contributes to the model’s overall training inefficiency.
+3.3. Faster Convergence at First Stage
+Adversarial
+Training
+is
+Necessary.
+DMD2
+frame-
+work optimizes the generator by naively summing the
+4
+
+Distribution-Matching (DM) loss from the teacher and an
+adversarial loss against real images at every timestep. This
+superposition of gradients can result in suboptimal and in-
+efficient optimization.
+When we remove the adversarial
+teacher entirely, we observe that under pure DM loss su-
+pervision, the generator rapidly converges to a suboptimal
+domain, producing outputs with unnaturally high contrast
+and lacking fine-grained textures. We attribute this behavior
+to the mode-seeking nature of the reverse KL divergence,
+an observation also discussed in ADM [26]. This finding
+underscores the necessity of the adversarial loss with real
+images for perceptual fidelity.
+Decoupling Losses with a Timestep-Aware Strategy.
+We observe that the generator’s objective changes through-
+out the denoising process. For a Few-step distilled model,
+the initial, high-noise timesteps (low Signal-to-Noise Ratio,
+or SNR) primarily establish global composition and struc-
+ture, and the low-noise timesteps (high SNR) focus on re-
+fining details, textures, and color tones to enhance realism.
+This observation is corroborated by findings of [6] in video
+generation tasks, which noted that the adversarial training
+in DMD2 is most active at high SNRs, whereas DM loss
+excels at guiding the model through high-noise regimes.
+Based on these insights, we assign DM loss and adversarial
+loss to distinct timesteps: 1.During the high-noise regime,
+we optimize the generator exclusively with the DM loss
+(Eq. (4)).
+This allows the model to efficiently learn the
+teacher’s fundamental distribution and ODE trajectory in
+the early phases of generation. 2.For the low-noise step, we
+apply the adversarial loss against real images, enabling the
+model to refine perceptual quality and texture in the final de-
+noising step. During each generator update, we sample one
+timestep t from high-noise timesteps and xt from DMD2’s
+back-simulation forward process B to compute the DM loss
+∇θLAT
+DMD , then employ B to propagate the denoised output
+xt−1 to a final clean image x0:
+xt1 = Gθ(xt, t); x0 = Detach(B(xt1, 0)),
+(8)
+where Detach denotes stop gradient, x0 is then used for
+the adversarial loss computation. We perform diffusion for-
+ward on x0 at ˆt from low-noise timesteps to obtain the noisy
+sample ˆx. Gradient for adversarial loss is:
+∇θLTA
+AdvGen =
+
+Eˆt,ˆx log D
+ V
+ Gθ(ˆx, ˆt)
+ dGθ(·)
+dθ
+
+,
+(9)
+where the D(·) is the pixel-level discriminator, and V is the
+decode process of VAE. This timestep-aware strategy re-
+duces interference between these two optimization objec-
+tives.
+Our experiments prove that this approach signifi-
+cantly improves training efficiency while generating high-
+quality images with enhanced realism and textural detail.
+Pixel-GAN Alleviates Mode-Seeking.
+To enforce real-
+ism and structural coherence, the present study performs
+adversarial learning directly in the pixel space utilizing a
+discriminator.
+In contrast to a conventional latent-space
+GAN, the discriminator in our model is constructed upon
+the frozen vision encoder of the Segment Anything Model
+(SAM)[14] to extract hierarchical features with multiple
+trainable discriminator heads attached. The discriminator’s
+trainable parameters ω are updated via:
+LPG
+AdvDisc = Exreal [−log Dω (·)]+Ez [log Dω (V(·))] , (10)
+The discriminator is characterized by its exceptional sensi-
+tivity to local geometric structures and fine-grained textures,
+a capability that is facilitated by SAM’s powerful, general-
+purpose representations, as noted by [26]. This pixel-level
+supervision exerts a stringent realism constraint from the
+training’s earliest stages, compelling the generator to expe-
+ditiously discern and anchor to diverse, high-fidelity modes
+within the data distribution. Visualizations and experiments
+prove it effectively prevents premature convergence to sim-
+plistic or blurry solutions (mode-seeking).
+Stabilize Score Estimator.
+In contrast to DMD2 [52],
+where the score estimator is required to serve as a discrim-
+inator (Eq. (7)) and thus faces conflicting optimization ob-
+jectives, our approach trains µψ
+gen solely via the diffusion
+loss (Eq. (6)), eliminating the tasking burden and training
+complexity for Gθ(·). Our experiments show that updating
+the score estimator only once or twice per generator update
+(TTUR=1,2) is sufficient for stable and accurate distribution
+tracking. This lightweight coupling leads to more stable
+training dynamics and superior sample fidelity compared to
+DMD2 with TTUR=5, while reducing computational over-
+head. Similar to implicit distribution alignment proposed by
+[10], we also adopt an Exponential Moving Average (EMA)
+update strategy to ensure that the score estimator µψ
+gen accu-
+rately tracks the evolving distribution of the generator Gθ(·).
+Specifically, after each generator update, we inject the lat-
+est generator parameters into the score estimator using an
+EMA coefficient λema, i.e.,
+ψ ←λemaψ + (1 −λema)θ,
+(11)
+which enables µψ
+gen to closely follow the generator’s trajec-
+tory with minimal additional updates.
+Putting
+Everything
+Together.
+We
+introduce
+Flash-
+DMD, a highly efficient framework for Distribution Match-
+ing Distillation.
+In summary, Flash-DMD’s training ob-
+jectives via a timestep-aware strategy efficiently distill the
+fundamental distribution of the teacher model in low-SNR
+timesteps and refine perceptual quality and texture in the
+final high-SNR timestep. To counteract the mode-seeking
+tendency of the DM loss, we introduce a SAM-based Pixel-
+GAN that robustly enhances realism. The combination of
+5
+
+these strategies and the stabilized score estimator enables a
+more effective and balanced optimization of Gθ(·).
+3.4. Reinforcement Learning for Distilled Model
+Using the training paradigm above, we have developed a
+student generator that can compete with the teacher model.
+Subsequently, our focus shifts to enhancing its performance
+beyond that of the teacher and deploying it in practical sce-
+narios. Preference optimization provides a direct way to
+improve image fidelity and detail richness effectively on
+diffusion models. However, previous attempts on few-step
+reinforcement learning like PSO[30] and HyperSD[36] en-
+counter serious reward hacking, a phenomenon overfitting
+on oil painting or smoothed images with less details.
+Reasons for Serious Reward Hacking.
+PSO[30] and
+HyperSD[36] rely on the sampling trajectory to denoise
+noisy latent iteratively. Preference optimization on clean
+images confines gradient backpropagation to low-noise
+timesteps, making the model overfit the reward biases,
+where the model prioritizes superficial features (e.g., spe-
+cific color palettes).
+Specifically, HyperSD utilizes Im-
+ageReward [48] and produces overexposed and oil-painted
+results, as shown in Fig.4. PSO selects PickScore[15] as a
+reward model and generates smoothed images.
+Improved Preference Optimization for Distilled Model.
+The direct solution is to cover the sampling trajectory, in-
+cluding high-noise timesteps. First, reward models are re-
+quired to score noisy latent representations at any timestep.
+LRM[58] inherently meets our demands. Multiple candi-
+dates are sampled at each timestep from shared noise initial-
+ization and are rated by LRM to construct win-lose pairs.
+We further find that not all timesteps are necessary.
+As
+shown in Fig.3, with the same initial noise, it is evident
+that images sampled by few-step distilled model at high-
+noise steps exhibit better diversity in layout and fine-grained
+details compared to those from low-noise steps. As a re-
+sult, we only perform stochastic sampling in the high-noise
+phase, altering latent representations that are deemed op-
+timal/suboptimal by the reward model. Second, we com-
+bine the logarithmic likelihood loss with the vanilla loss of
+Flash-DMD during the training process rather than apply-
+ing preference optimization separately for stable training.
+We show that the combination can further boost the gener-
+ation performance of the accelerated diffusion models to-
+wards human preference and text-image alignment.
+Formal Descriptions.
+Given a generator Gθ(·) distilled
+from a pretrained diffusion model Tϕ(·), it can sample clean
+images from pure noise zT ∼N(0, I), conditioned on text
+prompt c, within T = 4 steps. At high-noise timesteps, we
+sample a set of k noisy latent images {z1
+t−1, ..., zk
+t−1} from
+the same initial latent image zt. LRM predicts preference
+Figure 3. Sampling variance analysis at different time steps. The
+first row displays samples obtained at the 999th denoising step,
+while the second row corresponds to the 499th step.
+scores. The samples corresponding to the highest and low-
+est normalized scores are selected as win-lose pairs, thereby
+constructing paired training data (zt, zw
+t−1, zl
+t−1) to the sam-
+pling pool. These pairs are subsequently used to minimize
+the loss function:
+Lrl = −E [log σ (βH(w, l))] ,
+(12)
+H(w, l) = log pθ(zw
+t−1|zt, c)
+pref(zw
+t−1|zt, c) −log pθ(zl
+t−1|zt, c)
+pref(zl
+t−1|zt, c),
+(13)
+where σ and β are inherent regularization constants,
+p∗(z∗
+t−1|zt, c) denotes the backward process to denoise zt
+in the LCM scheduler.
+4. Experiments
+4.1. Implementation Details
+Experiment Setup
+For the first phase, we conduct exper-
+iment on Score-based diffusion model SDXL[33] and Flow
+Matching based SD3-Medium[7]. We utilize a filtered set
+from the LAION 5B [42] dataset to provide high-quality
+image-text pairs for training, following the setting of [51].
+For discriminator conditioning, we adopt the vision encoder
+from [14] as the backbone to extract image representations.
+The structure of trainable discriminator heads follows the
+2D architecture of [26]. For the second phase, we adopt
+the training dataset from the first phase and utilize the La-
+tent Reward Model from [57], and experiment on distilled
+4-step SDXL. We sample a set of noisy latent images at the
+high-noise timestep t = 749, 999 and set k = 4. We con-
+duct experiments on NVIDIA H20 GPUs.
+Evaluation Tasks and Baseline
+The evaluation of im-
+age generators is conducted on 10K prompts from COCO
+2014 [24], adhering to the DMD2 [51] framework, con-
+taining 10,000 images.
+We present the result of CLIP
+score [35] (ViT-B/32) to evaluate text-image similarity, and
+we adopt a set of advanced preference-based metrics to
+thoroughly evaluate the quality of generated images from
+6
+
+Table 1. Comparison of Flash-DMD on SDXL under stage 1 with
+other distillation methods on the COCO-10k dataset. ImgRwd
+denotes ImageReward score. Cost refers to the product of batch
+size and training iterations. Best performance is highlight with
+Bold, and the second is with underline.
+Method
+#NFE ImgRwd ↑CLIP ↑Pick ↑HPSv2 ↑MPS ↑
+Cost ↓
+SDXL
+100
+0.7143
+0.3295 0.2265
+0.2865
+11.87
+-
+LCM-SDXL
+4
+0.5562
+0.3250 0.2236
+0.2818
+11.11
+-
+SDXL-Lightning
+4
+0.6952
+0.3268 0.2285
+0.2888
+12.15
+-
+SDXL-Turbo
+4
+0.8338
+0.3302 0.2286
+0.2899
+12.25
+-
+NitroSD-Realism
+4
+0.9112
+0.3274 0.2291
+0.2975
+12.43
+-
+NitroSD-Vibrant
+4
+0.8419
+0.3201 0.2205
+0.2865
+11.13
+-
+DMD2-SDXL
+4
+0.8748
+0.3302 0.2309
+0.2937
+12.41
+128*24k
+Flash-DMD under Phase 1
+TTUR1-1k
+4
+0.9509
+0.3292 0.2322
+0.2968
+12.67 64k (2.1%)
+TTUR2-4k
+4
+0.9450
+0.3291 0.2322
+0.2969
+12.65
+64*4k
+TTUR2-8k
+4
+0.9740
+0.3298 0.2327
+0.2981
+12.71
+64*8k
+TTUR5-18k
+4
+0.9426
+0.3302 0.2319
+0.2982
+12.63
+64*18k
+Table 2. Comparison of Flash-DMD on SD3 under stage 1 with
+other distillation method and baseline on COCO-10k dataset.
+Method
+#NFE
+ImgRwd ↑CLIP ↑
+Pick ↑
+HPSv2 ↑
+MPS ↑Cost ↓
+SD3-Medium
+28
+1.0173
+0.3301
+0.2273
+0.2933
+12.05
+-
+SD3-Flash
+4
+0.8459
+0.3258
+0.2259
+0.2849
+11.83
+-
+Flash-DMD under Phase 1
+TTUR2-4k
+4
+1.0193
+0.3269
+0.2285
+0.2976
+12.43
+32*4k
+TTUR2-7k
+4
+1.0214
+0.3266
+0.2286
+0.2975
+12.46
+32*7k
+multiple human-aligned perspectives. We use HPSv2 [47]
+to measure fine-grained image-text semantic alignment, fo-
+cusing on how well the generated content adheres to the
+input prompt. ImageReward [48] and PickScore [15] are
+employed to assess overall aesthetic quality and percep-
+tual appeal, reflecting general human preferences in vi-
+sual coherence and composition. Furthermore, we evalu-
+ate multidimensional human preferences using MPS [56],
+a recently proposed metric that captures diverse aspects
+of human judgment, such as object accuracy, spatial rela-
+tion, and attribute binding-beyond global similarity.
+To-
+gether, these metrics provide a comprehensive and human-
+centric evaluation of both fidelity and preference in text-
+to-image generation. To demonstrate the effectiveness of
+phase 1 distillation, we compare our 4-step generative
+models against SDXL[33], as well as other open-sourced
+timestep distillation methods, including LCM-SDXL [27],
+SD3-Lighting[23], SDXL-Turbo [41], Realism and Vibrant
+version of NitroSD [4], Flash-SD3[2], and DMD2 [52]. For
+phase 2, we further evaluate our approach by comparing it
+with three reinforcement learning-finetuned models, Hyper-
+SDXL [36], PSO-DMD2 [30], and LPO-SDXL [57].
+4.2. Experiment Analysis
+Phase 1:
+Efficient Distillation
+Our method achieves
+highly efficient distillation from the teacher model, lead-
+Table 3. Comparison of Flash-DMD under phase2 with other mod-
+els with reinforcement learning on COCO-10k dataset.
+Method
+#NFE ImgRwd ↑CLIP ↑Pick ↑HPSv2 ↑MPS ↑GPU Hours
+Hyper-SDXL
+4
+1.085
+0.3300
+0.2324
+0.3030
+12.45
+400 A100
+PSO-DMD2
+4
+0.9157
+0.3285
+0.2338
+0.2897
+12.53
+160 A100
+LPO-SDXL
+40
+1.0417
+0.3324
+0.2342
+0.2965
+12.58
+92 A100
+Flash-DMD
+4
+1.0035
+0.3285
+0.2346
+0.2930
+12.84
+12 H20
+ing to state-of-the-art performance across all benchmarks,
+by decoupling the distribution matching (DM) and adver-
+sarial losses with a timestep-aware strategy, employing Pix-
+GAN to alleviate mode-seeking behavior, and stabilizing
+the generator’s score estimator. As shown in Tab. 1, we
+distill SDXL using various two-time update rules (TTUR),
+which corresponds to the update frequency ratio between
+the score estimator and generator. In contrast to DMD2,
+which uses a TTUR of 5 and thus hinders training effi-
+ciency, we experiment with TTUR values of 1, 2, and 5.
+Our results demonstrate significant improvements in both
+efficiency and performance. With a TTUR of 5, our model
+surpasses DMD2 on all benchmarks while requiring only
+37.5% of the training cost (batch size × training steps).
+Reducing the TTUR to 2 allows us to maintain superior
+human preference scores and comparable text-image con-
+sistency with only 8.3% of DMD2’s training cost. In the
+most extreme case, training for only 1,000 steps with a
+TTUR of 1, with merely 2.1% of DMD2’s training cost, we
+still yield a higher human preference score. Notably, un-
+der all tested settings, our model consistently outperforms
+the original teacher model. We also extend Flash-DMD to
+SD3-Medium with solid performance, outperforming other
+methods. Results are shown in Tab. 2. This further demon-
+strates the generalizability of our method. We further ex-
+tend Flash-DMD to the SD3-Medium[7] model under the
+Flow Matching framework, employing LoRA, with a TTUR
+ratio of 2. As shown in Tab. 2, our approach achieves sig-
+nificantly better results using only 4K training steps, sub-
+stantially outperforming both the teacher model (NFE=28,
+CFG=7) and SD3-Flash[2] (NFE=4, CFG=0). This demon-
+strates that our distillation strategy is also highly effective
+and efficient within the Flow Matching paradigm.
+Phase 2: Boost Performance with RL.
+Incorporating re-
+inforcement learning, Flash-DMD achieves a performance
+comparable to other reinforcement approaches with fewer
+computational resources, as shown in the Tab. 3 and Fig.
+4. Flash-DMD scores the highest on PickScore and MPS,
+and image fidelity surpasses SDXL and other competitors.
+Although Hyper-SDXL has the highest ImageReward score
+and HPSv2 score, it generates overexposed colors and un-
+natural images. LPO-SDXL gets the highest CLIP score,
+but it produces oversmoothed images. We speculate that
+the reason may be that these models use the trained mod-
+7
+
+Figure 4. Qualitative comparisons with other reinforcement ap-
+proaches on SDXL. com
+Figure 5. Evaluation results of DMD2(red) and Flash-DMD (blue)
+with TTUR at the ratio of 2 on SDXL.
+els directly for reinforcement training. This is prone to re-
+ward hacking and only rewards the results preferred by the
+reward model. Meanwhile, Flash-DMD introduces prefer-
+ence optimization during the training process of Phase 1,
+with the constraints from distribution matching and Pixel-
+GAN, which alleviates the problem of reward hacking.
+4.3. Ablation Studies
+Comparision with DMD2 under Samller TTUR.
+We
+set TTUR=2 for ablate the performance of DMD2 and
+Flash-DMD under phase 1. The results, presented in Fig.
+5, show that our method exhibits stable and continuous
+improvement throughout the training process. In contrast,
+DMD2 shows slight initial gains but quickly degrades as
+training progresses. This comparison validates that our ap-
+proach offers much better training stability and efficiency.
+Figure 6. Evaluation results of Flash-DMD (ours) with or with-
+out EMA on ImageReward, PickScore, and HPSv2. The training
+steps range from 1,000 to 8,000. Both models are trained with a
+two-time scale update rule (TTUR). The generator and the score
+estimator are updated at a rate of 1:2, i.e., TTUR=2.
+Figure 7. Evaluation results of Reinforcement Learning with and
+without pixel-GAN. Both models use 5:1 setting.
+Table 4. Comparison of Flash-DMD at stage2 with different vari-
+ants in reinforcement learning experiments .
+Method
+ImgRwd CLIP PickScore HPSv2
+MPS
+GPU Hours
+TTUR1-1k Phase 1
+0.9508
+0.3292
+0.2322
+0.296
+12.672
+–
+1:1
+0.9135
+0.3284
+0.2330
+0.2945 12.755
+5.7
+2:1
+0.9315
+0.3271
+0.2329
+0.2942 12.770
+5.2
+5:1
+0.9808
+0.3275
+0.2345
+0.2904 12.764
+4.8
+10:1
+0.9640
+0.3272
+0.2344
+0.2874 12.685
+4.7
+Post-Train LPO
+0.9795
+0.3284
+0.2345
+0.2882 12.689
+5.0
+all noise
+0.9421
+0.3294
+0.2331
+0.2925 12.800
+7.3
++ pixelgan
+0.9678
+0.3280
+0.2345
+0.2914 12.812
+5.8
+Flash-DMD Phase 2
+1.0004
+0.3285
+0.2346
+0.2931 12.813
+12.0
+Phase 1: Significance of EMA in Score Estimator.
+As
+described in Sec.3.3, we employ an Exponential Moving
+Average (EMA) strategy to help the score estimator more
+accurately track the generator’s distribution, especially un-
+der high-frequency updates. To validate the effectiveness
+of this approach, we conduct an ablation study compar-
+ing performance with and without the EMA strategy. As
+shown in Fig. 6, the model with EMA achieves higher Im-
+ageReward and Pickapic scores in later training stages. The
+HPSv2 scores remain nearly identical. This confirms that
+the EMA strategy enhances visual quality and human pref-
+erence without compromising text alignment.
+Phase 2: Trade-Off in Time Scale Update Rule for RL.
+Rather than superimposing multiple loss functions via a
+weighted sum, we use an alternating update strategy to up-
+date the generator, applying different loss functions at dif-
+ferent frequencies. We initialize the generator and the fake
+score estimator with weights from TTUR1-1k experiment,
+and the real score estimator is initialized with SDXL. We
+train the model for 2,000 iterations on a single H20 GPU
+under different frequency ratios between reinforcement loss
+8
+
+and distribution matching loss (1:1, 2:1, 5:1, 10:1). The
+metric comparisons are shown in Tab. 4. The 5:1 ratio
+achieves the highest score among these settings.
+Phase 2: Other Ablation Experiments on Reinforcement
+Learning.
+1. Online training VS Post-training: We com-
+pare online training with post-training by LPO [58] alone.
+Our method demonstrates superior performance over Post-
+Train LPO, which validates the advantage of our proposed
+training paradigm.
+2.High-noise VS all noise: Training
+only on high-noise steps achieves better results than train-
+ing on all-noise steps. 3. Including PixelGAN loss: Further-
+more, the incorporation of an additional Pixel-Gan objective
+yields a positive gain, resulting in a marginal improvement
+in the metrics. Fig.7 supplements the results with and with-
+out GAN loss across 1,000 to 5,000 iterations. We selected
+the 5k-step model with GAN loss as our final enhanced ver-
+sion, as it delivered the best performance. The training cost
+for this model was 12 H20 GPU hours.
+5. Conclusion
+In this paper, we present Flash-DMD, a twofold approach
+that addresses the inefficiencies of existing diffusion distil-
+lation methods by via timestep-aware objectives and opti-
+mizing the distillation process. In the early phase, Flash-
+DMD accelerates convergence by coordinating distribution
+matching and perceptual realism enhancement. In the later
+phase, it refines visual details using latent reinforcement
+learning while preventing mode collapse and artifacts. Ex-
+periments show Flash-DMD achieves superior generation
+quality and the highest human preference scores with sig-
+nificantly reduced training costs. Our method makes dif-
+fusion distillation more efficient and accessible, paving the
+way for advancements in low-step generative modeling.
+References
+[1] Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wenbin
+Ge, Sibo Song, Kai Dang, Peng Wang, Shijie Wang, Jun
+Tang, et al. Qwen2. 5-vl technical report. arXiv preprint
+arXiv:2502.13923, 2025. 1
+[2] Clement Chadebec, Onur Tasar, Eyal Benaroche, and Ben-
+jamin Aubin. Flash diffusion: Accelerating any conditional
+diffusion model for few steps image generation. In Proceed-
+ings of the AAAI Conference on Artificial Intelligence, pages
+15686–15695, 2025. 7
+[3] Clement Chadebec, Onur Tasar, Eyal Benaroche, and Ben-
+jamin Aubin. Flash diffusion: Accelerating any conditional
+diffusion model for few steps image generation. In Proceed-
+ings of the AAAI Conference on Artificial Intelligence, pages
+15686–15695, 2025. 2
+[4] Dar-Yen Chen, Hmrishav Bandyopadhyay, Kai Zou, and Yi-
+Zhe Song. Nitrofusion: High-fidelity single-step diffusion
+through dynamic adversarial training. In IEEE/CVF Con-
+ference on Computer Vision and Pattern Recognition, CVPR
+2025, Nashville, TN, USA, June 11-15, 2025, pages 7654–
+7663. Computer Vision Foundation / IEEE, 2025. 7, 1
+[5] Guanjie Chen, Xinyu Zhao, Yucheng Zhou, Xiaoye Qu,
+Tianlong Chen, and Yu Cheng. Towards stabilized and ef-
+ficient diffusion transformers through long-skip-connections
+with spectral constraints. arXiv preprint arXiv:2411.17616,
+2024. 3
+[6] Jiaxiang Cheng, Bing Ma, Xuhua Ren, Hongyi Jin, Kai
+Yu, Peng Zhang, Wenyue Li, Yuan Zhou, Tianxiang Zheng,
+and Qinglin Lu.
+Pose:
+Phased one-step adversarial
+equilibrium for video diffusion models.
+arXiv preprint
+arXiv:2508.21019, 2025. 4, 5
+[7] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim
+Entezari, Jonas M¨uller, Harry Saini, Yam Levi, Dominik
+Lorenz, Axel Sauer, Frederic Boesel, et al. Scaling recti-
+fied flow transformers for high-resolution image synthesis.
+In Forty-first international conference on machine learning.
+6, 7, 2
+[8] Patrick Esser, Sumith Kulal, Andreas Blattmann, Rahim
+Entezari, Jonas M¨uller, Harry Saini, Yam Levi, Dominik
+Lorenz, Axel Sauer, Frederic Boesel, et al. Scaling recti-
+fied flow transformers for high-resolution image synthesis.
+In Forty-first international conference on machine learning,
+2024. 2
+[9] Jean-Yves Franceschi, Mike Gartrell, Ludovic Dos Santos,
+Thibaut Issenhuth, Emmanuel de B´ezenac, Micka¨el Chen,
+and Alain Rakotomamonjy. Unifying gans and score-based
+diffusion as generative particle models. Advances in Neural
+Information Processing Systems, 36:59729–59760, 2023. 4
+[10] Xingtong Ge, Xin Zhang, Tongda Xu, Yi Zhang, Xinjie
+Zhang, Yan Wang, and Jun Zhang. Senseflow: Scaling dis-
+tribution matching for flow-based text-to-image distillation.
+CoRR, abs/2506.00523, 2025. 2, 4, 5
+[11] Xiaoxuan He, Siming Fu, Yuke Zhao, Wanli Li, Jian Yang,
+Dacheng Yin, Fengyun Rao, and Bo Zhang. Tempflow-grpo:
+When timing matters for grpo in flow models. arXiv preprint
+arXiv:2508.04324, 2025. 4
+[12] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising dif-
+fusion probabilistic models. Advances in neural information
+processing systems, 33:6840–6851, 2020. 2, 3
+[13] Salman
+Khan,
+Muzammal
+Naseer,
+Munawar
+Hayat,
+Syed Waqas Zamir, Fahad Shahbaz Khan, and Mubarak
+Shah. Transformers in vision: A survey. ACM computing
+surveys (CSUR), 54(10s):1–41, 2022. 3
+[14] Alexander Kirillov, Eric Mintun, Nikhila Ravi, Hanzi Mao,
+Chloe Rolland, Laura Gustafson, Tete Xiao, Spencer White-
+head, Alexander C Berg, Wan-Yen Lo, et al. Segment any-
+thing. In Proceedings of the IEEE/CVF international confer-
+ence on computer vision, pages 4015–4026, 2023. 5, 6
+[15] Yuval Kirstain, Adam Polyak, Uriel Singer, Shahbuland Ma-
+tiana, Joe Penna, and Omer Levy.
+Pick-a-pic: An open
+dataset of user preferences for text-to-image generation. Ad-
+vances in neural information processing systems, 36:36652–
+36663, 2023. 6, 7, 1
+[16] Black Forest Labs.
+Flux.
+https://github.com/
+black-forest-labs/flux, 2024. 2
+[17] Kyungmin Lee, Xiahong Li, Qifei Wang, Junfeng He, Jun-
+jie Ke, Ming-Hsuan Yang, Irfan Essa, Jinwoo Shin, Feng
+9
+
+Yang, and Yinxiao Li. Calibrated multi-preference optimiza-
+tion for aligning diffusion models. In IEEE/CVF Conference
+on Computer Vision and Pattern Recognition, CVPR 2025,
+Nashville, TN, USA, June 11-15, 2025, pages 18465–18475.
+Computer Vision Foundation / IEEE, 2025. 4
+[18] Junnan Li, Dongxu Li, Caiming Xiong, and Steven Hoi.
+Blip: Bootstrapping language-image pre-training for unified
+vision-language understanding and generation. In Interna-
+tional conference on machine learning, pages 12888–12900.
+PMLR, 2022. 1
+[19] Junzhe Li, Yutao Cui, Tao Huang, Yinping Ma, Chun Fan,
+Miles Yang, and Zhao Zhong. Mixgrpo: Unlocking flow-
+based grpo efficiency with mixed ode-sde. arXiv preprint
+arXiv:2507.21802, 2025. 4
+[20] Zejian Li, Yize Li, Chenye Meng, Zhongni Liu, Yang Ling,
+Shengyuan Zhang, Guang Yang, Changyuan Yang, Zhiyuan
+Yang, and Lingyun Sun. Inversion-dpo: Precise and efficient
+post-training for diffusion models. CoRR, abs/2507.11554,
+2025. 4
+[21] Zhanhao Liang, Yuhui Yuan, Shuyang Gu, Bohan Chen,
+Tiankai Hang, Mingxi Cheng, Ji Li, and Liang Zheng.
+Aesthetic post-training diffusion models from generic pref-
+erences with step-by-step preference optimization.
+In
+IEEE/CVF Conference on Computer Vision and Pattern
+Recognition, CVPR 2025, Nashville, TN, USA, June 11-15,
+2025, pages 13199–13208. Computer Vision Foundation /
+IEEE, 2025. 4, 1
+[22] Xinyao Liao, Wei Wei, Xiaoye Qu, and Yu Cheng. Step-level
+reward for free in rl-based t2i diffusion model fine-tuning.
+arXiv preprint arXiv:2505.19196, 2025. 1
+[23] Shanchuan Lin, Anran Wang, and Xiao Yang.
+Sdxl-
+lightning:
+Progressive adversarial diffusion distillation.
+arXiv preprint arXiv:2402.13929, 2024. 2, 3, 7, 1
+[24] Tsung-Yi Lin, Michael Maire, Serge Belongie, James Hays,
+Pietro Perona, Deva Ramanan, Piotr Doll´ar, and C Lawrence
+Zitnick. Microsoft coco: Common objects in context. In
+European conference on computer vision, pages 740–755.
+Springer, 2014. 6
+[25] Jie Liu, Gongye Liu, Jiajun Liang, Yangguang Li, Jiaheng
+Liu, Xintao Wang, Pengfei Wan, Di Zhang, and Wanli
+Ouyang. Flow-grpo: Training flow matching models via on-
+line RL. CoRR, abs/2505.05470, 2025. 4
+[26] Yanzuo Lu, Yuxi Ren, Xin Xia, Shanchuan Lin, Xing Wang,
+Xuefeng Xiao, Andy J. Ma, Xiaohua Xie, and Jian-Huang
+Lai. Adversarial distribution matching for diffusion distil-
+lation towards efficient image and video synthesis. CoRR,
+abs/2507.18569, 2025. 2, 4, 5, 6
+[27] Simian Luo, Yiqin Tan, Longbo Huang, Jian Li, and Hang
+Zhao.
+Latent consistency models:
+Synthesizing high-
+resolution images with few-step inference, 2023. 2, 3, 7
+[28] Simian Luo, Yiqin Tan, Suraj Patil, Daniel Gu, Patrick von
+Platen, Apolin´ario Passos, Longbo Huang, Jian Li, and Hang
+Zhao. Lcm-lora: A universal stable-diffusion acceleration
+module. arXiv preprint arXiv:2311.05556, 2023. 3
+[29] Chenlin Meng, Robin Rombach, Ruiqi Gao, Diederik P.
+Kingma, Stefano Ermon, Jonathan Ho, and Tim Salimans.
+On distillation of guided diffusion models.
+In IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+CVPR 2023, Vancouver, BC, Canada, June 17-24, 2023,
+pages 14297–14306. IEEE, 2023. 3
+[30] Zichen Miao, Zhengyuan Yang, Kevin Lin, Ze Wang,
+Zicheng Liu, Lijuan Wang, and Qiang Qiu. Tuning timestep-
+distilled diffusion model using pairwise sample optimiza-
+tion. In The Thirteenth International Conference on Learn-
+ing Representations, ICLR 2025, Singapore, April 24-28,
+2025. OpenReview.net, 2025. 2, 4, 6, 7, 1
+[31] Thuan Hoang Nguyen and Anh Tran. Swiftbrush: One-step
+text-to-image diffusion model with variational score distilla-
+tion. In Proceedings of the IEEE/CVF Conference on Com-
+puter Vision and Pattern Recognition, pages 7807–7816,
+2024. 4
+[32] William Peebles and Saining Xie. Scalable diffusion models
+with transformers. In Proceedings of the IEEE/CVF inter-
+national conference on computer vision, pages 4195–4205,
+2023. 3
+[33] Dustin
+Podell,
+Zion
+English,
+Kyle
+Lacey,
+Andreas
+Blattmann, Tim Dockhorn, Jonas M¨uller, Joe Penna, and
+Robin Rombach.
+Sdxl: Improving latent diffusion mod-
+els for high-resolution image synthesis.
+arXiv preprint
+arXiv:2307.01952, 2023. 2, 4, 6, 7, 1
+[34] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning
+transferable visual models from natural language supervi-
+sion. In International conference on machine learning, pages
+8748–8763. PmLR, 2021. 1
+[35] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning
+transferable visual models from natural language supervi-
+sion. In International conference on machine learning, pages
+8748–8763. PmLR, 2021. 6
+[36] Yuxi Ren, Xin Xia, Yanzuo Lu, Jiacheng Zhang, Jie Wu,
+Pan Xie, Xing Wang, and Xuefeng Xiao. Hyper-sd: Trajec-
+tory segmented consistency model for efficient image syn-
+thesis. Advances in Neural Information Processing Systems,
+37:117340–117362, 2024. 2, 3, 6, 7, 1
+[37] Robin Rombach, Andreas Blattmann, Dominik Lorenz,
+Patrick Esser, and Bj¨orn Ommer.
+High-resolution image
+synthesis with latent diffusion models.
+In Proceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pages 10684–10695, 2022. 2, 3, 4
+[38] Olaf Ronneberger, Philipp Fischer, and Thomas Brox. U-
+net: Convolutional networks for biomedical image segmen-
+tation. In International Conference on Medical image com-
+puting and computer-assisted intervention, pages 234–241.
+Springer, 2015. 3
+[39] Tim Salimans and Jonathan Ho.
+Progressive distillation
+for fast sampling of diffusion models.
+arXiv preprint
+arXiv:2202.00512, 2022. 3
+[40] Axel Sauer, Frederic Boesel, Tim Dockhorn, Andreas
+Blattmann, Patrick Esser, and Robin Rombach. Fast high-
+resolution image synthesis with latent adversarial diffusion
+distillation. In SIGGRAPH Asia 2024 Conference Papers,
+pages 1–11, 2024. 2, 3
+10
+
+[41] Axel Sauer, Dominik Lorenz, Andreas Blattmann, and Robin
+Rombach. Adversarial diffusion distillation. In European
+Conference on Computer Vision, pages 87–103. Springer,
+2024. 2, 3, 7, 1
+[42] Christoph Schuhmann, Romain Beaumont, Richard Vencu,
+Cade Gordon,
+Ross Wightman,
+Mehdi Cherti,
+Theo
+Coombes, Aarush Katta, Clayton Mullis, Mitchell Worts-
+man, et al. Laion-5b: An open large-scale dataset for training
+next generation image-text models. Advances in neural in-
+formation processing systems, 35:25278–25294, 2022. 6, 1,
+2
+[43] Yang Song and Stefano Ermon. Generative modeling by esti-
+mating gradients of the data distribution. Advances in neural
+information processing systems, 32, 2019. 3
+[44] Bram Wallace, Meihua Dang, Rafael Rafailov, Linqi Zhou,
+Aaron Lou, Senthil Purushwalkam, Stefano Ermon, Caiming
+Xiong, Shafiq Joty, and Nikhil Naik. Diffusion model align-
+ment using direct preference optimization.
+In IEEE/CVF
+Conference on Computer Vision and Pattern Recognition,
+CVPR 2024, Seattle, WA, USA, June 16-22, 2024, pages
+8228–8238. IEEE, 2024. 4
+[45] Fu-Yun Wang, Zhaoyang Huang, Alexander Bergman,
+Dazhong Shen, Peng Gao, Michael Lingelbach, Keqiang
+Sun, Weikang Bian, Guanglu Song, Yu Liu, et al. Phased
+consistency models. Advances in neural information pro-
+cessing systems, 37:83951–84009, 2024. 2, 3
+[46] Yibin Wang, Zhimin Li, Yuhang Zang, Yujie Zhou, Jiazi
+Bu, Chunyu Wang, Qinglin Lu, Cheng Jin, and Jiaqi Wang.
+Pref-grpo: Pairwise preference reward-based grpo for sta-
+ble text-to-image reinforcement learning.
+arXiv preprint
+arXiv:2508.20751, 2025. 4
+[47] Xiaoshi Wu, Yiming Hao, Keqiang Sun, Yixiong Chen, Feng
+Zhu, Rui Zhao, and Hongsheng Li. Human preference score
+v2: A solid benchmark for evaluating human preferences of
+text-to-image synthesis. arXiv preprint arXiv:2306.09341,
+2023. 7, 1
+[48] Jiazheng Xu, Xiao Liu, Yuchen Wu, Yuxuan Tong, Qinkai
+Li, Ming Ding, Jie Tang, and Yuxiao Dong.
+Imagere-
+ward: Learning and evaluating human preferences for text-
+to-image generation. Advances in Neural Information Pro-
+cessing Systems, 36:15903–15935, 2023. 6, 7, 1
+[49] Jiazheng Xu, Yu Huang, Jiale Cheng, Yuanming Yang, Jia-
+jun Xu, Yuan Wang, Wenbo Duan, Shen Yang, Qunlin Jin,
+Shurun Li, Jiayan Teng, Zhuoyi Yang, Wendi Zheng, Xiao
+Liu, Ming Ding, Xiaohan Zhang, Xiaotao Gu, Shiyu Huang,
+Minlie Huang, Jie Tang, and Yuxiao Dong. Visionreward:
+Fine-grained multi-dimensional human preference learning
+for image and video generation, 2024. 1
+[50] Zeyue Xue, Jie Wu, Yu Gao, Fangyuan Kong, Lingting
+Zhu, Mengzhao Chen, Zhiheng Liu, Wei Liu, Qiushan Guo,
+Weilin Huang, and Ping Luo. Dancegrpo: Unleashing GRPO
+on visual generation. CoRR, abs/2505.07818, 2025. 4
+[51] Tianwei Yin, Micha¨el Gharbi, Taesung Park, Richard Zhang,
+Eli Shechtman, Fredo Durand, and Bill Freeman.
+Im-
+proved distribution matching distillation for fast image syn-
+thesis. Advances in neural information processing systems,
+37:47455–47487, 2024. 6
+[52] Tianwei Yin, Micha¨el Gharbi, Taesung Park, Richard Zhang,
+Eli Shechtman, Fredo Durand, and William T Freeman. Im-
+proved distribution matching distillation for fast image syn-
+thesis. In NeurIPS, 2024. 1, 2, 3, 4, 5, 7
+[53] Tianwei Yin, Micha¨el Gharbi, Richard Zhang, Eli Shecht-
+man, Fr´edo Durand, William T Freeman, and Taesung Park.
+One-step diffusion with distribution matching distillation. In
+CVPR, 2024. 2, 4
+[54] Xin Yu, Yuan-Chen Guo, Yangguang Li, Ding Liang, Song-
+Hai Zhang, and Xiaojuan Qi. Text-to-3d with classifier score
+distillation. arXiv preprint arXiv:2310.19415, 2023. 2
+[55] Kaiyan Zhang, Yuxin Zuo, Bingxiang He, Youbang Sun,
+Runze Liu, Che Jiang, Yuchen Fan, Kai Tian, Guoli Jia,
+Pengfei Li, et al.
+A survey of reinforcement learning for
+large reasoning models. arXiv preprint arXiv:2509.08827,
+2025. 4
+[56] Sixian Zhang, Bohan Wang, Junqiang Wu, Yan Li, Tingt-
+ing Gao, Di Zhang, and Zhongyuan Wang. Learning multi-
+dimensional human preference for text-to-image generation.
+In Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, pages 8018–8027, 2024. 7,
+1
+[57] Tao Zhang, Cheng Da, Kun Ding, Kun Jin, Yan Li, Tingting
+Gao, Di Zhang, Shiming Xiang, and Chunhong Pan. Dif-
+fusion model as a noise-aware latent reward model for step-
+level preference optimization. CoRR, abs/2502.01051, 2025.
+4, 6, 7, 1
+[58] Tao Zhang, Cheng Da, Kun Ding, Huan Yang, Kun Jin, Yan
+Li, Tingting Gao, Di Zhang, Shiming Xiang, and Chun-
+hong Pan. Diffusion model as a noise-aware latent reward
+model for step-level preference optimization. arXiv preprint
+arXiv:2502.01051, 2025. 6, 9, 1
+[59] Jianbin Zheng, Minghui Hu, Zhongyi Fan, Chaoyue Wang,
+Changxing Ding, Dacheng Tao, and Tat-Jen Cham. Trajec-
+tory consistency distillation. CoRR, 2024. 3
+11
+
+Flash-DMD: Towards High-Fidelity Few-Step Image Generation with Efficient
+Distillation and Joint Reinforcement Learning
+Supplementary Material
+Table 5. Comparison of mainstream reward models in four as-
+pects: Scope, Evaluation Dimensions, utilized Feature Extractor
+(FE) and Timestep Awareness. EvalDim denotes evaluation di-
+mension, Time-aware denotes timestep awareness. Aes denotes
+aesthetics, Align denotes text-image alignment, Fid denotes fi-
+delity.
+Method
+EvalDim
+Space
+Time-aware
+FE
+PickScore [15]
+Pixel
+Fid
+×
+CLIP [34]
+ImageReward [48]
+Pixel
+Aes+Fid
+×
+BLIP [18]
+MPS [56]
+Pixel
+Aes+Align+Fid
+×
+CLIP
+HPSv2 [47]
+Pixel
+Align+Fid
+×
+CLIP
+SPM [21]
+Pixel
+Aes+Align
+√
+CLIP
+LRM [57]
+Latent
+Aes+Align
+√
+SDXL/SD1.5 [33]
+VisionReward [49]
+Pixel
+Align+Fid+Safety
+×
+Qwen2.5-VL [1]
+6. Latent Reward Model: Selection Rationale
+As noted earlier, the previous practice in online preference
+optimization [30, 36] involves applying reward models[15,
+21, 22, 47–49, 56] in the final denoising stage, leading to
+reward hacking. A natural question arises: why not deploy
+optimization across a more diverse set of timesteps?
+Two
+primary factors explain this limitation. Computationally, re-
+ward evaluation would necessitate VAE decoding at multi-
+ple steps, which would increase GPU memory and com-
+putation requirements. More fundamentally, their reward
+models lack timestep sensitivity, and the training paradigms
+are time-agnostic, having been developed on static image
+datasets without diffusion process context.
+We empiri-
+cally investigate the prevalent reward models and systemat-
+ically summarize their characteristics in the Tab. 5, includ-
+ing scope space, evaluation dimensions, and consideration
+of timestep. In light of the analysis above, LRM [57] is
+the most suitable choice. It can evaluate noisy latent at any
+timestep without switching to pixel space. Specifically, it
+takes a noisy latent and feeds it into a pretrained diffusion
+model, leveraging the model’s native understanding of la-
+tent representation across all noise levels.
+7. Algorithm of Flash-DMD
+Algorithm 1 provides an overview of Flash-DMD . At stage
+1, we propose an advanced step distillation method based
+on distribution matching that converges quickly. Timestep-
+aware strategy, together with Pixel-GAN constraint, effec-
+tively alleviates mode-seeking and improves the realism of
+generation. At stage 2, we carefully select and incorporate a
+latent reward model into the training paradigm, further en-
+hancing the image fidelity and image aesthetics.
+Table 6. Comparison of Flash-DMD on SDXL under stage 1 with
+other distillation methods on the COCO-10k dataset. ImgRwd
+denotes ImageReward score. Best performance is highlighted in
+bold, and the second best is underlined.
+Method
+#NFE ImgRwd ↑CLIP ↑Pick ↑HPSv2 ↑MPS ↑Cost ↓
+SDXL
+100
+0.7143
+0.3295 0.2265
+0.2865
+11.87
+-
+LCM-SDXL
+8
+0.6122
+0.3247 0.2261
+0.2874
+11.59
+-
+SDXL-Lightning
+8
+0.7187
+0.3268 0.2291
+0.2900
+12.12
+-
+Hyper-SD
+8
+0.9119
+0.3287 0.2310
+0.2977
+12.35
+-
+8-steps Flash-DMD at Stage 1
+TTUR2-3k
+8
+0.9159
+0.3281 0.2319
+0.2981
+12.60
+48*3k
+TTUR2-6k
+8
+0.9416
+0.3284 0.2318
+0.2989
+12.63
+48*6k
+8. 4-steps and 8-steps Flash-DMD on SDXL
+To demonstrate the effectiveness of Flash-DMD on
+SDXL [33], we extend our method to distill the full SDXL
+model into an 8-step generative model. In the first stage, we
+select the timesteps [999, 874, 749, 629, 499, 374, 249, 124]
+and apply Pixel-GAN at the final timestep.
+We adopt
+the Two-Time-Scale Update Rule (TTUR) with a score
+estimator update frequency of 2, training on the LAION
+dataset [42] with a batch size of 48.
+Two variants are
+trained for 3k and 6k iterations, respectively, denoted as
+TTUR2-3k and TTUR2-6k. In the second stage, we con-
+struct win–lose preference pairs using samples generated
+from the timesteps [999, 874]. We initialize this stage from
+the TTUR2-3k model (i.e., the 3k-step checkpoint from
+Stage 1) and continue training for an additional 3k and 6k
+steps, respectively. The results for Stage 1 and Stage 2 are
+reported in Tab. 6 and Tab. 7, respectively. Results show
+that Flash-DMD keeps outperforming other distillation and
+reinforcement learning methods at 8-steps generative task,
+highlighting the advantage of Flash-DMD. In terms of sub-
+jective results, Fig. 9 and Fig. 11 show the results of the 4-
+step inference at stages 1 and stage 2 of Flash-DMD based
+on SDXL, respectively.
+Fig.
+12 and Fig.
+13 show the
+results of the 8-step inference at stages 1 and 2 of Flash-
+DMD , respectively. Our Flash-DMD can generate high-
+quality results with both realism and aesthetic appeal un-
+der a small number of steps. Furthermore, we compare our
+results with SDXL, SDXL-Lighting[23], SDXL-Turbo[41],
+Hyper-SDXL[36], DMD2[52], LPO [58], Realism version
+of NitroSD[4], PSO[30].
+Fig.
+8 demonstrates that our
+model not only surpasses other distillation models but also
+outperforms the teacher model in refining image quality.
+1
+
+Figure 8. Qualitative comparisons with other models.
+Table 7. Comparison of Flash-DMD under stage2 with other mod-
+els with reinforcement learning on COCO-10k dataset.
+Method
+#NFE ImgRwd ↑CLIP ↑Pick ↑HPSv2 ↑MPS ↑GPU Hours
+Hyper-SDXL
+8
+0.9119
+0.3287
+0.2310
+0.2977
+12.35
+200 A100
+LPO-SDXL
+40
+1.0417
+0.3324
+0.2342
+0.2965
+12.58
+92 A100
+8-steps Flash-DMD (TTUR2-3k) at Stage 2
+Flash-DMD-3k
+8
+1.0012
+0.3299
+0.2338
+0.2986
+12.75
+12 H20
+Flash-DMD-6k
+8
+1.0106
+0.3290
+0.2343
+0.2998
+12.84
+24 H20
+9. 4-step Flash-DMD on SD3-Medium
+Instead of training on the LAION dataset [42], we cu-
+rated a proprietary, high-quality training set of 100,000 in-
+stances.
+It encompasses a diverse range of subjects and
+scenes, including portraits, architecture, flora and fauna,
+and food—rendered in a realistic photographic style. Our
+dataset construction followed a structured methodology.
+First, we generated a set of clear, detailed captions to fully
+leverage the representational capacity of the SD3 [7] text
+encoders. These captions were then used to synthesize high-
+quality images using SD3.5 Large, configured with 28 de-
+noising steps and a CFG scale of 4.5. The final training
+set was curated through a rigorous manual selection pro-
+cess from the generated candidates. We successfully extend
+Flash-DMD in SD3-Medium after stage 1, Fig. 14 displays
+some visual results that highlight the strengths of our algo-
+rithm.
+10. Additional Visualizations and Captions
+Fig. 9 captions from left to right, top to bottom are
+:
+1. A cat next to a window behind cans and bottles.
+2. A bunch of red roses bunched together.
+3. A brown teddy bear standing next to bottles of honey.
+4. A brown lamb looking up as other sheep eat hay in a
+field.
+5. A brown and white horse walking down a road.
+6. A brass-colored vase with a flower bouquet in it.
+2
+
+Algorithm 1 Flash-DMD Training Algorithm
+Require: pretrained teacher model µreal, real dataset Dreal, generator is updated with the ratio TTUR, inference steps K,
+timestep set S = {τ1, . . . , τk} and its noisy set Snoisy, high noisy timesteps Tnoisy, Pixel-level discriminator Dω, VAE
+decoder layers V, latent reward model R, training stage flag FLAG.
+Ensure: trained few-step generator Gθ
+1: Gθ ←copyWeights(µreal)
+▷Initialize generator
+2: µϕ ←copyWeights(µreal)
+▷Initialize score estimnator of generator
+3: Dω ←initializeTrainableHeads()
+▷Initialize trainable heads of discriminator
+4: for iteration = 1 to max iters do
+5:
+z ∼N(0, I)
+6:
+Sample τi from S
+▷Pick timestep for current iteration
+7:
+Sample xreal ∼Dreal
+8:
+xτi ←backwardSimulation(z, τk →τi)
+▷Use backward simulation to get noisy image
+9:
+xτ1 ←backwardSimulation(xτi, τi →τ1)
+▷Use backward simulation to get clean image
+10:
+x ←Gθ(xτi, τi)
+11:
+preal, pfake ←Dω(V(xτ1))
+▷Get real or fake probability
+12:
+if iteration mod TTUR == 0 then
+13:
+tj ←Tnoisy
+14:
+LDMD ←distributionMatchingLoss(µreal, µω, x, tj)
+▷Use Eq. (9) for faster convergence in noisy timesteps
+15:
+Ladv ←generatorAdversarialLoss(preal)
+▷Use Eq. (10) for enhanced realism and details
+16:
+LGθ ←LDMD + λ · Ladv
+▷Final loss function for generator
+17:
+Gθ ←update(Gθ, LGθ)
+18:
+µϕ ←EMA(θ, ϕ, λema1)
+19:
+end if
+20:
+x ←x.detach()
+▷Stop gradient
+21:
+t ∼U(0, 1)
+22:
+xt ←forwardDiffusion(x, t)
+▷Add noise
+23:
+Ldenoise ←diffusionLoss(µϕ(xt, t), x)
+24:
+µϕ ←update(µϕ, Ldenoise)
+▷Update fake score network µfake
+25:
+LDω ←discriminatorAdversarialLoss(preal, pfake)
+▷Discriminator’s Hinge loss
+26:
+Dω ←update(Dω, LDω)
+▷Update discriminator Dω
+27:
+if FLAG == Stage2 then
+▷Use reinforcement learning at the second stage
+28:
+spool ←iterativeSample(Snoisy, K)
+▷Sample K image latent for reward model evaluation
+29:
+swin, sloss ←filter(R(spool))
+▷Construct win-loss pairs with R
+30:
+Lrl ←prefenceOptimization(swin, sloss)
+▷Use Eq. (13) to boost performance
+31:
+Gθ ←update(Gθ, Lrl)
+32:
+end if
+33: end for
+7. A boy closely examining a frog in his yard.
+8. A boy in green shorts and a tie posing in front of a tower.
+9. A furry kitten lying on a laptop.
+10. A confection of cake, whipped cream, strawberries, and
+two candles.
+11. Two birds standing around a box of birdseed.
+12. A soldier riding a red motorcycle down a busy street.
+Fig. 10 captions from left to right, top to bottom are:
+1. A dog looking up and running to catch a frisbee.
+2. A cake designed to resemble a cup.
+3. A beautiful red-haired woman holding a cup while wear-
+ing a sweater.
+4. A row of wooden park benches sitting next to a lake.
+5. A close-up of a baseball player bending down with a
+glove.
+6. A bag of strawberries on a table with tomatoes.
+7. A crow standing on a plant in a body of water.
+8. A black-and-white cat sitting on a bed.
+9. A brown-and-white cow standing on a grassy hill.
+10. A brown leather couch in a living room.
+11. A body of water with an elephant in the background.
+12. A case containing a small doll with blue hair, shoes, and
+clothes.
+Fig. 11 captions from left to right, top to bottom are:
+3
+
+Figure 9. Qualitative results from Stage 1 of the 4-step Flash-DMD framework on SDXL. The model is trained with TTUR = 1 for 1,000
+steps.
+4
+
+Figure 10. Qualitative results from Stage 1 of the 4-step Flash-DMD framework on SDXL. The model is trained with TTUR = 2 for 4,000
+steps.
+5
+
+Figure 11. Qualitative results from Stage 2 of the 4-step Flash-DMD framework on SDXL. The model is initialized from the TTUR1-1k
+checkpoint and fine-tuned for 5,000 steps.
+6
+
+Figure 12. Qualitative results from Stage 1 of the 8-step Flash-DMD framework on SDXL. The model is trained with TTUR = 2 for 3,000
+steps.
+7
+
+Figure 13. Qualitative results from Stage 2 of the 8-step Flash-DMD framework on SDXL. The model is initialized from the 8-step
+TTUR2-3k checkpoint and fine-tuned for 3,000 steps.
+8
+
+Figure 14. Qualitative results from stage 1 of the 4-step Flash-DMD framework on SD3-Medium. The model is trained with TTUR=2 for
+7.000 steps.
+9
+
+1. A bowl of apples and bananas sitting on a woven cloth.
+2. A cake decorated with a surfer and palm trees.
+3. A close-up of a person eating a doughnut.
+4. A brown teddy bear sitting at a table next to a cup of
+coffee.
+5. A close-up of a metallic elephant statue.
+6. A baby in a gray jacket eating a piece of pizza crust.
+7. A couch and chair sitting in a room.
+8. A bench in the park on a rainy day.
+9. A brown-and-white cat sitting on a windowsill.
+10. A bedsit with a kitchenette featuring white cabinets.
+11. A bottle of wine placed next to a glass of wine.
+12. A blurred motorcycle against a red brick wall.
+Fig. 12 captions from left to right, top to bottom are:
+1. A bird on a plank looking at green water.
+2. A boy holding a pitcher’s mitt at a park.
+3. A clock near the front of a house.
+4. A bench sitting atop a lush green hillside.
+5. A black bear walking through a field of grass and straw.
+6. A black motorcycle parked on gray cobblestones.
+7. A child in bed wearing a striped sweater and colorful
+blanket.
+8. A brass-colored vase with a flower bouquet in it.
+9. A clean bedroom with a dog on the bed.
+10. A chef preparing sushi on a countertop.
+11. A close-up of a sandwich with French fries.
+12. A close-up image of a cat and a keyboard.
+Fig. 13 captions from left to right, top to bottom are:
+1. A bench along a sidewalk in winter, covered in snow.
+2. A man holding a little blond girl.
+3. A confection of cake, whipped cream, strawberries, and
+candles.
+4. A bedroom with a silky bedspread and pillows.
+5. A cat lying on a sofa next to some pillows.
+6. A brown teddy bear seated on a chair beside a wooden
+drawer.
+7. A baseball player standing next to home plate.
+8. A sleek motorcycle in a cityscape.
+9. A beautiful vase full of flowers, with pictures placed be-
+side it.
+10. A beautiful bird standing on the bank of a river.
+11. A bagel topped with egg and other ingredients on a plate.
+12. A furry kitten lying on a laptop.
+Fig. 14 captions from left to right, top to bottom are:
+1. A mustard-yellow armchair with button tufting sits on a
+speckled white floor. The chair has dark wooden legs.
+A large potted plant is partially visible to the left. A
+window with dark frames shows green trees and foliage.
+A white rock sits on the floor near the chair. The floor is
+partially shaded by the window.
+2. A brown deer with large, curved antlers stands in a forest
+setting. The deer’s coat is a uniform brown color. Its
+antlers are dark brown and have multiple points. The
+deer’s face is partially visible, showing its nose and eyes.
+The background is blurred with green foliage. The deer
+appears to be looking directly at the camera.
+3. Several cupcakes are arranged on a wire rack. One cup-
+cake has dark blue frosting, gold sprinkles, and a jack-o’-
+lantern topper. Other cupcakes have orange frosting and
+are decorated with orange and purple sprinkles. The cup-
+cakes are in purple and white patterned wrappers. The
+background is blurred.
+4. A doll with brown curly hair, blue eyes, and rosy cheeks
+wears a large black velvet hat with gold embroidery. The
+doll’s dress is black with gold trim and a white scarf tied
+around its neck. The doll’s face is white with painted
+features. Other dolls are visible in the background. The
+doll appears to be wearing a black velvet dress with gold
+trim. The doll’s hat has a wide brim and a decorative
+band.
+5. A vibrant orange rose is the focal point, its petals slightly
+unfurled. The rose is attached to a green stem with small
+thorns. The background is a blurred green foliage. The
+lighting is soft and natural. The rose appears to be in a
+natural setting.
+6. A young woman with fair skin, dark brown hair styled
+in an updo with a decorative hairpiece, wears a light-
+colored, sheer, embroidered traditional East Asian gar-
+ment.
+She looks directly at the camera with a slight
+smile. The garment has floral embroidery in white and
+light blue. She wears small, dangling earrings.
+7. A green and pink parrot with a red beak eats a pas-
+sion fruit. The parrot’s head and neck are predominantly
+green, with a pink band around the neck. The beak is
+red and orange. The passion fruit is dark purple with a
+yellow interior and black seeds.
+8. A reddish-orange mushroom with a white speckled stem
+grows in a forest floor covered with fallen leaves and
+grass. A small, light brown leaf rests on the mushroom’s
+cap. The background features blurred green foliage and
+trees. The lighting is soft and diffused.
+9. A white, fluffy dog lies in a field of green grass. The
+dog has its tongue out and is wearing a collar with a blue
+bone-shaped tag. The sun is low in the sky, creating a
+backlight. The dog’s fur appears slightly ruffled. The
+grass is tall and slightly blurred. Trees are visible in the
+background. The sky is a gradient of blue and light yel-
+low.
+10. A bee is perched on a vibrant orange flower. The flower
+has multiple petals and a yellow center. Several other
+orange flowers and green leaves are visible in the back-
+ground, some out of focus. The bee appears to be col-
+lecting nectar. The flowers are in a garden setting. The
+10
+
+image is brightly lit, highlighting the orange hues of the
+flowers.
+11. A clear glass teapot containing a yellow liquid sits on a
+round wooden tray. Several ripe red strawberries with
+green stems are placed on the tray alongside the teapot.
+The tray rests on a light brown, textured surface.
+A
+blurred background of green foliage suggests an outdoor
+setting. The teapot has a copper-colored handle and lid.
+The light is bright and natural.
+12. A black mug with a gold design sits on a gray textured
+surface. The design depicts stylized mountains, trees, a
+crescent moon, and a campfire. The words ”Mountain
+Kind” are written below the design. Steam rises from
+the mug. A lit candle, pine cones, cinnamon sticks, and
+a string of lights are also present. The background is
+blurred and dark.
+11

@@ -1,11 +1,15 @@
-
+# changed interface,also provided the links with response in related to the query
 import streamlit as st
 import requests
 import time
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
 st.set_page_config(
     page_title="AI Research Assistant",
-    page_icon="🤖",
+    # page_icon="🤖",
     layout="centered"
 )
 
@@ -47,12 +51,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # >>> NEW: Personalized greeting
-st.markdown("<h1 class='title'>🤖 AI Research Assistant</h1>", unsafe_allow_html=True)
+st.markdown("<h1 class='title'> AI Research Assistant</h1>", unsafe_allow_html=True)
 st.markdown("<p class='subtitle'>Ask anything from research papers!</p>", unsafe_allow_html=True)
 
 
 with st.sidebar:
-    st.header("👤 Personalize Experience")
+    st.header("Personalize Experience")
 
     # >>> NEW: User name input — stored in session
     user_name = st.text_input("Enter your name:", value=st.session_state.get("name", ""))
@@ -60,8 +64,8 @@ with st.sidebar:
     if user_name:
         st.session_state["name"] = user_name
 
-    st.write("---")
-    st.caption("✨ All responses are generated from your research paper database.")
+    # st.write("---")
+    # st.caption("✨ All responses are generated from your research paper database.")
 
 
 if "name" in st.session_state and st.session_state["name"]:
@@ -95,7 +99,7 @@ if st.button("Send"):
             )
 
             if response.status_code != 200:
-                bot_reply = f"⚠️ Backend error:\n{response.text}"
+                bot_reply = f"Backend error:\n{response.text}"
                 sources = []
             else:
                 data = response.json()
@@ -103,7 +107,7 @@ if st.button("Send"):
                 sources = data.get("sources", [])
 
         except Exception as e:
-            bot_reply = f"❌ Could not reach backend: {e}"
+            bot_reply = f"Could not reach backend: {e}"
             sources = []
 
         # Save bot reply
@@ -130,10 +134,14 @@ for msg in st.session_state.messages:
         if sources:
             st.markdown("#### 📚 Sources")
             for s in sources:
+                # st.markdown(
+                #     f"- 🔗 [{s['paper_id']}]({s['pdf_url']})",
+                #     unsafe_allow_html=True
+                # )
                 st.markdown(
-                    f"- 🔗 [{s['paper_id']}]({s['pdf_url']})",
-                    unsafe_allow_html=True
-                )
+                    f'<a href="{s["pdf_url"]}" target="_blank">🔗 {s["paper_id"]}</a>',
+                    unsafe_allow_html=True)
+
 
 # Footer
 st.markdown("<br><p style='text-align:center; color:#aaa;'>© 2025 AI Research Assistant</p>",
