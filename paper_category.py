@@ -1,116 +1,168 @@
-#this file is fetching all the categories and sub categories of arxiv website
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse
-import uvicorn
 import requests
 from bs4 import BeautifulSoup
-import arxiv
 
-URL = "https://arxiv.org/category_taxonomy"
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+def get_arxiv_categories():
+    """Fetches and prints all arXiv categories and descriptions from the taxonomy page."""
+    url = "https://arxiv.org/category_taxonomy"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Categories are within 'h4' and 'p' tags in the main content area
+        # We look for the main content div
+        main_content = soup.find('div', {'id': 'content'})
+        
+        if not main_content:
+            print("Could not find main content area on the page.")
+            return
 
-app = FastAPI()
+        print("ArXiv Research Paper Categories:\n")
+        
+        # Iterate through all 'h4' tags (major archive sections)
+        for h4 in main_content.find_all('h4'):
+            category_group_name = h4.get_text(strip=True)
+            print(f"--- {category_group_name} ---")
+            
+            # The category details follow immediately after in 'p' tags
+            # We look at the next sibling elements until the next h4 or end of div
+            next_element = h4.next_sibling
+            while next_element and next_element.name != 'h4':
+                if next_element.name == 'p':
+                    text = next_element.get_text(strip=True)
+                    # The format is generally 'Code (Alias) Description'
+                    if text:
+                        print(f"* {text}")
+                next_element = next_element.next_sibling
+            print("\n")
 
-def fetch_arxiv_categories():
-    resp = requests.get(URL, headers=HEADERS)
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    categories = {}
-
-    for h2 in soup.find_all("h2", class_="accordion-head"):
-        main_cat = h2.get_text(strip=True)
-        categories[main_cat] = {"display_name": main_cat, "sub": {}}
-
-        body = h2.find_next("div", class_="accordion-body")
-        if not body:
-            continue
-
-        for h4 in body.find_all("h4"):
-            full_text = h4.get_text(" ", strip=True)
-            cat_id = full_text.split(" ")[0]
-
-            span = h4.find("span")
-            if span:
-                cat_name = span.get_text(strip=True).replace("(", "").replace(")", "")
-            else:
-                cat_name = full_text[len(cat_id):].strip()
-
-            categories[main_cat]["sub"][cat_id] = cat_name
-
-    return categories
-
-
-# Load categories at startup
-CATEGORIES = fetch_arxiv_categories()
-
-
-def fetch_papers(category_id):
-    search = arxiv.Search(
-        query=f"cat:{category_id}",
-        max_results=10,
-        sort_by=arxiv.SortCriterion.SubmittedDate
-    )
-
-    papers = []
-    for r in search.results():
-        papers.append({
-            "title": r.title,
-            "authors": ", ".join(a.name for a in r.authors),
-            "id": r.get_short_id(),
-            "url": r.entry_id
-        })
-    return papers
-
-
-@app.get("/", response_class=HTMLResponse)
-def home():
-    html = """
-    <html>
-    <body>
-    <h2>Select arXiv Category</h2>
-    <form action="/search" method="post">
-        <select name="category">
-    """
-
-    for main, data in CATEGORIES.items():
-        html += f"<optgroup label='{main}'>"
-        for sub_id, sub_name in data["sub"].items():
-            html += f"<option value='{sub_id}'>{sub_id} — {sub_name}</option>"
-        html += "</optgroup>"
-
-    html += """
-        </select><br><br>
-        <button type="submit">Fetch Papers</button>
-    </form>
-    </body>
-    </html>
-    """
-    return html
-
-
-@app.post("/search", response_class=HTMLResponse)
-def search(category: str = Form(...)):
-    papers = fetch_papers(category)
-
-    html = f"<html><body><h2> Papers for {category}</h2><ul>"
-
-    for p in papers:
-        html += f"""
-        <li>
-            <b>{p['title']}</b><br>
-            Authors: {p['authors']}<br>
-            ID: {p['id']}<br>
-            <a href="{p['url']}" target="_blank">Open</a>
-            <br><br>
-        </li>
-        """
-
-    html += "</ul><a href='/'>Back</a></body></html>"
-    return html
-
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching the URL: {e}")
+    except Exception as e:
+        print(f"An error occurred during parsing: {e}")
 
 if __name__ == "__main__":
-    uvicorn.run("paper_category:app", host="0.0.0.0", port=8000, reload=True)
+    get_arxiv_categories()
+
+
+
+
+
+#this file is fetching all the categories and sub categories of arxiv website
+# from fastapi import FastAPI, Form
+# from fastapi.responses import HTMLResponse
+# import uvicorn
+# import requests
+# from bs4 import BeautifulSoup
+# import arxiv
+
+# URL = "https://arxiv.org/category_taxonomy"
+# HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+# app = FastAPI()
+
+# def fetch_arxiv_categories():
+#     resp = requests.get(URL, headers=HEADERS)
+#     soup = BeautifulSoup(resp.text, "html.parser")
+
+#     categories = {}
+
+#     for h2 in soup.find_all("h2", class_="accordion-head"):
+#         main_cat = h2.get_text(strip=True)
+#         categories[main_cat] = {"display_name": main_cat, "sub": {}}
+
+#         body = h2.find_next("div", class_="accordion-body")
+#         if not body:
+#             continue
+
+#         for h4 in body.find_all("h4"):
+#             full_text = h4.get_text(" ", strip=True)
+#             cat_id = full_text.split(" ")[0]
+
+#             span = h4.find("span")
+#             if span:
+#                 cat_name = span.get_text(strip=True).replace("(", "").replace(")", "")
+#             else:
+#                 cat_name = full_text[len(cat_id):].strip()
+
+#             categories[main_cat]["sub"][cat_id] = cat_name
+
+#     return categories
+
+
+# # Load categories at startup
+# CATEGORIES = fetch_arxiv_categories()
+
+
+# def fetch_papers(category_id):
+#     search = arxiv.Search(
+#         query=f"cat:{category_id}",
+#         max_results=10,
+#         sort_by=arxiv.SortCriterion.SubmittedDate
+#     )
+
+#     papers = []
+#     for r in search.results():
+#         papers.append({
+#             "title": r.title,
+#             "authors": ", ".join(a.name for a in r.authors),
+#             "id": r.get_short_id(),
+#             "url": r.entry_id
+#         })
+#     return papers
+
+
+# @app.get("/", response_class=HTMLResponse)
+# def home():
+#     html = """
+#     <html>
+#     <body>
+#     <h2>Select arXiv Category</h2>
+#     <form action="/search" method="post">
+#         <select name="category">
+#     """
+
+#     for main, data in CATEGORIES.items():
+#         html += f"<optgroup label='{main}'>"
+#         for sub_id, sub_name in data["sub"].items():
+#             html += f"<option value='{sub_id}'>{sub_id} — {sub_name}</option>"
+#         html += "</optgroup>"
+
+#     html += """
+#         </select><br><br>
+#         <button type="submit">Fetch Papers</button>
+#     </form>
+#     </body>
+#     </html>
+#     """
+#     return html
+
+
+# @app.post("/search", response_class=HTMLResponse)
+# def search(category: str = Form(...)):
+#     papers = fetch_papers(category)
+
+#     html = f"<html><body><h2> Papers for {category}</h2><ul>"
+
+#     for p in papers:
+#         html += f"""
+#         <li>
+#             <b>{p['title']}</b><br>
+#             Authors: {p['authors']}<br>
+#             ID: {p['id']}<br>
+#             <a href="{p['url']}" target="_blank">Open</a>
+#             <br><br>
+#         </li>
+#         """
+
+#     html += "</ul><a href='/'>Back</a></body></html>"
+#     return html
+
+
+# if __name__ == "__main__":
+#     uvicorn.run("paper_category:app", host="0.0.0.0", port=8000, reload=True)
 
 
 
